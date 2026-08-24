@@ -1,0 +1,578 @@
+{
+  "baseline": "Pepper V6 Phase 0 production backend",
+  "captured_at_utc": "2026-08-24T18:13:20.622Z",
+  "branch": "v6-logistics-foundation",
+  "supabase_project_ref": "olgyfgqlqrhfaujkfjtj",
+  "production_mutated": false,
+  "edge_functions": [
+    {
+      "name": "pepper-family-beta",
+      "version": 8,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "43e9a6649a6a3e4aae2e21cd270a0b7f6091ad7a6f5fb514677ce2328114a597",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-family-beta/index.ts",
+          "deployed_source_sha256": "4433147cf9b7b76d57da8bda823d28d00c79691dbc4b95f259bee6e2205669a3",
+          "deployed_bytes": 25184,
+          "local_sha256": "d5c63f406e851fa4d4b7b7433e9bb3c34bf55b9d7aed3a657170761b7251e2a2",
+          "local_bytes": 25185,
+          "equivalence": "effectively_equivalent",
+          "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+        }
+      ]
+    },
+    {
+      "name": "pepper-family-beta-01",
+      "version": 4,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "0bcab12e9e4d8358fe7be54dae31cb023046db19e68c0acb7db31c7d1bb422e4",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-family-beta-01/index.ts",
+          "deployed_source_sha256": "4e248d31620bfc7e5124db5e3799b0b2d028747fb0276aad262f355306b69465",
+          "deployed_bytes": 22000,
+          "local_sha256": "6e66c61812e480c0ac09ade6ee2d2b5bca2e5724fd7f43a05465008e6bdb9f22",
+          "local_bytes": 22001,
+          "equivalence": "effectively_equivalent",
+          "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+        }
+      ]
+    },
+    {
+      "name": "pepper-family-beta-01-web",
+      "version": 9,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "0be40dab23ba0df58ed790524b168d05501fa74e3d53c99523dbc2caf786e32e",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-family-beta-01-web/index.ts",
+          "deployed_source_sha256": "3cc6ca12bf3e7215fcb88822c5504061a6ab847134bcb5e7ec9104dea5dd182f",
+          "deployed_bytes": 1584,
+          "local_sha256": "3cc6ca12bf3e7215fcb88822c5504061a6ab847134bcb5e7ec9104dea5dd182f",
+          "local_bytes": 1584,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        }
+      ]
+    },
+    {
+      "name": "pepper-calendar",
+      "version": 6,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "627e9ed8707c049686a820e4f3c4bd80bdd6664afdb703316ce9a91dca6c99c8",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-calendar/index.ts",
+          "deployed_source_sha256": "f1595ce095a29137ef6ca9e7e0efcd0e631ad9104c0d613661b3afcb5e9ee8fe",
+          "deployed_bytes": 31465,
+          "local_sha256": "f1595ce095a29137ef6ca9e7e0efcd0e631ad9104c0d613661b3afcb5e9ee8fe",
+          "local_bytes": 31465,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        },
+        {
+          "path": "supabase/functions/pepper-calendar/logic.ts",
+          "deployed_source_sha256": "523e2c61dc8dde48f8f31ea0bbba89d6c7bf1a071d1f37a06d2a1aa4f2f210fe",
+          "deployed_bytes": 4673,
+          "local_sha256": "523e2c61dc8dde48f8f31ea0bbba89d6c7bf1a071d1f37a06d2a1aa4f2f210fe",
+          "local_bytes": 4673,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        }
+      ]
+    },
+    {
+      "name": "pepper-consequences",
+      "version": 7,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "270998d61b816a3faf52444c8e0ce72ec509d870ea16a12ef40de8adfd3490ef",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-consequences/index.ts",
+          "deployed_source_sha256": "7dcf957c75d54163188fdfd58dc3b83f2ba46552a80ad0d4f1392af33818081a",
+          "deployed_bytes": 7080,
+          "local_sha256": "7dcf957c75d54163188fdfd58dc3b83f2ba46552a80ad0d4f1392af33818081a",
+          "local_bytes": 7080,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        }
+      ]
+    },
+    {
+      "name": "pepper-reflections",
+      "version": 4,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "cd2ce81ee090d5eb374b6969de47a11edafa503c3b298f6c82fb90f56213e312",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-reflections/index.ts",
+          "deployed_source_sha256": "39e66aed2dc61a1ae103e8f4289e76b324c113152b56ec3ff4f6583026419f7a",
+          "deployed_bytes": 4217,
+          "local_sha256": "9e431acce4b1464a3d0b97f3c63c36f236d8099f27b470596138e11e164d69e8",
+          "local_bytes": 4218,
+          "equivalence": "effectively_equivalent",
+          "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+        }
+      ]
+    },
+    {
+      "name": "pepper-horizon",
+      "version": 7,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "0161c8bc563fb3afcf82cf49eb42753ee7c777ef8cef9bed88492f88c642e761",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-horizon/index.ts",
+          "deployed_source_sha256": "4fb14a16641297f6d36d7bc4f8411616cb65b84d42dddf3f0a52898fb87eeeea",
+          "deployed_bytes": 11556,
+          "local_sha256": "4fb14a16641297f6d36d7bc4f8411616cb65b84d42dddf3f0a52898fb87eeeea",
+          "local_bytes": 11556,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        }
+      ]
+    },
+    {
+      "name": "pepper-family-api",
+      "version": 6,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "266c38e175d78e60f31b8d36d920a0d5c58255ce2619ba12d2a77463cc77ae62",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-family-api/index.ts",
+          "deployed_source_sha256": "23a47d5f5199337cdf63ae8985d51fa3acc25a4174230d27ea065a732cff614c",
+          "deployed_bytes": 7170,
+          "local_sha256": "23a47d5f5199337cdf63ae8985d51fa3acc25a4174230d27ea065a732cff614c",
+          "local_bytes": 7170,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        }
+      ]
+    },
+    {
+      "name": "pepper-preparation",
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "98343860c285bbce1a91bd295034b88b7cb29bcf70ff4e208917b1fad2cf24a3",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-preparation/index.ts",
+          "deployed_source_sha256": "ff3de17ad45d886420c7adb6eb1931b4394265ba131e858f4442690788b14c8d",
+          "deployed_bytes": 9267,
+          "local_sha256": "ff3de17ad45d886420c7adb6eb1931b4394265ba131e858f4442690788b14c8d",
+          "local_bytes": 9267,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        }
+      ]
+    },
+    {
+      "name": "pepper-rituals",
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "e7d218875b3dc55f88231caf7c1874300abbd92250764ee85c71ac5c9bd0f253",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-rituals/index.ts",
+          "deployed_source_sha256": "5a1f0014958df830e3d692e65f6d108cec84d5e7102204f6462bc40f46eec0db",
+          "deployed_bytes": 8543,
+          "local_sha256": "5a1f0014958df830e3d692e65f6d108cec84d5e7102204f6462bc40f46eec0db",
+          "local_bytes": 8543,
+          "equivalence": "byte_for_byte",
+          "discrepancy": null
+        }
+      ]
+    },
+    {
+      "name": "pepper-tell-v2",
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "import_map_present": false,
+      "deployed_bundle_sha256": "16a4f5e63cd6c36e7d6ebe1f398c364f4fbf33010466edc24da273cc125d1971",
+      "files": [
+        {
+          "path": "supabase/functions/pepper-tell-v2/index.ts",
+          "deployed_source_sha256": "0769e103dd7734ec70cb3634fe69a5e0634c6d1d7472e002263a3dccc8fe7348",
+          "deployed_bytes": 5589,
+          "local_sha256": "3b15c3788ceeb60a7a1da8bb83fb3e7a2799c653b6d809dbcbab41555c5cd97f",
+          "local_bytes": 5590,
+          "equivalence": "effectively_equivalent",
+          "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+        }
+      ]
+    }
+  ],
+  "migrations": {
+    "captured": [
+      {
+        "version": "20260814230349",
+        "name": "pepper_family_beta_core_tables",
+        "path": "supabase/migrations/20260814230349_pepper_family_beta_core_tables.sql",
+        "deployed_source_sha256": "e6be81546a3b46d7fd71a3158edc148400eeeb54be17ce4f25916dc0d35138ae",
+        "deployed_bytes": 3916,
+        "local_sha256": "b072320d57243aaf8af73a886dcae9b4756c1443bd16fafb84cbad778409f37a",
+        "local_bytes": 3917,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260814230355",
+        "name": "pepper_family_beta_rls",
+        "path": "supabase/migrations/20260814230355_pepper_family_beta_rls.sql",
+        "deployed_source_sha256": "38e325515d3c13a9cdc0bbf8504b1ba71302e4e8a70c56bc0e3bb590d9d7961e",
+        "deployed_bytes": 451,
+        "local_sha256": "ab703333ac7d604a6470a9ce3faf7801f733f15bd089ffbee3b8929db5585cac",
+        "local_bytes": 452,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260814230550",
+        "name": "pepper_verify_family_pin",
+        "path": "supabase/migrations/20260814230550_pepper_verify_family_pin.sql",
+        "deployed_source_sha256": "32873182ced3ad817ae4715a4723bfe9bcfad7b7e5f36c0bfd39b457377f0c59",
+        "deployed_bytes": 474,
+        "local_sha256": "7ac9da8d6f5894e5f71d6cf3d562c29d70378c2eadef47aa2dbcc05e3fe06df5",
+        "local_bytes": 475,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260815032407",
+        "name": "harden_household_owner_references",
+        "path": "supabase/migrations/20260815032407_harden_household_owner_references.sql",
+        "deployed_source_sha256": "5122402955c52b373d8ccc831e3e75e1a2b312ff5a0cf4cdeeeb32765f5d696b",
+        "deployed_bytes": 12014,
+        "local_sha256": "5122402955c52b373d8ccc831e3e75e1a2b312ff5a0cf4cdeeeb32765f5d696b",
+        "local_bytes": 12014,
+        "equivalence": "byte_for_byte",
+        "discrepancy": null
+      },
+      {
+        "version": "20260815033407",
+        "name": "bind_family_login_server_side",
+        "path": "supabase/migrations/20260815033407_bind_family_login_server_side.sql",
+        "deployed_source_sha256": "50ce2b7564502464a33daa66b25288166f30bfe18259cd08eb26a347dcda1278",
+        "deployed_bytes": 637,
+        "local_sha256": "12151650e91415b044013a693916e630e5912520ac16616526df442435fb596b",
+        "local_bytes": 636,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file removes one redundant terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260815045746",
+        "name": "add_durable_pepper_capture_inbox",
+        "path": "supabase/migrations/20260815045746_add_durable_pepper_capture_inbox.sql",
+        "deployed_source_sha256": "4929f7227f0c768c8513fe3e68e16b3a0401d1de29ab4848973b11f737b29a89",
+        "deployed_bytes": 1472,
+        "local_sha256": "cd733441c3b00218aa8a1c8d72dab4ba80b3b9e6fd94147218221e5b2ac184c1",
+        "local_bytes": 1473,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260815045918",
+        "name": "index_pepper_capture_member",
+        "path": "supabase/migrations/20260815045918_index_pepper_capture_member.sql",
+        "deployed_source_sha256": "b45c570919d965ac9cfde84670271d39f94f075e54303b6b659c176d212c0e45",
+        "deployed_bytes": 80,
+        "local_sha256": "7daee796b36630a082caa4cfe1146b5e681de582d068095c212403c20c0b7b57",
+        "local_bytes": 81,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260816203301",
+        "name": "complete_aegis_capture_pipeline",
+        "path": "supabase/migrations/20260816203301_complete_aegis_capture_pipeline.sql",
+        "deployed_source_sha256": "789f62052d9f253dc610ef234300ac9c305118e2287a04aa8a0e08b83c5dd91c",
+        "deployed_bytes": 6573,
+        "local_sha256": "a7fdb8ad71fa7466d51301f205ddf800e69477ebb80f765f875e3cc89ca2af24",
+        "local_bytes": 6574,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260816203445",
+        "name": "harden_aegis_capture_rls",
+        "path": "supabase/migrations/20260816203445_harden_aegis_capture_rls.sql",
+        "deployed_source_sha256": "69c15d9ef64f183e40d482e9693a79a9eaef99ca42781e67c586a58eeea18787",
+        "deployed_bytes": 2103,
+        "local_sha256": "dc9500be9e59c7a9c0072e40be5d34dc5eaaee11713b4cb7c36ac17b7d19e49f",
+        "local_bytes": 2104,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260817160819",
+        "name": "enable_pg_net_for_beta_verification",
+        "path": "supabase/migrations/20260817160819_enable_pg_net_for_beta_verification.sql",
+        "deployed_source_sha256": "720ec83cb404dd730aac48a345a1c23e26773a93a221da0f686c24bb208f46a9",
+        "deployed_bytes": 61,
+        "local_sha256": "300f02fa097199e0f43a3583134aa4762a1ac8bc6647e75614677f631ce6ed70",
+        "local_bytes": 62,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260820014455",
+        "name": "add_family_state_foundation",
+        "path": "supabase/migrations/20260820014455_add_family_state_foundation.sql",
+        "deployed_source_sha256": "4528529add78f03d33c7a797b40d1d9213236361c022be72079bc2eafc4a8b81",
+        "deployed_bytes": 5201,
+        "local_sha256": "4fb91e182054977ddee23c5ba49b4527d599bbadb752422fc80553588dbe50b8",
+        "local_bytes": 5202,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260820014523",
+        "name": "wire_beta_writes_to_family_state",
+        "path": "supabase/migrations/20260820014523_wire_beta_writes_to_family_state.sql",
+        "deployed_source_sha256": "b59765600d6fe3a9abab5f1f9798be03bb564d7dab4be7f7246f9bf70f775b87",
+        "deployed_bytes": 7306,
+        "local_sha256": "0cc9ea681cc83a74065df0529da6e868f9e48d255e882890db741a06403991bf",
+        "local_bytes": 7307,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260820015000",
+        "name": "add_consequence_engine_v01",
+        "path": "supabase/migrations/20260820015000_add_consequence_engine_v01.sql",
+        "deployed_source_sha256": "6d6c75b3628f09f7835797a3438fc528bc3c8a787b12574ac056e329ca70514e",
+        "deployed_bytes": 9125,
+        "local_sha256": "2a33edc01f483352f74d06b52261b9a038cdbdf21f3e02fc65eb4d735f85fc69",
+        "local_bytes": 9126,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260821174406",
+        "name": "confirmed_parent_transport_is_handled",
+        "path": "supabase/migrations/20260821174406_confirmed_parent_transport_is_handled.sql",
+        "deployed_source_sha256": "835fefb847a448f6e62d140ef74cd8a1e6e22e911f8e8e165efe468114dac24b",
+        "deployed_bytes": 1233,
+        "local_sha256": "6f823db7211d5aca5fbf2f641e6a22766041ed2b4301018be293795f79b853fd",
+        "local_bytes": 1234,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260822033212",
+        "name": "add_weekly_pepper_reflection_insights",
+        "path": "supabase/migrations/20260822033212_add_weekly_pepper_reflection_insights.sql",
+        "deployed_source_sha256": "d3ba2b0c5666df6f3824439624b516b80404517923e9b448bb3edfb831ce8c82",
+        "deployed_bytes": 14564,
+        "local_sha256": "c7394fa5792e62fd922ea5f11e1433ec25941bfc101ada40403948f6326288c3",
+        "local_bytes": 14565,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260822033254",
+        "name": "tighten_reflection_theme_classification",
+        "path": "supabase/migrations/20260822033254_tighten_reflection_theme_classification.sql",
+        "deployed_source_sha256": "47842f2f00bb568e03cda64a02541d95f4308494a031faeeae46f0e557426663",
+        "deployed_bytes": 10983,
+        "local_sha256": "8dc6aca5160fe4cfb965a6e709ef84974562ad174eb6b9ba47298e5fda595aa8",
+        "local_bytes": 10984,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260822094928",
+        "name": "add_family_routines_for_foresight",
+        "path": "supabase/migrations/20260822094928_add_family_routines_for_foresight.sql",
+        "deployed_source_sha256": "46b58c7eaad697052c52589759dc37b1c1b7587702e1a25f25d1b1ab8e67eba7",
+        "deployed_bytes": 3359,
+        "local_sha256": "2e2502b8140be74bf723b3391980fa8984cd4e25e3d65657d6ee1df8a84c52fe",
+        "local_bytes": 3360,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260822095920",
+        "name": "add_future_watch_items",
+        "path": "supabase/migrations/20260822095920_add_future_watch_items.sql",
+        "deployed_source_sha256": "ae3e30cbf939383bbc150c66df8ac542422d4da16ab06a3a31fcf1d389db735c",
+        "deployed_bytes": 1510,
+        "local_sha256": "a4a9f2143121b162daca9074a675ec8a221510358914c81f55e4cb10a23cd7c1",
+        "local_bytes": 1511,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260823220007",
+        "name": "v51_refine_transport_consequences",
+        "path": "supabase/migrations/20260823220007_v51_refine_transport_consequences.sql",
+        "deployed_source_sha256": "321786c6575c4b63683e02c8ae784d962c8370b4f88cb244dff22c36a381f3dd",
+        "deployed_bytes": 7601,
+        "local_sha256": "1106c218e6dff421b68e939a7e14a4f989f44b946b097897e9b41e04d033a4ae",
+        "local_bytes": 7602,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260823220144",
+        "name": "v51_transport_context_guard",
+        "path": "supabase/migrations/20260823220144_v51_transport_context_guard.sql",
+        "deployed_source_sha256": "99cbe9392967ae8191499dee79c90981a59d2cbff337c231377ae080d9c5b4d1",
+        "deployed_bytes": 7308,
+        "local_sha256": "d697f4a9e7420f0fcacb2eeefb13b2b26d92c84f028ed9712c58fb559fadb93c",
+        "local_bytes": 7309,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260823220231",
+        "name": "v51_normalize_housekeeping_event_kind",
+        "path": "supabase/migrations/20260823220231_v51_normalize_housekeeping_event_kind.sql",
+        "deployed_source_sha256": "cd8b17a3469d8ed40ba604b6109039783144b06ebee905b8b755b0591a9961e1",
+        "deployed_bytes": 1446,
+        "local_sha256": "3756f95c0f3884679717c08b3260269ffb1ccfe319f343db33d448c261ac68d9",
+        "local_bytes": 1447,
+        "equivalence": "effectively_equivalent",
+        "discrepancy": "Local file adds one terminal LF; executable text is otherwise unchanged."
+      },
+      {
+        "version": "20260823221439",
+        "name": "add_preparation_engine_foundation",
+        "path": "supabase/migrations/20260823221439_add_preparation_engine_foundation.sql",
+        "deployed_source_sha256": "47c0154807bb0cffbbf00b06d2ab3213ad0aaa4846715678dc05b50cc0eb8626",
+        "deployed_bytes": 2584,
+        "local_sha256": "47c0154807bb0cffbbf00b06d2ab3213ad0aaa4846715678dc05b50cc0eb8626",
+        "local_bytes": 2584,
+        "equivalence": "byte_for_byte",
+        "discrepancy": null
+      }
+    ],
+    "remote_history_not_captured": [
+      {
+        "version": "20260814230412",
+        "name": "pepper_family_beta_sessions_seed",
+        "deployed_source_sha256": "9c4c1f70578bfb857d6e3449bcbf11d8f029bde68e689d8b6b5b2b9a9ae615a1",
+        "deployed_bytes": 1071,
+        "reason": "The deployed migration combines member-session schema with household seed/authentication data. Phase 0 intentionally does not place private production seed material in Git."
+      },
+      {
+        "version": "20260822093842",
+        "name": "add_internal_product_ops_ledger",
+        "deployed_source_sha256": "a0f02e3617520209c8275d31ec3d026735700fe2255df9e17be3ca3fedbfcf1c",
+        "deployed_bytes": 2416,
+        "reason": "Unrelated to the Pepper runtime functions and V6 logistics/reconciliation dependency baseline."
+      }
+    ]
+  },
+  "runtime_schema_snapshot": {
+    "path": "supabase/baseline/runtime_schema.sql",
+    "sha256": "15c10eafbc3d3b531b57755190d0a0246761fc4c083b96dec3633e5935587cdb",
+    "bytes": 9260,
+    "captured_from": "PostgreSQL catalogs only",
+    "contains_table_data": false,
+    "contains_sequence_state": false,
+    "captured_components": [
+      "columns",
+      "types",
+      "defaults",
+      "nullability",
+      "constraints",
+      "indexes",
+      "owned sequence definition",
+      "triggers",
+      "RLS state",
+      "policies",
+      "ownership",
+      "runtime-relevant grants"
+    ],
+    "objects": [
+      {
+        "qualified_name": "public.member_sessions",
+        "columns": 7,
+        "constraints": 2,
+        "indexes": 2,
+        "non_internal_triggers": 0,
+        "rls_enabled": true,
+        "rls_forced": false,
+        "policies": 1
+      },
+      {
+        "qualified_name": "public.calendar_connections",
+        "columns": 16,
+        "constraints": 7,
+        "indexes": 3,
+        "non_internal_triggers": 0,
+        "rls_enabled": true,
+        "rls_forced": false,
+        "policies": 1
+      },
+      {
+        "qualified_name": "private.calendar_oauth_states",
+        "columns": 8,
+        "constraints": 4,
+        "indexes": 5,
+        "non_internal_triggers": 0,
+        "rls_enabled": false,
+        "rls_forced": false,
+        "policies": 0
+      },
+      {
+        "qualified_name": "private.calendar_tokens",
+        "columns": 4,
+        "constraints": 2,
+        "indexes": 1,
+        "non_internal_triggers": 0,
+        "rls_enabled": false,
+        "rls_forced": false,
+        "policies": 0
+      },
+      {
+        "qualified_name": "private.calendar_sync_runs",
+        "columns": 11,
+        "constraints": 3,
+        "indexes": 2,
+        "non_internal_triggers": 0,
+        "rls_enabled": false,
+        "rls_forced": false,
+        "policies": 0
+      },
+      {
+        "qualified_name": "private.calendar_sync_runs_id_seq",
+        "object_type": "sequence",
+        "data_type": "bigint",
+        "start_value": "1",
+        "increment_by": "1",
+        "min_value": "1",
+        "max_value": "9223372036854775807",
+        "cache_size": "1",
+        "cycle": false,
+        "owned_by": "private.calendar_sync_runs.id"
+      }
+    ]
+  },
+  "known_provenance_notes": [
+    "The original migration provenance for the five supplemented runtime tables remains unavailable or unsafe to copy. Their current deployed structure is captured in the no-data runtime schema snapshot."
+  ]
+}
