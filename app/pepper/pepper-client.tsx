@@ -13,6 +13,47 @@ type Member = {
   role: string;
 };
 
+type Ritual = "morning" | "evening";
+
+type PreparationItem = {
+  id: string;
+  title: string;
+  summary?: string | null;
+};
+
+type Capture = {
+  id?: string | number;
+  summary?: string | null;
+  pepper_reply?: string | null;
+  reply?: string | null;
+  response?: string | null;
+  text?: string | null;
+  raw_text?: string | null;
+  title?: string | null;
+  created_at?: string | null;
+  captured_at?: string | null;
+  updated_at?: string | null;
+};
+
+type MorningRitual = {
+  headline?: string | null;
+  today_event_count?: number | null;
+  event_count?: number | null;
+  due_today?: unknown;
+  due_today_count?: number | null;
+  due_today_information?: string | null;
+  due_today_summary?: string | null;
+  preparation_count?: number | null;
+  tomorrow_headline?: string | null;
+};
+
+type EveningRitual = {
+  headline?: string | null;
+  reflection_prompt?: string | null;
+  prompt?: string | null;
+  tomorrow_headline?: string | null;
+};
+
 type PepperState = {
   member: { id: string; slug: string; display_name: string; role: string };
   members: Array<{ id: string; slug: string; display_name: string }>;
@@ -20,12 +61,17 @@ type PepperState = {
   familyTasks: any[];
   privateTasks: any[];
   groceries: any[];
-  captures: any[];
+  captures: Capture[];
   metrics?: any;
   consequences?: any[];
   weeklyInsight?: any;
   horizon?: any;
   calendarStatus?: any;
+  preparation?: { now?: PreparationItem[] };
+  rituals?: {
+    morning?: MorningRitual;
+    evening?: EveningRitual;
+  };
 };
 
 type View = "today" | "week" | "ahead";
@@ -68,16 +114,99 @@ function longDate() {
 }
 
 function greeting() {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: TZ,
-      hour: "numeric",
-      hour12: false,
-    }).format(new Date()),
-  );
+  const hour = currentHour();
   if (hour < 12) return "Good morning";
   if (hour < 17) return "Good afternoon";
   return "Good evening";
+}
+
+function currentHour() {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: TZ,
+      hour: "numeric",
+      hourCycle: "h23",
+    }).format(new Date()),
+  );
+}
+
+function countLabel(value: number, singular: string, plural = `${singular}s`) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function dueTodayText(morning?: MorningRitual) {
+  const provided =
+    morning?.due_today_information || morning?.due_today_summary || "";
+  if (provided) return provided;
+
+  const due = morning?.due_today;
+  if (typeof due === "string") return due;
+  if (typeof due === "number") {
+    return countLabel(due, "thing due today", "things due today");
+  }
+  if (Array.isArray(due)) {
+    if (!due.length) return "Nothing is due today.";
+    const titles = due
+      .map((item) =>
+        typeof item === "string"
+          ? item
+          : item && typeof item === "object" && "title" in item
+            ? String(item.title)
+            : "",
+      )
+      .filter(Boolean);
+    return titles.length
+      ? titles.join(" · ")
+      : countLabel(due.length, "thing due today", "things due today");
+  }
+  if (due && typeof due === "object") {
+    const detail = due as Record<string, unknown>;
+    const text = detail.headline || detail.summary || detail.label;
+    if (typeof text === "string") return text;
+    if (typeof detail.count === "number") {
+      return countLabel(
+        detail.count,
+        "thing due today",
+        "things due today",
+      );
+    }
+  }
+  if (typeof morning?.due_today_count === "number") {
+    return countLabel(
+      morning.due_today_count,
+      "thing due today",
+      "things due today",
+    );
+  }
+  return "";
+}
+
+function captureText(capture: Capture) {
+  return (
+    capture.summary ||
+    capture.pepper_reply ||
+    capture.reply ||
+    capture.response ||
+    capture.text ||
+    capture.raw_text ||
+    capture.title ||
+    "Pepper updated the family plan."
+  );
+}
+
+function captureTime(capture: Capture) {
+  const value =
+    capture.created_at || capture.captured_at || capture.updated_at || "";
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
 function activeNow(events: any[]) {
@@ -122,6 +251,11 @@ export function PepperClient() {
   const [message, setMessage] = useState("");
   const [tell, setTell] = useState("");
   const [reflection, setReflection] = useState("");
+  const [reflectionSaved, setReflectionSaved] = useState(false);
+  const [ritualOpen, setRitualOpen] = useState<Ritual | null>(null);
+  const [ritualBusy, setRitualBusy] = useState(false);
+  const [handlingPreparation, setHandlingPreparation] = useState("");
+  const [calendarConfirmation, setCalendarConfirmation] = useState("");
   const [insightOpen, setInsightOpen] = useState(false);
   const [insightRefs, setInsightRefs] = useState<any[]>([]);
 
@@ -160,6 +294,42 @@ export function PepperClient() {
   }
 
   useEffect(() => {
+    const url = new URL(window.location.href);
+    const ritual = url.searchParams.get("ritual");
+    const calendarConnected = url.searchParams.get("calendar") === "connected";
+
+    const queryTimer = window.setTimeout(() => {
+      if (ritual === "morning" || ritual === "evening") {
+        setView("today");
+        setRitualOpen(ritual);
+      }
+      if (calendarConnected) {
+        setCalendarConfirmation(
+          "Google Calendar connected. Pepper is planning ahead from it.",
+        );
+      }
+    }, 0);
+
+    let confirmationTimer: number | undefined;
+    if (calendarConnected) {
+      url.searchParams.delete("calendar");
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}${url.hash}`,
+      );
+      confirmationTimer = window.setTimeout(() => {
+        setCalendarConfirmation("");
+      }, 7000);
+    }
+
+    return () => {
+      window.clearTimeout(queryTimer);
+      if (confirmationTimer) window.clearTimeout(confirmationTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     call({ action: "members" }, "")
       .then((result) => setMembers(result.members || []))
       .catch((error) =>
@@ -189,6 +359,22 @@ export function PepperClient() {
   const openConsequences = (state?.consequences || []).filter(
     (item) => !item.status || item.status === "open",
   );
+  const preparationNow = state?.preparation?.now || [];
+  const morning = state?.rituals?.morning;
+  const evening = state?.rituals?.evening;
+  const todayEventCount = morning?.today_event_count ?? morning?.event_count;
+  const dueToday = dueTodayText(morning);
+  const morningTomorrowHeadline = morning?.tomorrow_headline || "";
+  const eveningTomorrowHeadline =
+    evening?.tomorrow_headline || morningTomorrowHeadline;
+  const tomorrowHeadline =
+    morningTomorrowHeadline || eveningTomorrowHeadline;
+  const rhythmPhase =
+    currentHour() < 12
+      ? "morning"
+      : currentHour() < 18
+        ? "tomorrow"
+        : "evening";
   const horizon = state?.horizon;
   const readiness = horizon?.readiness || [];
   const coordination = readiness.filter(
@@ -196,13 +382,28 @@ export function PepperClient() {
       item.severity === "urgent" || item.severity === "needs_attention",
   );
   const prepare = readiness.filter((item: any) => item.severity === "prepare");
-  const openTasks = [
-    ...(state?.familyTasks || []),
-    ...(state?.privateTasks || []),
-  ].filter((task) => !["completed", "canceled"].includes(task.status)).length;
-  const openGroceries = (state?.groceries || []).filter(
+  const activeFamilyTasks = (state?.familyTasks || []).filter(
+    (task) => !["completed", "canceled"].includes(task.status),
+  );
+  const activePrivateTasks = (state?.privateTasks || []).filter(
+    (task) => !["completed", "canceled"].includes(task.status),
+  );
+  const activeGroceries = (state?.groceries || []).filter(
     (item) => item.status !== "completed",
-  ).length;
+  );
+  const openTasks = activeFamilyTasks.length + activePrivateTasks.length;
+  const openGroceries = activeGroceries.length;
+  const recentCaptures = [...(state?.captures || [])]
+    .sort((a, b) => {
+      const aTime = new Date(
+        a.created_at || a.captured_at || a.updated_at || 0,
+      ).getTime();
+      const bTime = new Date(
+        b.created_at || b.captured_at || b.updated_at || 0,
+      ).getTime();
+      return bTime - aTime;
+    })
+    .slice(0, 5);
 
   async function login() {
     if (!selected || !pin) return;
@@ -280,13 +481,48 @@ export function PepperClient() {
     await load();
   }
 
+  async function handlePreparation(id: string) {
+    setHandlingPreparation(id);
+    try {
+      await call({ action: "preparation_handle", preparation_id: id });
+      setMessage("Handled. Pepper updated the plan.");
+      await load();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not mark that handled.",
+      );
+    } finally {
+      setHandlingPreparation("");
+    }
+  }
+
   async function saveReflection() {
     const clean = reflection.trim();
     if (!clean) return;
-    await call({ action: "reflect", type: "reflection", text: clean });
-    setReflection("");
-    setMessage("Saved privately.");
-    await load();
+    setRitualBusy(true);
+    try {
+      await call({ action: "reflect", type: "reflection", text: clean });
+      setReflection("");
+      setReflectionSaved(true);
+      setMessage("Saved privately.");
+      await load();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not save that reflection.",
+      );
+    } finally {
+      setRitualBusy(false);
+    }
+  }
+
+  function openRitual(ritual: Ritual) {
+    setView("today");
+    setRitualOpen(ritual);
+    if (ritual === "evening") setReflectionSaved(false);
   }
 
   async function exploreInsight() {
@@ -453,6 +689,12 @@ export function PepperClient() {
           ))}
         </nav>
 
+        {calendarConfirmation ? (
+          <div className={styles.calendarConfirmation} role="status">
+            {calendarConfirmation}
+          </div>
+        ) : null}
+
         {view === "today" ? (
           <>
             <section className={styles.hero}>
@@ -486,6 +728,215 @@ export function PepperClient() {
                 </div>
               </section>
             ) : null}
+
+            {preparationNow.length ? (
+              <section className={styles.section}>
+                <div className={styles.sectionLabel}>
+                  Prepare before it becomes urgent
+                </div>
+                <div className={styles.noticeStack}>
+                  {preparationNow.map((item) => (
+                    <article
+                      className={`${styles.prepareCard} ${styles.preparationAction}`}
+                      key={item.id}
+                    >
+                      <div>
+                        <strong>{item.title}</strong>
+                        {item.summary ? <p>{item.summary}</p> : null}
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        disabled={handlingPreparation === item.id}
+                        onClick={() => void handlePreparation(item.id)}
+                      >
+                        {handlingPreparation === item.id
+                          ? "Handling…"
+                          : "Handled"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <section className={styles.section}>
+              <div className={styles.sectionLabel}>Daily Rhythm</div>
+              {rhythmPhase === "morning" ? (
+                <button
+                  type="button"
+                  className={styles.lookAhead}
+                  aria-expanded={ritualOpen === "morning"}
+                  aria-controls="pepper-ritual"
+                  onClick={() => openRitual("morning")}
+                >
+                  <div>
+                    <span className={styles.sectionLabel}>This morning</span>
+                    <strong>Morning Brief</strong>
+                    <p>
+                      {morning?.headline ||
+                        "A calm look at what matters today and what is coming next."}
+                    </p>
+                  </div>
+                  <span className={styles.arrow}>→</span>
+                </button>
+              ) : rhythmPhase === "tomorrow" ? (
+                <article
+                  className={`${styles.lookAhead} ${styles.rhythmQuiet}`}
+                >
+                  <div>
+                    <span className={styles.sectionLabel}>
+                      A quiet look ahead
+                    </span>
+                    <strong>Tomorrow check</strong>
+                    <p>
+                      {tomorrowHeadline ||
+                        "Pepper is keeping tomorrow in view without asking anything of you yet."}
+                    </p>
+                  </div>
+                </article>
+              ) : (
+                <button
+                  type="button"
+                  className={styles.lookAhead}
+                  aria-expanded={ritualOpen === "evening"}
+                  aria-controls="pepper-ritual"
+                  onClick={() => openRitual("evening")}
+                >
+                  <div>
+                    <span className={styles.sectionLabel}>This evening</span>
+                    <strong>Evening Reflection</strong>
+                    <p>
+                      {evening?.headline ||
+                        evening?.reflection_prompt ||
+                        evening?.prompt ||
+                        "A private moment to set down what mattered today."}
+                    </p>
+                  </div>
+                  <span className={styles.arrow}>→</span>
+                </button>
+              )}
+
+              <div className={styles.ritualLinks}>
+                <button
+                  type="button"
+                  className={styles.textButton}
+                  onClick={() => openRitual("morning")}
+                >
+                  Morning Brief
+                </button>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  className={styles.textButton}
+                  onClick={() => openRitual("evening")}
+                >
+                  Evening Reflection
+                </button>
+              </div>
+
+              {ritualOpen ? (
+                <article
+                  className={`${styles.insight} ${styles.ritualPanel}`}
+                  id="pepper-ritual"
+                  aria-live="polite"
+                >
+                  <button
+                    type="button"
+                    className={`${styles.quietButton} ${styles.ritualClose}`}
+                    aria-label={`Close ${
+                      ritualOpen === "morning"
+                        ? "Morning Brief"
+                        : "Evening Reflection"
+                    }`}
+                    onClick={() => setRitualOpen(null)}
+                  >
+                    ×
+                  </button>
+
+                  {ritualOpen === "morning" ? (
+                    <>
+                      <div className={styles.eyebrow}>Morning Brief</div>
+                      <h2>
+                        {morning?.headline || "Here is the shape of today."}
+                      </h2>
+                      <div
+                        className={`${styles.evidence} ${styles.briefFacts}`}
+                      >
+                        {typeof todayEventCount === "number" ? (
+                          <p>
+                            <strong>
+                              {countLabel(todayEventCount, "event")}
+                            </strong>{" "}
+                            on today&apos;s calendar.
+                          </p>
+                        ) : null}
+                        {dueToday ? <p>{dueToday}</p> : null}
+                        {typeof morning?.preparation_count === "number" ? (
+                          <p>
+                            <strong>
+                              {countLabel(
+                                morning.preparation_count,
+                                "preparation",
+                              )}
+                            </strong>{" "}
+                            ready to handle before it becomes urgent.
+                          </p>
+                        ) : null}
+                      </div>
+                      {morningTomorrowHeadline ? (
+                        <div
+                          className={`${styles.prepareCard} ${styles.tomorrowPreview}`}
+                        >
+                          <span className={styles.sectionLabel}>Tomorrow</span>
+                          <p>{morningTomorrowHeadline}</p>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <div className={styles.eyebrow}>Evening Reflection</div>
+                      <h2>What is worth carrying forward?</h2>
+                      <p>
+                        {evening?.reflection_prompt ||
+                          evening?.prompt ||
+                          "What do you want to remember about today?"}
+                      </p>
+                      <textarea
+                        value={reflection}
+                        onChange={(event) => {
+                          setReflection(event.target.value);
+                          setReflectionSaved(false);
+                        }}
+                        placeholder={
+                          evening?.reflection_prompt ||
+                          evening?.prompt ||
+                          "Write a private reflection…"
+                        }
+                        rows={4}
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        disabled={ritualBusy || !reflection.trim()}
+                        onClick={() => void saveReflection()}
+                      >
+                        {ritualBusy ? "Saving…" : "Save privately"}
+                      </button>
+                      {reflectionSaved && eveningTomorrowHeadline ? (
+                        <div
+                          className={`${styles.prepareCard} ${styles.tomorrowPreview}`}
+                        >
+                          <span className={styles.sectionLabel}>Tomorrow</span>
+                          <p>{eveningTomorrowHeadline}</p>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </article>
+              ) : null}
+            </section>
 
             <section className={styles.section}>
               <div className={styles.sectionLabel}>Now</div>
@@ -580,53 +1031,54 @@ export function PepperClient() {
             <section className={styles.details}>
               <details>
                 <summary>Family tasks</summary>
-                {(state.familyTasks || []).map((task) => (
+                {activeFamilyTasks.map((task) => (
                   <CheckRow
                     key={task.id}
                     label={task.title}
-                    checked={task.status === "completed"}
+                    checked={false}
                     onChange={(checked) => void updateTask(task.id, checked)}
                   />
                 ))}
               </details>
               <details>
                 <summary>My private tasks</summary>
-                {(state.privateTasks || []).map((task) => (
+                {activePrivateTasks.map((task) => (
                   <CheckRow
                     key={task.id}
                     label={task.title}
-                    checked={task.status === "completed"}
+                    checked={false}
                     onChange={(checked) => void updateTask(task.id, checked)}
                   />
                 ))}
               </details>
               <details>
                 <summary>Groceries</summary>
-                {(state.groceries || []).map((item) => (
+                {activeGroceries.map((item) => (
                   <CheckRow
                     key={item.id}
                     label={item.item}
-                    checked={item.status === "completed"}
+                    checked={false}
                     onChange={(checked) => void updateGrocery(item.id, checked)}
                   />
                 ))}
               </details>
-              <details>
-                <summary>Reflect privately</summary>
-                <textarea
-                  value={reflection}
-                  onChange={(event) => setReflection(event.target.value)}
-                  placeholder="What do you want to remember about today?"
-                  rows={4}
-                />
-                <button
-                  type="button"
-                  className={styles.secondaryButton}
-                  onClick={() => void saveReflection()}
-                >
-                  Save privately
-                </button>
-              </details>
+              {recentCaptures.length ? (
+                <details>
+                  <summary>Recent Pepper updates</summary>
+                  <div className={styles.evidence}>
+                    {recentCaptures.map((capture, index) => (
+                      <blockquote
+                        key={capture.id || `capture-${index}`}
+                      >
+                        {captureTime(capture) ? (
+                          <time>{captureTime(capture)}</time>
+                        ) : null}
+                        {captureText(capture)}
+                      </blockquote>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
             </section>
           </>
         ) : null}

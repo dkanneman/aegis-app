@@ -99,6 +99,17 @@
   box-shadow: 0 5px 16px rgba(23, 51, 62, 0.08);
 }
 
+.calendarConfirmation {
+  margin: -18px 0 28px;
+  padding: 11px 14px;
+  border: 1px solid rgba(70, 103, 95, 0.12);
+  border-radius: 16px;
+  background: #edf5f2;
+  color: var(--good);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .hero {
   margin-bottom: 30px;
 }
@@ -261,6 +272,76 @@
   background: var(--blue-soft);
 }
 
+.preparationAction {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.preparationAction .secondaryButton {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.preparationAction .secondaryButton:disabled,
+.ritualPanel .secondaryButton:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.rhythmQuiet {
+  border-color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: none;
+  cursor: default;
+}
+
+.ritualLinks {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 4px 0;
+  color: #93a0a5;
+}
+
+.ritualLinks .textButton {
+  padding: 0;
+  font-size: 11px;
+}
+
+.ritualPanel {
+  position: relative;
+  margin-top: 12px;
+}
+
+.ritualPanel h2 {
+  margin-right: 40px;
+}
+
+.ritualClose {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+
+.briefFacts {
+  display: grid;
+  gap: 8px;
+}
+
+.ritualPanel textarea {
+  margin-top: 13px;
+}
+
+.tomorrowPreview {
+  margin-top: 13px;
+}
+
+.tomorrowPreview .sectionLabel {
+  margin-bottom: 4px;
+}
+
 .lookAhead {
   width: 100%;
   display: flex;
@@ -382,7 +463,8 @@
   cursor: pointer;
 }
 
-.details textarea {
+.details textarea,
+.ritualPanel textarea {
   width: 100%;
   margin-bottom: 10px;
   padding: 12px;
@@ -788,6 +870,10 @@
   .calendarCard {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .preparationAction {
+    align-items: flex-start;
   }
 
   .aheadCard {
