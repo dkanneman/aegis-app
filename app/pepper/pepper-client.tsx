@@ -37,13 +37,21 @@ type Capture = {
 
 type MorningRitual = {
   headline?: string | null;
+  today_events?: unknown[] | null;
   today_event_count?: number | null;
   event_count?: number | null;
-  due_today?: unknown;
+  due_today?:
+    | unknown[]
+    | string
+    | number
+    | Record<string, unknown>
+    | null;
   due_today_count?: number | null;
   due_today_information?: string | null;
   due_today_summary?: string | null;
+  preparation?: unknown[] | null;
   preparation_count?: number | null;
+  tomorrow?: { headline?: string | null } | null;
   tomorrow_headline?: string | null;
 };
 
@@ -362,9 +370,15 @@ export function PepperClient() {
   const preparationNow = state?.preparation?.now || [];
   const morning = state?.rituals?.morning;
   const evening = state?.rituals?.evening;
-  const todayEventCount = morning?.today_event_count ?? morning?.event_count;
+  const todayEventCount = Array.isArray(morning?.today_events)
+    ? morning.today_events.length
+    : morning?.today_event_count ?? morning?.event_count;
   const dueToday = dueTodayText(morning);
-  const morningTomorrowHeadline = morning?.tomorrow_headline || "";
+  const preparationCount = Array.isArray(morning?.preparation)
+    ? morning.preparation.length
+    : morning?.preparation_count;
+  const morningTomorrowHeadline =
+    morning?.tomorrow?.headline || morning?.tomorrow_headline || "";
   const eveningTomorrowHeadline =
     evening?.tomorrow_headline || morningTomorrowHeadline;
   const tomorrowHeadline =
@@ -484,7 +498,7 @@ export function PepperClient() {
   async function handlePreparation(id: string) {
     setHandlingPreparation(id);
     try {
-      await call({ action: "preparation_handle", preparation_id: id });
+      await call({ action: "preparation_handle", id });
       setMessage("Handled. Pepper updated the plan.");
       await load();
     } catch (error) {
@@ -872,13 +886,10 @@ export function PepperClient() {
                           </p>
                         ) : null}
                         {dueToday ? <p>{dueToday}</p> : null}
-                        {typeof morning?.preparation_count === "number" ? (
+                        {typeof preparationCount === "number" ? (
                           <p>
                             <strong>
-                              {countLabel(
-                                morning.preparation_count,
-                                "preparation",
-                              )}
+                              {countLabel(preparationCount, "preparation")}
                             </strong>{" "}
                             ready to handle before it becomes urgent.
                           </p>
