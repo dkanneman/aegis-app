@@ -34,7 +34,9 @@ if(action==='state'){
   }
   state.apiVersion='1.2';return json(req,{state})
 }
-if(action==='tell'){const r=await proxy(TELL,headers,{text:b.text,source:b.source});return json(req,r.data,r.status)}
+if(action==='tell'){const r=await proxy(TELL,headers,{action:'tell',text:b.text,source:b.source,idempotency_key:b.idempotency_key});return json(req,r.data,r.status)}
+if(action==='capture_reviews'){const r=await proxy(TELL,headers,{action:'review_list',limit:b.limit});return json(req,r.data,r.status)}
+if(action==='capture_review_resolve'){const r=await proxy(TELL,headers,{action:'review_resolve',capture_id:b.capture_id,idempotency_key:b.idempotency_key,resolution:b.resolution});return json(req,r.data,r.status)}
 if(['task','grocery','reflect'].includes(action)){const r=await proxy(TARGET,headers,b);return json(req,r.data,r.status)}
 if(action==='reflection_explore'){const r=await proxy(REFLECTIONS,headers,{action:'explore',insight_id:b.insight_id});return json(req,r.data,r.status)}
 if(action==='reflection_weekly'){const r=await proxy(REFLECTIONS,headers,{action:'weekly'});return json(req,r.data,r.status)}

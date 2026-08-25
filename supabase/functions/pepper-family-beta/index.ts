@@ -12,6 +12,7 @@ const cors = {
 };
 
 const TZ = 'America/Los_Angeles';
+const TELL = 'https://olgyfgqlqrhfaujkfjtj.supabase.co/functions/v1/pepper-tell-v2';
 const todayLA = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit'
 }).format(new Date());
@@ -55,7 +56,7 @@ async function state(m: any) {
     supabase.from('meal_plan').select('*').eq('household_id', hid).eq('meal_date', day).maybeSingle(),
     supabase.from('groceries').select('*').eq('household_id', hid).order('created_at'),
     supabase.from('audit_log').select('*').eq('household_id', hid).order('created_at', { ascending: false }).limit(12),
-    supabase.from('captures').select('id,original_text,status,source,captured_at').eq('household_id', hid).order('captured_at', { ascending: false }).limit(8),
+    supabase.from('captures').select('id,original_text,status,source,captured_at').eq('household_id', hid).eq('member_id', m.id).order('captured_at', { ascending: false }).limit(8),
   ]);
   const ev = events.data || [];
   const ft = familyTasks.data || [];
@@ -282,8 +283,26 @@ Deno.serve(async (req) => {
 
     if (b.action === 'state') return Response.json({ state: await state(m) }, { headers: cors });
     if (b.action === 'tell') {
-      const result = await tell(m, String(b.text || ''), String(b.source || 'text'));
-      return Response.json(result, { headers: cors });
+      const upstream = await fetch(TELL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-pepper-session': req.headers.get('x-pepper-session') || '',
+        },
+        body: JSON.stringify({
+          action: 'tell',
+          text: b.text,
+          source: b.source,
+          idempotency_key: b.idempotency_key,
+        }),
+      });
+      return new Response(await upstream.text(), {
+        status: upstream.status,
+        headers: {
+          ...cors,
+          'content-type': upstream.headers.get('content-type') || 'application/json',
+        },
+      });
     }
     if (b.action === 'task') {
       const { data: t } = await supabase.from('tasks').select('*').eq('id', b.id).single();
