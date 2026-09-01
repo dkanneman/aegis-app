@@ -130,7 +130,7 @@
 
 .tabs {
   display: inline-grid;
-  grid-template-columns: repeat(6, minmax(78px, 1fr));
+  grid-template-columns: repeat(var(--pepper-tab-count, 6), minmax(78px, 1fr));
   gap: 4px;
   padding: 4px;
   margin-bottom: 38px;
@@ -1832,6 +1832,158 @@
   color: var(--pepper-mediterranean);
 }
 
+.workHero,
+.workPriorityStack,
+.workHandled {
+  width: min(860px, 100%);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.workHero {
+  min-height: 144px;
+}
+
+.workPriorityStack {
+  display: grid;
+  gap: 30px;
+}
+
+.workPrioritySection {
+  min-width: 0;
+}
+
+.workPriorityHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 0 4px;
+}
+
+.workPriorityHeader span:first-child,
+.workPriorityHeader strong,
+.workPriorityHeader small {
+  display: block;
+}
+
+.workPriorityHeader strong {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 400;
+}
+
+.workPriorityHeader small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workPriorityCount {
+  min-width: 28px;
+  padding: 4px 8px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.workTaskList {
+  overflow: hidden;
+  padding: 0 18px;
+  border: 1px solid rgba(23, 59, 86, 0.09);
+  border-radius: 16px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.04);
+}
+
+.workTaskRow {
+  display: grid;
+  width: 100%;
+  min-height: 72px;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workTaskRow:last-child {
+  border-bottom: 0;
+}
+
+.workTaskRow:hover {
+  background: rgba(200, 220, 232, 0.12);
+}
+
+.workPriorityMark {
+  width: 8px;
+  height: 34px;
+  border-radius: 4px;
+  background: var(--pepper-bleu-gris);
+}
+
+.workPriorityMark[data-priority="critical"] {
+  background: var(--pepper-bordeaux);
+}
+
+.workPriorityMark[data-priority="high"] {
+  background: var(--pepper-soft-coral);
+}
+
+.workPriorityMark[data-priority="planned"] {
+  background: var(--pepper-riviera);
+}
+
+.workPriorityMark[data-priority="later"] {
+  background: var(--pepper-sea-glass);
+}
+
+.workTaskBody {
+  min-width: 0;
+}
+
+.workTaskBody strong,
+.workTaskBody small {
+  display: block;
+}
+
+.workTaskBody strong {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.workTaskBody small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workOwnerMissing {
+  color: var(--pepper-bordeaux);
+  font-weight: 750;
+}
+
+.workHandled {
+  margin-top: 30px;
+}
+
+.workHandled .workTaskList {
+  margin-bottom: 16px;
+  box-shadow: none;
+  opacity: 0.74;
+}
+
 .choreHero {
   width: min(760px, 100%);
   min-height: 168px;
@@ -2758,7 +2910,7 @@
     left: 0;
     display: grid;
     width: 100%;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(var(--pepper-tab-count, 6), 1fr);
     gap: 0;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
     margin: 0;

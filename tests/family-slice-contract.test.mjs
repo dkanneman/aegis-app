@@ -111,6 +111,26 @@ test('chores use canonical household tasks with delegation and lifecycle control
   assert.match(styles, /\.choreOwner/)
 })
 
+test('adult navigation includes a priority-organized canonical Work view', async () => {
+  const [client, work, styles] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(new URL('../app/pepper/pepper-work.ts', import.meta.url), 'utf8'),
+    readFile(pepperStylesPath, 'utf8'),
+  ])
+
+  assert.match(client, /\["work", "Work", Briefcase\]/)
+  assert.match(client, /view === "work" && actorIsAdult/)
+  assert.match(client, /state\.familyTasks[\s\S]*state\.privateTasks/)
+  assert.match(client, /function WorkPage/)
+  assert.match(client, /setSelectedItem\(\{ type: "task", item: task \}\)/)
+  assert.match(work, /export function isWorkTask/)
+  assert.match(work, /export function workPriority/)
+  assert.match(work, /critical[\s\S]*high[\s\S]*planned[\s\S]*later[\s\S]*unprioritized/)
+  assert.match(styles, /--pepper-tab-count/)
+  assert.match(styles, /\.workPrioritySection/)
+  assert.match(styles, /\.workTaskRow/)
+})
+
 test('attention cards resolve canonical rides and conflicts instead of remaining static prose', async () => {
   const [api, consequences, horizon, calendar, client, styles] = await Promise.all([
     readFile(apiPath, 'utf8'),

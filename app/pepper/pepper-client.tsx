@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
+  Briefcase,
   Cable,
   CalendarDays,
   CalendarRange,
@@ -28,6 +29,12 @@ import {
   X,
 } from "lucide-react";
 import { minutesInTimeZone, pepperAtmosphereAt } from "./pepper-atmosphere";
+import {
+  compareWorkTasks,
+  isWorkTask,
+  WORK_PRIORITY_GROUPS,
+  workPriority,
+} from "./pepper-work";
 import styles from "./pepper.module.css";
 
 const API =
@@ -342,6 +349,7 @@ type PepperState = {
 type View =
   | "today"
   | "week"
+  | "work"
   | "ahead"
   | "chores"
   | "family"
@@ -1267,6 +1275,16 @@ export function PepperClient() {
   const coverage = horizon?.coverage;
   const weekIssueCount =
     coverage?.coordination_issues ?? coordination.length ?? 0;
+  const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+  const primaryNavigation = [
+    ["today", "Today", House],
+    ["week", "Next 7", CalendarRange],
+    ...(actorIsAdult ? [["work", "Work", Briefcase] as const] : []),
+    ["chores", "Chores", ClipboardCheck],
+    ["ahead", "Ahead", Telescope],
+    ["family", "Family", UsersRound],
+    ["connections", "Connect", Cable],
+  ] as const;
 
   return (
     <main className={styles.page} style={atmosphereStyle}>
@@ -1285,15 +1303,16 @@ export function PepperClient() {
           </div>
         </header>
 
-        <nav className={styles.tabs} aria-label="Pepper primary navigation">
-          {([
-            ["today", "Today", House],
-            ["week", "Next 7", CalendarRange],
-            ["chores", "Chores", ClipboardCheck],
-            ["ahead", "Ahead", Telescope],
-            ["family", "Family", UsersRound],
-            ["connections", "Connect", Cable],
-          ] as const).map(([key, label, Icon]) => (
+        <nav
+          className={styles.tabs}
+          aria-label="Pepper primary navigation"
+          style={
+            {
+              "--pepper-tab-count": primaryNavigation.length,
+            } as CSSProperties
+          }
+        >
+          {primaryNavigation.map(([key, label, Icon]) => (
             <button
               key={key}
               type="button"
@@ -1923,6 +1942,14 @@ export function PepperClient() {
                 task.status === "completed" ? "reopen" : "complete",
               )
             }
+          />
+        ) : null}
+
+        {view === "work" && actorIsAdult ? (
+          <WorkPage
+            tasks={[...(state.familyTasks || []), ...(state.privateTasks || [])]}
+            state={state}
+            onOpen={(task) => setSelectedItem({ type: "task", item: task })}
           />
         ) : null}
 
@@ -2754,6 +2781,135 @@ function CopyField({ label, value }: { label: string; value: string }) {
         <Copy size={17} />
       </button>
     </div>
+  );
+}
+
+function workPrioritySummary(tasks: FamilyTask[]) {
+  const critical = tasks.filter((task) => workPriority(task) === "critical").length;
+  const high = tasks.filter((task) => workPriority(task) === "high").length;
+  if (critical && high) return `${critical} critical · ${high} high priority`;
+  if (critical) return `${critical} critical ${critical === 1 ? "task" : "tasks"}`;
+  if (high) return `${high} high-priority ${high === 1 ? "task" : "tasks"}`;
+  return tasks.length
+    ? `${tasks.length} open work ${tasks.length === 1 ? "task" : "tasks"}`
+    : "Work is clear.";
+}
+
+function WorkPage({
+  tasks,
+  state,
+  onOpen,
+}: {
+  tasks: FamilyTask[];
+  state: PepperState;
+  onOpen: (task: FamilyTask) => void;
+}) {
+  const workTasks = Array.from(
+    new Map(tasks.filter(isWorkTask).map((task) => [task.id, task])).values(),
+  );
+  const active = workTasks.filter(
+    (task) => !["completed", "canceled"].includes(task.status),
+  );
+  const handled = workTasks
+    .filter((task) => ["completed", "canceled"].includes(task.status))
+    .sort(compareWorkTasks);
+  const grouped = WORK_PRIORITY_GROUPS.map((group) => ({
+    ...group,
+    tasks: active
+      .filter((task) => workPriority(task) === group.key)
+      .sort(compareWorkTasks),
+  })).filter((group) => group.tasks.length > 0);
+
+  return (
+    <>
+      <section className={`${styles.hero} ${styles.workHero}`}>
+        <div className={styles.eyebrow}>C.W. Warren</div>
+        <h1>Work</h1>
+        <p>{workPrioritySummary(active)}</p>
+      </section>
+
+      <div className={styles.workPriorityStack}>
+        {grouped.length ? (
+          grouped.map((group) => (
+            <section className={styles.workPrioritySection} key={group.key}>
+              <header className={styles.workPriorityHeader}>
+                <span>
+                  <strong>{group.label}</strong>
+                  <small>{group.note}</small>
+                </span>
+                <span className={styles.workPriorityCount}>{group.tasks.length}</span>
+              </header>
+              <div className={styles.workTaskList}>
+                {group.tasks.map((task) => (
+                  <WorkTaskRow
+                    key={task.id}
+                    task={task}
+                    state={state}
+                    priority={group.key}
+                    onOpen={() => onOpen(task)}
+                  />
+                ))}
+              </div>
+            </section>
+          ))
+        ) : (
+          <div className={styles.quietEmpty}>
+            <p>No open work tasks.</p>
+          </div>
+        )}
+      </div>
+
+      {handled.length ? (
+        <details className={`${styles.handledDetails} ${styles.workHandled}`}>
+          <summary>{handled.length} completed or canceled</summary>
+          <div className={styles.workTaskList}>
+            {handled.map((task) => (
+              <WorkTaskRow
+                key={task.id}
+                task={task}
+                state={state}
+                priority={workPriority(task)}
+                onOpen={() => onOpen(task)}
+              />
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
+function WorkTaskRow({
+  task,
+  state,
+  priority,
+  onOpen,
+}: {
+  task: FamilyTask;
+  state: PepperState;
+  priority: ReturnType<typeof workPriority>;
+  onOpen: () => void;
+}) {
+  const owner = memberName(state, task.owner_member_id);
+  return (
+    <button type="button" className={styles.workTaskRow} onClick={onOpen}>
+      <span
+        className={styles.workPriorityMark}
+        data-priority={priority}
+        aria-hidden="true"
+      />
+      <span className={styles.workTaskBody}>
+        <strong>{task.title}</strong>
+        <small>
+          <span className={!owner ? styles.workOwnerMissing : undefined}>
+            {owner || "Needs an owner"}
+          </span>
+          {task.project ? ` · ${task.project}` : ""}
+          {task.due_at ? ` · ${dateLabel(task.due_at.slice(0, 10))}` : ""}
+        </small>
+      </span>
+      <ChevronRight size={18} aria-hidden="true" />
+    </button>
   );
 }
 
