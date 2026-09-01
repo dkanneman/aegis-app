@@ -131,6 +131,20 @@ test('adult navigation includes a priority-organized canonical Work view', async
   assert.match(styles, /\.workTaskRow/)
 })
 
+test('Looking Ahead excludes tasks and remains a family events horizon', async () => {
+  const [client, horizon] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(horizonPath, 'utf8'),
+  ])
+
+  assert.match(client, /futureWatch\.filter\(\(item\) => item\.type !== "task"\)/)
+  assert.match(client, /appointments, holidays, school changes and important family dates/)
+  assert.doesNotMatch(horizon, /aheadTasks/)
+  assert.match(horizon, /\.\.\.schoolAhead\.map/)
+  assert.match(horizon, /\.\.\.aheadWatch\.map/)
+  assert.match(horizon, /\.\.\.aheadItems\.map/)
+})
+
 test('attention cards resolve canonical rides and conflicts instead of remaining static prose', async () => {
   const [api, consequences, horizon, calendar, client, styles] = await Promise.all([
     readFile(apiPath, 'utf8'),

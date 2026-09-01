@@ -963,6 +963,7 @@ export function PepperClient() {
   const horizon = state?.horizon;
   const readiness = horizon?.readiness || [];
   const futureWatch = horizon?.ahead?.future_watch || [];
+  const familyFutureWatch = futureWatch.filter((item) => item.type !== "task");
   const routineSummaries = horizon?.ahead?.routine_summaries || [];
   const coordination = readiness.filter(
     (item) =>
@@ -1868,15 +1869,15 @@ export function PepperClient() {
               <h1>What could sneak up on us?</h1>
               <p>
                 Pepper keeps normal routines quiet here and surfaces exceptions,
-                deadlines, preparation and important dates.
+                appointments, holidays, school changes and important family dates.
               </p>
             </section>
 
-            {futureWatch.length ? (
+            {familyFutureWatch.length ? (
               <section className={styles.section}>
                 <div className={styles.sectionLabel}>Coming up</div>
                 <div className={styles.aheadStack}>
-                  {futureWatch.map((item, index) => (
+                  {familyFutureWatch.map((item, index) => (
                     <article
                       className={styles.aheadCard}
                       key={`${item.type}-${item.date}-${item.title}-${index}`}
@@ -1898,9 +1899,8 @@ export function PepperClient() {
               <section className={styles.quietEmpty}>
                 <strong>No exceptions are loaded yet.</strong>
                 <p>
-                  As calendar, school dates and family deadlines flow into
-                  Pepper, this is where the things worth preparing for will
-                  appear.
+                  As calendar, school dates and family commitments flow into
+                  Pepper, family events worth preparing for will appear here.
                 </p>
               </section>
             )}

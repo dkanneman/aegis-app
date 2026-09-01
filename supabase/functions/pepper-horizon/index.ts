@@ -394,14 +394,6 @@ Deno.serve(async (req: Request) => {
         date: localDate(task.due_at),
         owner_name: memberName(task.owner_member_id),
       }))
-    const aheadTasks = (tasks || [])
-      .filter((task: any) => localDate(task.due_at) > end7)
-      .map((task: any) => ({
-        ...task,
-        date: localDate(task.due_at),
-        owner_name: memberName(task.owner_member_id),
-      }))
-
     const routineMap = new Map<string, any>()
     for (const routine of routines || []) {
       if (routine.occurrence_date <= end7 || routineMap.has(routine.id)) continue
@@ -618,13 +610,6 @@ Deno.serve(async (req: Request) => {
         when: `${dayLabel(item.date)} - ${timeLabel(item.starts_at)}`,
         location: item.location || null,
       })),
-      ...aheadTasks.map((task: any) => ({
-        type: 'task',
-        date: task.date,
-        title: task.title,
-        when: `Due ${dayLabel(task.date)}`,
-        owner_name: task.owner_name || null,
-      })),
     ].sort((a: any, b: any) => a.date.localeCompare(b.date)).slice(0, 30)
 
     return new Response(JSON.stringify({
@@ -637,7 +622,6 @@ Deno.serve(async (req: Request) => {
       days,
       ahead: {
         items: aheadItems.slice(0, 20),
-        tasks: aheadTasks.slice(0, 12),
         watch: aheadWatch,
         routine_summaries: routineSummaries,
         future_watch: futureWatch,
