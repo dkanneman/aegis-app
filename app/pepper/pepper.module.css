@@ -264,6 +264,89 @@
   padding: 0 20px;
 }
 
+.schoolTransportGroups {
+  overflow: hidden;
+  border: 1px solid rgba(23, 59, 86, 0.09);
+  border-radius: 16px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.04);
+}
+
+.schoolTransportGroup + .schoolTransportGroup {
+  border-top: 1px solid var(--line);
+}
+
+.schoolTransportGroup summary {
+  display: grid;
+  min-height: 72px;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 17px;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+}
+
+.schoolTransportGroup summary::-webkit-details-marker {
+  display: none;
+}
+
+.schoolTransportGroup summary:hover {
+  background: rgba(200, 220, 232, 0.13);
+}
+
+.schoolTransportGroup summary:focus-visible {
+  outline: 3px solid rgba(110, 157, 183, 0.28);
+  outline-offset: -3px;
+}
+
+.schoolTransportIcon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(200, 220, 232, 0.42);
+  color: var(--pepper-mediterranean);
+}
+
+.schoolTransportSummary {
+  min-width: 0;
+}
+
+.schoolTransportSummary strong,
+.schoolTransportSummary small {
+  display: block;
+}
+
+.schoolTransportSummary strong {
+  font-size: 15px;
+}
+
+.schoolTransportSummary small {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.schoolTransportChevron {
+  color: var(--pepper-bleu-gris);
+  transition: transform 160ms ease;
+}
+
+.schoolTransportGroup[open] .schoolTransportChevron {
+  transform: rotate(90deg);
+}
+
+.schoolTransportDetails {
+  padding: 0 18px;
+  border-top: 1px solid var(--line);
+  background: rgba(247, 250, 251, 0.62);
+}
+
 .eventRow {
   display: grid;
   width: 100%;
@@ -723,6 +806,68 @@
 .dayHeading span {
   color: var(--muted);
   font-size: 11px;
+}
+
+.horizonTransportGroup {
+  border-top: 1px solid var(--line);
+}
+
+.horizonTransportGroup summary {
+  display: grid;
+  min-height: 62px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 0;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+}
+
+.horizonTransportGroup summary::-webkit-details-marker {
+  display: none;
+}
+
+.horizonTransportGroup summary:hover {
+  color: var(--pepper-mediterranean);
+}
+
+.horizonTransportGroup summary:focus-visible {
+  outline: 3px solid rgba(110, 157, 183, 0.25);
+  outline-offset: 2px;
+}
+
+.horizonTransportGroup summary strong,
+.horizonTransportGroup summary small {
+  display: block;
+}
+
+.horizonTransportGroup summary strong {
+  font-size: 14px;
+}
+
+.horizonTransportGroup summary small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.horizonTransportGroup summary svg {
+  color: var(--pepper-bleu-gris);
+  transition: transform 160ms ease;
+}
+
+.horizonTransportGroup[open] summary svg {
+  transform: rotate(90deg);
+}
+
+.horizonTransportDetails {
+  padding: 0 12px;
+  margin: 0 -4px 9px;
+  border: 1px solid rgba(63, 113, 141, 0.1);
+  border-radius: 10px;
+  background: rgba(200, 220, 232, 0.1);
 }
 
 .horizonRow {

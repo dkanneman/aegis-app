@@ -188,6 +188,8 @@ type HorizonRowItem = {
   detail?: string | null;
   schedule_kind?: string | null;
   resolution_level?: string | null;
+  kind?: string | null;
+  person_slug?: string | null;
 };
 
 type HorizonWatch = {
@@ -558,6 +560,25 @@ function upcomingToday(events: FamilyEvent[]) {
     );
 }
 
+function routineSchoolTripKind(event: FamilyEvent) {
+  if (
+    event.source !== "routine" ||
+    event.status !== "confirmed" ||
+    !event.transport_owner_member_id
+  ) {
+    return null;
+  }
+  const title = event.title.toLowerCase();
+  if (/minimum|early release|finals?|late start|special|no school/.test(title)) {
+    return null;
+  }
+  if (/pick[ -]?up|dismissal/.test(title)) return "pickup" as const;
+  if (/drop[ -]?off|school run|morning school/.test(title)) {
+    return "dropoff" as const;
+  }
+  return null;
+}
+
 export function PepperClient() {
   const [members, setMembers] = useState<Member[]>(FAMILY_CHOICES);
   const [selected, setSelected] = useState("elle");
@@ -864,10 +885,39 @@ export function PepperClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const nowEvents = useMemo(() => activeNow(state?.events || []), [state]);
+  const schoolTransportation = useMemo(() => {
+    const dropoffs: FamilyEvent[] = [];
+    const pickups: FamilyEvent[] = [];
+    const ids = new Set<string>();
+    for (const event of state?.events || []) {
+      if (localDateFor(event.starts_at) !== localDate()) continue;
+      const kind = routineSchoolTripKind(event);
+      if (!kind) continue;
+      ids.add(event.id);
+      if (kind === "dropoff") dropoffs.push(event);
+      else pickups.push(event);
+    }
+    const byStart = (a: FamilyEvent, b: FamilyEvent) =>
+      new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime();
+    return {
+      dropoffs: dropoffs.sort(byStart),
+      pickups: pickups.sort(byStart),
+      ids,
+    };
+  }, [state]);
+  const nowEvents = useMemo(
+    () =>
+      activeNow(state?.events || []).filter(
+        (event) => !schoolTransportation.ids.has(event.id),
+      ),
+    [schoolTransportation, state],
+  );
   const nextEvents = useMemo(
-    () => upcomingToday(state?.events || []).slice(0, 5),
-    [state],
+    () =>
+      upcomingToday(state?.events || [])
+        .filter((event) => !schoolTransportation.ids.has(event.id))
+        .slice(0, 5),
+    [schoolTransportation, state],
   );
   const openConsequences = (state?.consequences || []).filter(
     (item) => !item.status || item.status === "open",
@@ -1524,6 +1574,18 @@ export function PepperClient() {
               </div>
             </section>
 
+            {schoolTransportation.dropoffs.length ||
+            schoolTransportation.pickups.length ? (
+              <SchoolTransportationSummary
+                dropoffs={schoolTransportation.dropoffs}
+                pickups={schoolTransportation.pickups}
+                state={state}
+                onOpen={(event) =>
+                  setSelectedItem({ type: "event", item: event })
+                }
+              />
+            ) : null}
+
             <HealthSummary
               health={state.integrations?.apple_health}
               onOpen={() => setView("connections")}
@@ -1757,46 +1819,7 @@ export function PepperClient() {
               <div className={styles.sectionLabel}>The week</div>
               <div className={styles.weekStack}>
                 {(horizon?.days || []).map((day) => (
-                  <article className={styles.dayCard} key={day.date}>
-                    <div className={styles.dayHeading}>
-                      <strong>{day.label}</strong>
-                      <span>
-                        {(day.items?.length || 0) +
-                          (day.tasks?.length || 0) +
-                          (day.watch?.length || 0)}{" "}
-                        known
-                      </span>
-                    </div>
-                    {day.items?.map((item) => (
-                      <HorizonRow key={item.id} item={item} />
-                    ))}
-                    {day.watch?.map((item) => (
-                      <HorizonRow
-                        key={`watch-${item.id}`}
-                        item={{
-                          ...item,
-                          starts_at: `${item.date}T12:00:00Z`,
-                          title: item.title,
-                          item_type: "watch",
-                        }}
-                      />
-                    ))}
-                    {day.tasks?.map((item) => (
-                      <HorizonRow
-                        key={`task-${item.id}`}
-                        item={{
-                          ...item,
-                          starts_at: item.due_at || `${day.date}T12:00:00Z`,
-                          item_type: "task",
-                        }}
-                      />
-                    ))}
-                    {!day.items?.length &&
-                    !day.tasks?.length &&
-                    !day.watch?.length ? (
-                      <div className={styles.emptyDay}>Open.</div>
-                    ) : null}
-                  </article>
+                  <HorizonDayCard day={day} key={day.date} />
                 ))}
               </div>
             </section>
@@ -2023,6 +2046,98 @@ function AttentionCard({
       </span>
       {canResolve ? <ChevronRight size={19} aria-hidden="true" /> : null}
     </button>
+  );
+}
+
+function SchoolTransportationSummary({
+  dropoffs,
+  pickups,
+  state,
+  onOpen,
+}: {
+  dropoffs: FamilyEvent[];
+  pickups: FamilyEvent[];
+  state: PepperState;
+  onOpen: (event: FamilyEvent) => void;
+}) {
+  return (
+    <section className={styles.section}>
+      <div className={styles.sectionLabel}>School transportation</div>
+      <div className={styles.schoolTransportGroups}>
+        {dropoffs.length ? (
+          <SchoolTransportGroup
+            events={dropoffs}
+            label="School drop-off"
+            state={state}
+            onOpen={onOpen}
+          />
+        ) : null}
+        {pickups.length ? (
+          <SchoolTransportGroup
+            events={pickups}
+            label="School pickup"
+            state={state}
+            onOpen={onOpen}
+          />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function SchoolTransportGroup({
+  events,
+  label,
+  state,
+  onOpen,
+}: {
+  events: FamilyEvent[];
+  label: "School drop-off" | "School pickup";
+  state: PepperState;
+  onOpen: (event: FamilyEvent) => void;
+}) {
+  const drivers = Array.from(
+    new Set(
+      events
+        .map((event) => memberName(state, event.transport_owner_member_id))
+        .filter(Boolean),
+    ),
+  );
+  const routeLabel =
+    label === "School drop-off"
+      ? "Confirmed daily route"
+      : `${events.length} ${events.length === 1 ? "pickup" : "pickups"}`;
+  const coverage = drivers.length
+    ? `${routeLabel} · ${drivers.join(" + ")} driving`
+    : routeLabel;
+
+  return (
+    <details className={styles.schoolTransportGroup}>
+      <summary>
+        <span className={styles.schoolTransportIcon} aria-hidden="true">
+          <School size={18} strokeWidth={1.8} />
+        </span>
+        <span className={styles.schoolTransportSummary}>
+          <strong>{label}</strong>
+          <small>{coverage}</small>
+        </span>
+        <ChevronRight
+          className={styles.schoolTransportChevron}
+          size={19}
+          aria-hidden="true"
+        />
+      </summary>
+      <div className={styles.schoolTransportDetails}>
+        {events.map((event) => (
+          <EventRow
+            event={event}
+            state={state}
+            key={event.id}
+            onOpen={() => onOpen(event)}
+          />
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -3461,6 +3576,110 @@ function HorizonRow({ item }: { item: HorizonRowItem }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function HorizonDayCard({ day }: { day: HorizonDay }) {
+  const items = day.items || [];
+  const groupedDropoffs = items.filter(
+    (item) =>
+      item.source === "routine" &&
+      item.kind === "school_dropoff" &&
+      Boolean(item.transport_owner_name),
+  );
+  const groupedPickups = items.filter(
+    (item) =>
+      item.source === "routine" &&
+      item.kind === "school_pickup" &&
+      Boolean(item.transport_owner_name),
+  );
+  const groupedIds = new Set(
+    [...groupedDropoffs, ...groupedPickups].map((item) => item.id),
+  );
+  const visibleItems = items.filter((item) => !groupedIds.has(item.id));
+  const knownCount =
+    items.length + (day.tasks?.length || 0) + (day.watch?.length || 0);
+
+  return (
+    <article className={styles.dayCard}>
+      <div className={styles.dayHeading}>
+        <strong>{day.label}</strong>
+        <span>{knownCount} known</span>
+      </div>
+      {groupedDropoffs.length ? (
+        <HorizonSchoolTransportGroup
+          items={groupedDropoffs}
+          label="School drop-off"
+        />
+      ) : null}
+      {groupedPickups.length ? (
+        <HorizonSchoolTransportGroup
+          items={groupedPickups}
+          label="School pickup"
+        />
+      ) : null}
+      {visibleItems.map((item) => (
+        <HorizonRow key={item.id} item={item} />
+      ))}
+      {day.watch?.map((item) => (
+        <HorizonRow
+          key={`watch-${item.id}`}
+          item={{
+            ...item,
+            starts_at: `${item.date}T12:00:00Z`,
+            title: item.title,
+            item_type: "watch",
+          }}
+        />
+      ))}
+      {day.tasks?.map((item) => (
+        <HorizonRow
+          key={`task-${item.id}`}
+          item={{
+            ...item,
+            starts_at: item.due_at || `${day.date}T12:00:00Z`,
+            item_type: "task",
+          }}
+        />
+      ))}
+      {!knownCount ? <div className={styles.emptyDay}>Open.</div> : null}
+    </article>
+  );
+}
+
+function HorizonSchoolTransportGroup({
+  items,
+  label,
+}: {
+  items: HorizonRowItem[];
+  label: "School drop-off" | "School pickup";
+}) {
+  const drivers = Array.from(
+    new Set(items.map((item) => item.transport_owner_name).filter(Boolean)),
+  );
+  const countLabel =
+    label === "School drop-off"
+      ? "Confirmed daily route"
+      : `${items.length} ${items.length === 1 ? "pickup" : "pickups"}`;
+
+  return (
+    <details className={styles.horizonTransportGroup}>
+      <summary>
+        <span>
+          <strong>{label}</strong>
+          <small>
+            {countLabel}
+            {drivers.length ? ` · ${drivers.join(" + ")} driving` : ""}
+          </small>
+        </span>
+        <ChevronRight size={18} aria-hidden="true" />
+      </summary>
+      <div className={styles.horizonTransportDetails}>
+        {items.map((item) => (
+          <HorizonRow item={item} key={item.id} />
+        ))}
+      </div>
+    </details>
   );
 }
 
