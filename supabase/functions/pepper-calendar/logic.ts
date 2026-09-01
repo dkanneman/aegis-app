@@ -99,8 +99,10 @@ export function activityKey(text: string) {
   return words.slice(0, 3).join('-') || 'event';
 }
 
-export function kindFor(text: string) {
+export function kindFor(text: string, title = text) {
   const normalized = normalizeText(text);
+  const normalizedTitle = normalizeText(title);
+  if (/\bdr\b/.test(normalizedTitle) || /\b(doctor|dentist|dental|orthodont\w*|pediatri\w*|pulmonolog\w*|cardiolog\w*|dermatolog\w*|endocrinolog\w*|neurolog\w*|allerg\w*|specialist|medical|therapy|therapist|physical|optometr\w*|vision|eye exam|check up|checkup|well child|wellness|urgent care|clinic)\b/.test(normalized)) return 'appointment';
   if (/\b(dinner|lunch|breakfast)\b/.test(normalized)) return 'meal';
   if (/\b(pickup|pick up|dropoff|drop off|ride|driver)\b/.test(normalized)) return 'transport';
   if (/\b(work|meeting|shift)\b/.test(normalized)) return 'work';

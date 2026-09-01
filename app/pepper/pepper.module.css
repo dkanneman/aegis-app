@@ -376,6 +376,20 @@
   font-weight: 750;
 }
 
+.eventTime span {
+  display: block;
+}
+
+.eventRowWithDate {
+  grid-template-columns: 88px minmax(0, 1fr) auto;
+}
+
+.eventRowWithDate .eventTime span:first-child {
+  margin-bottom: 3px;
+  color: var(--pepper-midnight-sea);
+  font-size: 12px;
+}
+
 .eventRow strong,
 .horizonRow strong,
 .notice strong,
@@ -2896,6 +2910,10 @@
 
   .eventRow {
     grid-template-columns: 60px minmax(0, 1fr) auto;
+  }
+
+  .eventRowWithDate {
+    grid-template-columns: 76px minmax(0, 1fr) auto;
   }
 
   .horizonRow {

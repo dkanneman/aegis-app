@@ -145,6 +145,25 @@ test('Looking Ahead excludes tasks and remains a family events horizon', async (
   assert.match(horizon, /\.\.\.aheadItems\.map/)
 })
 
+test('family member pages include privacy-scoped medical appointments', async () => {
+  const [api, client, calendarLogic] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(clientPath, 'utf8'),
+    readFile(new URL('../supabase/functions/pepper-calendar/logic.ts', import.meta.url), 'utf8'),
+  ])
+
+  assert.match(api, /const \[events,appointments,tasks,profiles,schoolChanges\]/)
+  assert.match(api, /lower\(coalesce\(e\.kind,''\)\)='appointment'/)
+  assert.match(api, /e\.person_slug=\$\{member\.slug\}/)
+  assert.match(api, /new Map\(\[\.\.\.events,\.\.\.appointments\]/)
+  assert.match(client, /const appointments = activeEvents\.filter\(isMedicalAppointment\)/)
+  assert.match(client, /title="Appointments & care"/)
+  assert.match(client, /const careTasks = activeTasks\.filter\(isMedicalCareTask\)/)
+  assert.match(api, /String\(target\.display_name\)\.toLowerCase\(\)/)
+  assert.match(client, /showDate/)
+  assert.match(calendarLogic, /return 'appointment'/)
+})
+
 test('attention cards resolve canonical rides and conflicts instead of remaining static prose', async () => {
   const [api, consequences, horizon, calendar, client, styles] = await Promise.all([
     readFile(apiPath, 'utf8'),

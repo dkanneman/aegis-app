@@ -562,7 +562,7 @@ async function upsertGoogleEvent(
   const requirement = requirementFor(combinedText);
   const dedupeKey = canonicalDedupeKey(personSlug, startsAt, combinedText);
   const allDay = Boolean(event.start?.date && !event.start?.dateTime);
-  const kind = kindFor(combinedText);
+  const kind = kindFor(combinedText, title);
   let targetId = existingId;
   let merged = 0;
 

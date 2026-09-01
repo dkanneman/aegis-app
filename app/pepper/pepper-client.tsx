@@ -30,6 +30,10 @@ import {
 } from "lucide-react";
 import { minutesInTimeZone, pepperAtmosphereAt } from "./pepper-atmosphere";
 import {
+  isMedicalAppointment,
+  isMedicalCareTask,
+} from "./pepper-appointments";
+import {
   compareWorkTasks,
   isWorkTask,
   WORK_PRIORITY_GROUPS,
@@ -2180,15 +2184,24 @@ function EventRow({
   event,
   state,
   onOpen,
+  showDate = false,
 }: {
   event: FamilyEvent;
   state: PepperState;
   onOpen?: () => void;
+  showDate?: boolean;
 }) {
   const driver = memberName(state, event.transport_owner_member_id);
   return (
-    <button type="button" className={styles.eventRow} onClick={onOpen}>
-      <div className={styles.eventTime}>{time(event.starts_at)}</div>
+    <button
+      type="button"
+      className={`${styles.eventRow} ${showDate ? styles.eventRowWithDate : ""}`}
+      onClick={onOpen}
+    >
+      <div className={styles.eventTime}>
+        {showDate ? <span>{dateLabel(localDateFor(event.starts_at))}</span> : null}
+        <span>{time(event.starts_at)}</span>
+      </div>
       <div className={styles.eventBody}>
         <strong>{event.title}</strong>
         {event.location ? <p>{event.location}</p> : null}
@@ -3285,8 +3298,13 @@ function MemberPage({
   const activeTasks = state.tasks.filter(
     (item) => !["completed", "canceled"].includes(item.status),
   );
+  const appointments = activeEvents.filter(isMedicalAppointment);
+  const scheduleEvents = activeEvents.filter((item) => !isMedicalAppointment(item));
   const chores = activeTasks.filter(isChore);
-  const tasks = activeTasks.filter((item) => !isChore(item));
+  const careTasks = activeTasks.filter(isMedicalCareTask);
+  const tasks = activeTasks.filter(
+    (item) => !isChore(item) && !isMedicalCareTask(item),
+  );
   const handled = [
     ...state.events.filter((item) => ["completed", "canceled"].includes(item.status)),
     ...state.tasks.filter((item) => ["completed", "canceled"].includes(item.status)),
@@ -3352,12 +3370,36 @@ function MemberPage({
         </section>
       ) : null}
 
-      <MemberSection title="Schedule" empty="No upcoming schedule items.">
-        {activeEvents.map((event) => (
+      <MemberSection
+        title="Appointments & care"
+        empty="No upcoming appointments or care tasks."
+      >
+        {appointments.map((event) => (
           <EventRow
             key={event.id}
             event={event}
             state={household}
+            showDate
+            onOpen={() => onOpen({ type: "event", item: event })}
+          />
+        ))}
+        {careTasks.map((task) => (
+          <TaskActionRow
+            key={task.id}
+            task={task}
+            state={household}
+            onOpen={() => onOpen({ type: "task", item: task })}
+          />
+        ))}
+      </MemberSection>
+
+      <MemberSection title="Schedule" empty="No upcoming schedule items.">
+        {scheduleEvents.map((event) => (
+          <EventRow
+            key={event.id}
+            event={event}
+            state={household}
+            showDate
             onOpen={() => onOpen({ type: "event", item: event })}
           />
         ))}
