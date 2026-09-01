@@ -625,6 +625,14 @@ export function PepperClient() {
     });
     const data = await response.json();
     if (!response.ok) {
+      if (
+        data.code === "unknown_action" ||
+        data.error === "Unknown Pepper action."
+      ) {
+        throw new Error(
+          "This Pepper preview is out of date. Refresh the current V6 beta and try again.",
+        );
+      }
       throw new Error(data.error || "Pepper could not complete that.");
     }
     return data;

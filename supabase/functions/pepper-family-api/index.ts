@@ -167,7 +167,7 @@ async function updateFamilyItem(member:any,body:any){
     return {ok:true,item_type:itemType,id:itemId,operation}
   })
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.3',backend:'supabase',frontend:'vercel'});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.3',backend:'supabase',frontend:'vercel',capabilities:['chore_create','conflict_resolve','item_update']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 const token=req.headers.get('x-pepper-session')||'';const member=await validSession(token);if(!member)return json(req,{error:'Unlock Pepper again to continue.',code:'session_required'},401);await sql`update public.member_sessions set last_seen_at=now() where token=${token}::uuid`;
 if(action==='logout'){await sql`update public.member_sessions set revoked_at=now() where token=${token}::uuid`;return json(req,{ok:true})}
@@ -209,5 +209,5 @@ if(action==='calendar_sync'){const r=await proxy(CALENDAR,headers,{action:'sync'
 if(action==='email_start'){const r=await proxy(INTEGRATIONS,headers,{action:'gmail_start'});return json(req,r.data,r.status)}
 if(action==='health_pair'){const r=await proxy(INTEGRATIONS,headers,{action:'health_pair'});return json(req,r.data,r.status)}
 if(action==='integration_status'){const r=await proxy(INTEGRATIONS,headers,{action:'status'});return json(req,r.data,r.status)}
-return json(req,{error:'Unknown Pepper action.'},400)
+return json(req,{error:'Unknown Pepper action.',code:'unknown_action'},400)
 }catch(e){console.error(e);const status=typeof (e as any)?.status==='number'?(e as any).status:500;return json(req,{error:e instanceof Error?e.message:'Pepper hit an unexpected error.'},status)}})
