@@ -643,6 +643,44 @@
   background: rgba(185, 213, 209, 0.28);
 }
 
+.confidenceAction {
+  width: 100%;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.confidenceAction:hover:not(:disabled) {
+  border-color: rgba(129, 93, 37, 0.3);
+  background: rgba(247, 235, 209, 0.9);
+  transform: translateY(-1px);
+}
+
+.confidenceAction:focus-visible {
+  outline: 3px solid rgba(110, 157, 183, 0.3);
+  outline-offset: 3px;
+}
+
+.confidenceAction:disabled {
+  cursor: default;
+}
+
+.confidenceActionLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--pepper-mediterranean);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .confidenceNeedsWork {
   border-color: rgba(129, 93, 37, 0.16);
   background: var(--warn-bg);
@@ -2512,6 +2550,15 @@
 
   .topbar {
     margin-bottom: 26px;
+  }
+
+  .confidenceAction {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .confidenceActionLabel {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .sheetBackdrop {

@@ -743,6 +743,23 @@ export function PepperClient() {
     }
   }
 
+  function revealWeekDecisions() {
+    const target = document.getElementById("week-decisions");
+    if (!target) {
+      setMessage("Pepper is refreshing the decisions that need you.");
+      void load();
+      return;
+    }
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    target.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "start",
+    });
+    target.focus({ preventScroll: true });
+  }
+
   async function createChore(draft: ChoreDraft) {
     setActionBusy(true);
     try {
@@ -1674,10 +1691,14 @@ export function PepperClient() {
               </p>
             </section>
 
-            <section
-              className={`${styles.confidenceCard} ${
+            <button
+              type="button"
+              className={`${styles.confidenceCard} ${styles.confidenceAction} ${
                 weekIssueCount ? styles.confidenceNeedsWork : ""
               }`}
+              disabled={!weekIssueCount}
+              aria-controls={weekIssueCount ? "week-decisions" : undefined}
+              onClick={revealWeekDecisions}
             >
               <div className={styles.confidenceIcon}>
                 {weekIssueCount ? "!" : "✓"}
@@ -1696,10 +1717,19 @@ export function PepperClient() {
                     : "This is based on Pepper's current family state. Connect Google Calendar to improve coverage."}
                 </p>
               </div>
-            </section>
+              {weekIssueCount ? (
+                <span className={styles.confidenceActionLabel}>
+                  View decisions <ChevronRight size={19} aria-hidden="true" />
+                </span>
+              ) : null}
+            </button>
 
             {readiness.length ? (
-              <section className={styles.section}>
+              <section
+                className={styles.section}
+                id="week-decisions"
+                tabIndex={-1}
+              >
                 <div className={styles.sectionLabel}>Prepare / decide</div>
                 <div className={styles.noticeStack}>
                   {[...coordination, ...prepare].slice(0, 8).map((item, index) =>
