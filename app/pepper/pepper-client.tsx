@@ -616,8 +616,10 @@ export function PepperClient() {
   useEffect(() => {
     const url = new URL(window.location.href);
     const ritual = url.searchParams.get("ritual");
-    const calendarConnected = url.searchParams.get("calendar") === "connected";
+    const calendarResult = url.searchParams.get("calendar");
+    const calendarConnected = calendarResult === "connected";
     const connection = url.searchParams.get("connection");
+    const calendarReason = url.searchParams.get("reason");
 
     const queryTimer = window.setTimeout(() => {
       if (ritual === "morning" || ritual === "evening") {
@@ -625,8 +627,16 @@ export function PepperClient() {
         setRitualOpen(ritual);
       }
       if (calendarConnected) {
+        setView("connections");
         setCalendarConfirmation(
           "Google Calendar connected. Pepper is planning ahead from it.",
+        );
+      } else if (calendarResult === "error") {
+        setView("connections");
+        setCalendarConfirmation(
+          calendarReason
+            ? `Google Calendar did not connect: ${calendarReason.replaceAll("_", " ")}.`
+            : "Google Calendar did not connect. Try again.",
         );
       }
       if (connection === "gmail_connected") {
@@ -639,9 +649,10 @@ export function PepperClient() {
     }, 0);
 
     let confirmationTimer: number | undefined;
-    if (calendarConnected || connection) {
+    if (calendarResult || connection) {
       url.searchParams.delete("calendar");
       url.searchParams.delete("connection");
+      url.searchParams.delete("reason");
       window.history.replaceState(
         window.history.state,
         "",
@@ -1876,7 +1887,14 @@ function ConnectionsPage({
               : "Read-only calendar evidence for schedules and conflicts."
           }
           connected={Boolean(calendar?.connected)}
-          action={calendar?.connected ? "Refresh" : "Connect"}
+          action={
+            calendar?.connected
+              ? "Refresh"
+              : calendar?.configured
+                ? "Connect"
+                : "Setup pending"
+          }
+          disabled={!calendar?.configured}
           expanded={openProvider === "calendar"}
           onToggle={() =>
             setOpenProvider(openProvider === "calendar" ? null : "calendar")
@@ -1902,8 +1920,14 @@ function ConnectionsPage({
               : "Read-only intake for commitments, deadlines, and decisions."
           }
           connected={Boolean(gmail?.connected)}
-          action={gmail?.connected ? "Connected" : "Connect"}
-          disabled={Boolean(gmail?.connected)}
+          action={
+            gmail?.connected
+              ? "Connected"
+              : gmail?.configured
+                ? "Connect"
+                : "Setup pending"
+          }
+          disabled={Boolean(gmail?.connected) || !gmail?.configured}
           expanded={openProvider === "gmail"}
           onToggle={() =>
             setOpenProvider(openProvider === "gmail" ? null : "gmail")

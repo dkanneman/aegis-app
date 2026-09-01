@@ -13,6 +13,7 @@ const HORIZON=BASE+'/pepper-horizon'
 const PREPARATION=BASE+'/pepper-preparation'
 const RITUALS=BASE+'/pepper-rituals'
 const INTEGRATIONS=BASE+'/pepper-integrations'
+const CALENDAR=BASE+'/pepper-calendar'
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function previewOrigin(origin:string){try{const host=new URL(origin).hostname;return /^pepper-family-beta-[a-z0-9-]+-dkanneman-8936s-projects\.vercel\.app$/.test(host)}catch{return false}}
 function cors(req:Request){const o=req.headers.get('origin')||'';const allowed=!o||o===APP_ORIGIN||previewOrigin(o)||o.startsWith('http://localhost:')||o.startsWith('http://127.0.0.1:');return {'Access-Control-Allow-Origin':allowed&&o?o:APP_ORIGIN,'Access-Control-Allow-Headers':'apikey,authorization,content-type,x-pepper-session','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Max-Age':'86400','Cache-Control':'no-store','Content-Type':'application/json; charset=utf-8','Vary':'Origin','X-Content-Type-Options':'nosniff'}}
@@ -99,7 +100,8 @@ const headers:any={'content-type':'application/json','x-pepper-session':token,ap
 if(action==='state'){
   const core=await proxy(TARGET,headers,{action:'state'});if(!core.ok)return json(req,core.data,core.status)
   const prep=await proxy(PREPARATION,headers,{action:'list'})
-  const [cr,ir,hr,csr,rr,xr]=await Promise.all([proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(HORIZON,headers,{}),calendarState(member),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'})])
+  const [cr,ir,hr,calendarResult,rr,xr]=await Promise.all([proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'})])
+  const csr=calendarResult.ok?calendarResult.data:{...await calendarState(member),configured:false,last_error:calendarResult.data?.error||'Calendar service is unavailable.'}
   const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;
   if(state.horizon&&prep.ok&&Array.isArray(prep.data?.now)){
     const existing=Array.isArray(state.horizon.readiness)?state.horizon.readiness:[]
@@ -124,8 +126,9 @@ if(action==='preparation_dismiss'){const r=await proxy(PREPARATION,headers,{acti
 if(action==='rituals'){const r=await proxy(RITUALS,headers,{action:'get'});return json(req,r.data,r.status)}
 if(action==='ritual_preferences'){const r=await proxy(RITUALS,headers,{action:'set_preferences',...b});return json(req,r.data,r.status)}
 if(action==='horizon'){await proxy(PREPARATION,headers,{action:'list'});const r=await proxy(HORIZON,headers,{});return json(req,r.data,r.status)}
-if(action==='calendar_status'){return json(req,await calendarState(member))}
-if(action==='calendar_start'||action==='calendar_sync'){return json(req,{error:'Google Calendar reconnect is waiting for preview OAuth callback approval and credentials.'},503)}
+if(action==='calendar_status'){const r=await proxy(CALENDAR,headers,{action:'status',session_token:token});return json(req,r.data,r.status)}
+if(action==='calendar_start'){const r=await proxy(CALENDAR,headers,{action:'start',session_token:token});return json(req,r.data,r.status)}
+if(action==='calendar_sync'){const r=await proxy(CALENDAR,headers,{action:'sync',session_token:token,force:true});return json(req,r.data,r.status)}
 if(action==='email_start'){const r=await proxy(INTEGRATIONS,headers,{action:'gmail_start'});return json(req,r.data,r.status)}
 if(action==='health_pair'){const r=await proxy(INTEGRATIONS,headers,{action:'health_pair'});return json(req,r.data,r.status)}
 if(action==='integration_status'){const r=await proxy(INTEGRATIONS,headers,{action:'status'});return json(req,r.data,r.status)}

@@ -2,7 +2,7 @@ import postgres from 'npm:postgres@3.4.7'
 
 const SUPABASE_URL=Deno.env.get('SUPABASE_URL')||''
 const DATABASE_URL=Deno.env.get('SUPABASE_DB_URL')||''
-const APP_URL=Deno.env.get('PEPPER_APP_URL')||'https://pepper-v6-private-preview.vercel.app/pepper'
+const APP_URL=Deno.env.get('PEPPER_APP_URL')||'https://pepper-family-beta-git-codex-v6-e3b0dd-dkanneman-8936s-projects.vercel.app/pepper'
 const GOOGLE_CLIENT_ID=Deno.env.get('GOOGLE_CLIENT_ID')||''
 const GOOGLE_CLIENT_SECRET=Deno.env.get('GOOGLE_CLIENT_SECRET')||''
 const REDIRECT_URI=`${SUPABASE_URL}/functions/v1/pepper-gmail-callback`

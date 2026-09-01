@@ -24,7 +24,12 @@
 | `pepper-rituals` | Supabase platform JWT plus Pepper member session | Morning and evening summaries |
 | `pepper-tell-v2` | Supabase platform JWT plus Pepper member session | Transactional natural-language capture and reconciliation |
 
-Google Calendar and Gmail callbacks remain undeployed until their public OAuth callback boundary is explicitly approved. They also require preview-only `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `PEPPER_APP_URL`, and authorized Google redirect URIs.
+Google Calendar and Gmail use preview-only callbacks and remain disconnected until a Google OAuth web client supplies `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. The Google client must authorize these exact redirect URIs:
+
+- `https://mfgyeolvfthxacrqwwtc.supabase.co/functions/v1/pepper-calendar/callback`
+- `https://mfgyeolvfthxacrqwwtc.supabase.co/functions/v1/pepper-gmail-callback`
+
+`PEPPER_APP_URL` should point to the protected Pepper preview route. The functions fall back to the branch preview route so OAuth can return safely even before that optional override is set.
 
 ## Apple Health pathway
 
