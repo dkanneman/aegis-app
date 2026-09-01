@@ -28,6 +28,18 @@ const calendarPath = new URL(
   '../supabase/functions/pepper-calendar/index.ts',
   import.meta.url,
 )
+const horizonPath = new URL(
+  '../supabase/functions/pepper-horizon/index.ts',
+  import.meta.url,
+)
+const schoolMigrationPath = new URL(
+  '../supabase/migrations/20260901183232_normalize_school_schedules.sql',
+  import.meta.url,
+)
+const schoolSeedPath = new URL(
+  '../supabase/preview/20260901184500_preview_eriksen_school_schedules.sql',
+  import.meta.url,
+)
 
 test('family API targets its own Supabase environment instead of production', async () => {
   const api = await readFile(apiPath, 'utf8')
@@ -111,6 +123,31 @@ test('atmosphere interpolation is continuous and timezone based', () => {
     assert.match(after[key], /^#[0-9A-F]{6}$/)
   }
   assert.equal(minutesInTimeZone('America/Los_Angeles', new Date('2026-09-01T19:30:00Z')), 750)
+})
+
+test('One Brain resolves official school schedules in explicit precedence order', async () => {
+  const [migration, seed, horizon, api, client] = await Promise.all([
+    readFile(schoolMigrationPath, 'utf8'),
+    readFile(schoolSeedPath, 'utf8'),
+    readFile(horizonPath, 'utf8'),
+    readFile(apiPath, 'utf8'),
+    readFile(clientPath, 'utf8'),
+  ])
+  assert.match(migration, /private\.school_profiles/)
+  assert.match(migration, /private\.school_schedule_rules/)
+  assert.match(migration, /private\.school_schedule_exceptions/)
+  assert.match(migration, /exception_row\.exception_type = 'no_school' then 400/)
+  assert.match(migration, /exception_row\.id is not null then 300/)
+  assert.match(migration, /rule_row\.rule_kind = 'recurring_early_release' then 200/)
+  assert.match(seed, /date '2026-09-07', 'Labor Day'/)
+  assert.match(seed, /date '2026-09-04', 'minimum_day'/)
+  assert.match(seed, /date '2026-11-04', 'finals'/)
+  assert.match(horizon, /schedule\?\.schedule_kind === 'no_school'/)
+  assert.match(horizon, /routine\.kind === 'school_pickup' && schedule\?\.dismissal_at/)
+  assert.match(horizon, /resolution_level === 'dated_exception'/)
+  assert.match(api, /private\.resolve_school_schedule/)
+  assert.match(client, /Normal dismissal/)
+  assert.match(client, /School schedule change/)
 })
 
 test('private runtime tables receive defense-in-depth RLS', async () => {

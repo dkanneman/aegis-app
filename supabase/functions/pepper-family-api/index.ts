@@ -25,11 +25,13 @@ async function memberState(member:any,targetSlug:string){
   const targets=await sql<any[]>`select id,slug,display_name,role from public.household_members where household_id=${member.household_id}::uuid and slug=${targetSlug} limit 1`
   const target=targets[0]
   if(!target)throw Object.assign(new Error('Family member not found.'),{status:404})
-  const [events,tasks]=await Promise.all([
+  const [events,tasks,profiles,schoolChanges]=await Promise.all([
     sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.transport_status,e.source from public.events e where e.household_id=${member.household_id}::uuid and e.starts_at>=now()-interval '1 day' and e.starts_at<now()+interval '31 days' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid) order by e.starts_at limit 120`,
     sql<any[]>`select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,t.due_at,t.source,t.updated_at,t.created_at,t.area,t.project,t.priority,t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action from public.tasks t where t.household_id=${member.household_id}::uuid and t.owner_member_id=${target.id}::uuid and (t.visibility='household' or t.owner_member_id=${member.id}::uuid or t.creator_member_id=${member.id}::uuid) order by case t.status when 'open' then 0 when 'in_progress' then 1 when 'completed' then 2 else 3 end,t.due_at nulls last,t.updated_at desc limit 160`,
+    sql<any[]>`select p.id,p.academic_year,p.school_name,p.district_name,p.grade_label,p.timezone,p.family_arrival_target_local::text,p.first_bell_local::text,p.normal_dismissal_local::text,p.first_day::text,p.last_day::text,p.source_label,p.source_url,p.source_checked_on::text from private.school_profiles p where p.household_id=${member.household_id}::uuid and p.student_member_id=${target.id}::uuid order by p.last_day desc limit 1`,
+    sql<any[]>`select schedule_date::text,schedule_kind,schedule_title,day_starts_at,dismissal_at,precedence,resolution_level,source_label,source_url from private.resolve_school_schedule(${member.household_id}::uuid,(now() at time zone 'America/Los_Angeles')::date,((now() at time zone 'America/Los_Angeles')::date+interval '31 days')::date) where person_slug=${target.slug} and resolution_level='dated_exception' and transportation_impact=true order by schedule_date limit 6`,
   ])
-  return {member:target,events,tasks}
+  return {member:target,events,tasks,school:profiles[0]?{profile:profiles[0],upcoming_changes:schoolChanges}:null}
 }
 async function updateFamilyItem(member:any,body:any){
   const itemType=String(body.item_type||'')

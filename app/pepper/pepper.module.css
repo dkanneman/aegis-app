@@ -618,6 +618,14 @@
   border-top: 1px solid var(--line);
 }
 
+.horizonRowAlert {
+  margin: 0 -18px;
+  padding-right: 18px;
+  padding-left: 18px;
+  border-top-color: rgba(130, 79, 89, 0.16);
+  background: rgba(201, 137, 125, 0.1);
+}
+
 .horizonTime {
   color: var(--pepper-soft-ink);
   font-size: 13px;
@@ -631,6 +639,13 @@
   margin-top: 5px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.horizonDetail {
+  margin: 4px 0 0;
+  color: var(--pepper-soft-ink);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .emptyDay {
@@ -1258,6 +1273,77 @@
   color: var(--muted);
 }
 
+.schoolProfile {
+  margin: -8px 0 34px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.86);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--shadow);
+}
+
+.schoolProfileHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.schoolProfileHeader .sectionLabel {
+  margin-bottom: 5px;
+}
+
+.schoolProfileHeader strong {
+  display: block;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  font-weight: 400;
+}
+
+.schoolProfileHeader p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.schoolTimes {
+  display: grid;
+  gap: 4px;
+  color: var(--pepper-soft-ink);
+  font-size: 12px;
+  text-align: right;
+}
+
+.schoolChangeList {
+  display: grid;
+  margin-top: 15px;
+  border-top: 1px solid var(--line);
+}
+
+.schoolChangeList > div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.schoolChangeList > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.schoolChangeList span,
+.schoolChangeList small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.schoolChangeList strong {
+  font-size: 13px;
+}
+
 .memberSectionBody {
   overflow: hidden;
   padding: 0 18px;
@@ -1510,6 +1596,22 @@
 
   .aheadCard {
     grid-template-columns: 78px 1fr;
+  }
+
+  .schoolProfileHeader {
+    display: grid;
+  }
+
+  .schoolTimes {
+    text-align: left;
+  }
+
+  .schoolChangeList > div {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .schoolChangeList small {
+    grid-column: 2;
   }
 
   .familyRail {

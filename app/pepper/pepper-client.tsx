@@ -78,6 +78,21 @@ type MemberState = {
   member: Required<Member>;
   events: FamilyEvent[];
   tasks: FamilyTask[];
+  school?: {
+    profile: {
+      school_name: string;
+      district_name: string;
+      grade_label?: string | null;
+      family_arrival_target_local?: string | null;
+      normal_dismissal_local: string;
+    };
+    upcoming_changes: Array<{
+      schedule_date: string;
+      schedule_kind: string;
+      schedule_title: string;
+      dismissal_at?: string | null;
+    }>;
+  } | null;
 };
 
 type SelectedItem =
@@ -134,6 +149,10 @@ type HorizonRowItem = {
   source?: string | null;
   location?: string | null;
   transport_owner_name?: string | null;
+  all_day?: boolean;
+  detail?: string | null;
+  schedule_kind?: string | null;
+  resolution_level?: string | null;
 };
 
 type HorizonWatch = {
@@ -312,6 +331,16 @@ function time(ts?: string | null) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(ts));
+}
+
+function localTimeLabel(value?: string | null) {
+  if (!value) return "";
+  const [hour, minute] = value.split(":").map(Number);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(Date.UTC(2000, 0, 1, hour, minute)));
 }
 
 function dateLabel(date?: string | null) {
@@ -2172,6 +2201,47 @@ function MemberPage({
         </div>
       </section>
 
+      {state.school ? (
+        <section className={styles.schoolProfile} aria-label="School schedule">
+          <div className={styles.schoolProfileHeader}>
+            <div>
+              <div className={styles.sectionLabel}>School</div>
+              <strong>{state.school.profile.school_name}</strong>
+              <p>
+                {[state.school.profile.grade_label, state.school.profile.district_name]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </div>
+            <div className={styles.schoolTimes}>
+              {state.school.profile.family_arrival_target_local ? (
+                <span>
+                  Arrive {localTimeLabel(state.school.profile.family_arrival_target_local)}
+                </span>
+              ) : null}
+              <span>
+                Normal dismissal {localTimeLabel(state.school.profile.normal_dismissal_local)}
+              </span>
+            </div>
+          </div>
+          {state.school.upcoming_changes.length ? (
+            <div className={styles.schoolChangeList}>
+              {state.school.upcoming_changes.slice(0, 3).map((change) => (
+                <div key={`${change.schedule_date}-${change.schedule_kind}`}>
+                  <span>{dateLabel(change.schedule_date)}</span>
+                  <strong>{change.schedule_title}</strong>
+                  <small>
+                    {change.schedule_kind === "no_school"
+                      ? "No school"
+                      : `Dismissal ${time(change.dismissal_at)}`}
+                  </small>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <MemberSection title="Schedule" empty="No upcoming schedule items.">
         {activeEvents.map((event) => (
           <EventRow
@@ -2394,16 +2464,31 @@ function HorizonRow({ item }: { item: HorizonRowItem }) {
       ? "Task"
       : item.item_type === "watch"
         ? "Coming up"
+        : item.item_type === "school_schedule"
+          ? item.schedule_kind === "no_school"
+            ? "No school"
+            : item.resolution_level === "dated_exception"
+              ? "School schedule change"
+              : "Weekly school rule"
         : item.source === "routine"
           ? "Routine"
           : "Plan";
   return (
-    <div className={styles.horizonRow}>
+    <div
+      className={`${styles.horizonRow} ${
+        item.resolution_level === "dated_exception" ? styles.horizonRowAlert : ""
+      }`}
+    >
       <div className={styles.horizonTime}>
-        {item.item_type === "watch" ? "—" : time(item.starts_at)}
+        {item.item_type === "watch"
+          ? "—"
+          : item.all_day
+            ? "All day"
+            : time(item.starts_at)}
       </div>
       <div>
         <strong>{item.title}</strong>
+        {item.detail ? <p className={styles.horizonDetail}>{item.detail}</p> : null}
         <div className={styles.horizonMeta}>
           <span>{label}</span>
           {item.location ? <span>{item.location}</span> : null}
