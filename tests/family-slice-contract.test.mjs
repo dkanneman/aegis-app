@@ -8,6 +8,8 @@ import {
 
 const apiPath = new URL('../supabase/functions/pepper-family-api/index.ts', import.meta.url)
 const clientPath = new URL('../app/pepper/pepper-client.tsx', import.meta.url)
+const pepperStylesPath = new URL('../app/pepper/pepper.module.css', import.meta.url)
+const botanicalPath = new URL('../public/pepper-eucalyptus.png', import.meta.url)
 const migrationPath = new URL(
   '../supabase/migrations/20260901090000_harden_private_runtime_rls.sql',
   import.meta.url,
@@ -74,7 +76,7 @@ test('canonical mutations enforce roles and preserve actor context', async () =>
 test('Pepper UI includes the complete Home-to-member action path', async () => {
   const client = await readFile(clientPath, 'utf8')
   assert.match(client, /NEXT_PUBLIC_PEPPER_API_URL/)
-  assert.match(client, /"family" \| "member" \| "connections"/)
+  assert.match(client, /type View =[\s\S]*?"family"[\s\S]*?"member"[\s\S]*?"connections"/)
   assert.match(client, /action: "member_state"/)
   assert.match(client, /action: "item_update"/)
   assert.match(client, /Complete/)
@@ -82,6 +84,58 @@ test('Pepper UI includes the complete Home-to-member action path', async () => {
   assert.match(client, /Restore/)
   assert.match(client, /member\.slug === "elle" \? "Danielle"/)
   assert.doesNotMatch(client, /\/api\/aegis\/state/)
+})
+
+test('chores use canonical household tasks with delegation and lifecycle controls', async () => {
+  const [api, client, styles] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(clientPath, 'utf8'),
+    readFile(pepperStylesPath, 'utf8'),
+  ])
+
+  assert.match(api, /action==='chore_create'/)
+  assert.match(api, /classification[^\n]*'Chore'/)
+  assert.match(api, /array\['home','chores'\]/)
+  assert.match(api, /insert into public\.audit_log/)
+  assert.match(client, /type View =[\s\S]*?"chores"/)
+  assert.match(client, /action: "chore_create"/)
+  assert.match(client, /Family chores/)
+  assert.match(client, /Today[\s\S]*Week[\s\S]*All/)
+  assert.match(client, /Add a chore/)
+  assert.match(client, /function isChore[\s\S]*classification/)
+  assert.doesNotMatch(client, /Boolean\(task\.recurrence && task\.recurrence !== "none"\)/)
+  assert.match(styles, /\.choreList/)
+  assert.match(styles, /\.choreOwner/)
+})
+
+test('attention cards resolve canonical rides and conflicts instead of remaining static prose', async () => {
+  const [api, consequences, horizon, calendar, client, styles] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(new URL('../supabase/functions/pepper-consequences/index.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/functions/pepper-horizon/index.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/functions/pepper-calendar/index.ts', import.meta.url), 'utf8'),
+    readFile(clientPath, 'utf8'),
+    readFile(pepperStylesPath, 'utf8'),
+  ])
+
+  assert.match(consequences, /event_id: c\.event_id/)
+  assert.match(consequences, /related_event_id: c\.related_event_id/)
+  assert.match(consequences, /primary_event:/)
+  assert.match(horizon, /primary_event:/)
+  assert.match(horizon, /related_event:/)
+  assert.match(api, /action==='conflict_resolve'/)
+  assert.match(api, /recompute_household_consequences/)
+  assert.match(api, /canonical_status_override='canceled'/)
+  assert.match(calendar, /coalesce\(canonical_status_override, \$\{status\}\)/)
+  assert.match(client, /function AttentionCard/)
+  assert.match(client, /function ConflictResolutionSheet/)
+  assert.match(client, /action: "conflict_resolve"/)
+  assert.match(client, /Cancel event and open email draft/)
+  assert.match(client, /mailto:/)
+  assert.match(styles, /\.noticeButton/)
+  assert.match(styles, /\.conflictChoice/)
+  assert.match(calendar, /organizer\?:/)
+  assert.match(calendar, /external_organizer_email/)
 })
 
 test('connections remain evidence inputs with explicit security boundaries', async () => {
@@ -111,6 +165,24 @@ test('connections remain evidence inputs with explicit security boundaries', asy
   assert.doesNotMatch(health, /authorization\.startsWith\('Bearer '/)
   assert.match(calendar, /Deno\.env\.get\('PEPPER_APP_URL'\)/)
   assert.doesNotMatch(calendar, /olgyfgqlqrhfaujkfjtj/)
+})
+
+test('the approved Pepper visual language wraps the real connection pathways', async () => {
+  const [client, styles, botanical] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(pepperStylesPath, 'utf8'),
+    readFile(botanicalPath),
+  ])
+  assert.match(client, /Connection center/)
+  assert.match(client, /Email and calendars/)
+  assert.match(client, /Schools and activities/)
+  assert.match(client, /Health and personal/)
+  assert.match(client, /Built into One Brain/)
+  assert.match(client, /ConnectionDetailDrawer/)
+  assert.match(styles, /var\(--atmosphere-top\).*var\(--atmosphere-middle\).*var\(--atmosphere-bottom\)/s)
+  assert.match(styles, /background: url\("\/pepper-eucalyptus\.png"\)/)
+  assert.match(styles, /@media \(max-width: 560px\)[\s\S]*\.tabs \{[\s\S]*position: fixed/)
+  assert.ok(botanical.byteLength > 10_000)
 })
 
 test('the isolated API accepts only the scoped Vercel preview host family', async () => {

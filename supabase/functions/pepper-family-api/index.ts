@@ -34,6 +34,79 @@ async function memberState(member:any,targetSlug:string){
   ])
   return {member:target,events,tasks,school:profiles[0]?{profile:profiles[0],upcoming_changes:schoolChanges}:null}
 }
+async function choreState(member:any){
+  return sql<any[]>`
+    select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,
+      t.due_at,t.source,t.updated_at,t.created_at,t.area,t.project,t.priority,
+      t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action
+    from public.tasks t
+    where t.household_id=${member.household_id}::uuid
+      and t.visibility='household'
+      and (
+        lower(coalesce(t.classification,''))='chore'
+        or lower(coalesce(t.area,''))='chores'
+        or lower(coalesce(t.project,''))='family chores'
+        or exists (
+          select 1
+          from unnest(coalesce(t.tags,'{}'::text[])) tag
+          where lower(tag) in ('chore','chores')
+        )
+      )
+    order by
+      case t.status when 'open' then 0 when 'in_progress' then 1 when 'completed' then 2 else 3 end,
+      t.due_at nulls last,
+      t.updated_at desc
+    limit 240
+  `
+}
+async function createChore(member:any,body:any){
+  const title=String(body.title||'').trim().slice(0,240)
+  const requestedOwner=body.owner_member_id==null?'':String(body.owner_member_id)
+  const ownerId=adult(member)?requestedOwner:member.id
+  const dueDate=String(body.due_date||'').trim()
+  const recurrence=String(body.recurrence||'none').trim().toLowerCase()
+  if(!title)throw Object.assign(new Error('A chore needs a name.'),{status:400})
+  if(ownerId&&!UUID.test(ownerId))throw Object.assign(new Error('Choose someone in this household.'),{status:400})
+  if(dueDate&&!/^\d{4}-\d{2}-\d{2}$/.test(dueDate))throw Object.assign(new Error('Choose a valid due date.'),{status:400})
+  if(!['none','daily','weekly','monthly'].includes(recurrence))throw Object.assign(new Error('Choose a valid repeat schedule.'),{status:400})
+  return sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    if(ownerId){
+      const owners=await tx<any[]>`select id from public.household_members where id=${ownerId}::uuid and household_id=${member.household_id}::uuid limit 1`
+      if(!owners[0])throw Object.assign(new Error('Choose someone in this household.'),{status:400})
+    }
+    const rows=await tx<any[]>`insert into public.tasks(household_id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,area,project,classification,tags,recurrence,next_action) values(${member.household_id}::uuid,${title},${ownerId||null}::uuid,${member.id}::uuid,'household','open',(nullif(${dueDate},'')::date+time '17:00') at time zone 'America/Los_Angeles','pepper','Home','Family chores','Chore',array['home','chores']::text[],${recurrence},${title}) returning id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,updated_at,created_at,area,project,classification,tags,recurrence,completed_at,next_action`
+    const chore=rows[0]
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'task_created','task',${chore.id}::uuid,${`${title} added to family chores.`})`
+    return {ok:true,chore}
+  })
+}
+async function resolveConflict(member:any,body:any){
+  if(!adult(member))throw Object.assign(new Error('Only an adult can resolve a family schedule conflict.'),{status:403})
+  const consequenceId=String(body.consequence_id||'')
+  const keepEventId=String(body.keep_event_id||'')
+  const rejectEventId=String(body.reject_event_id||'')
+  if(!UUID.test(consequenceId)||!UUID.test(keepEventId)||!UUID.test(rejectEventId)||keepEventId===rejectEventId)throw Object.assign(new Error('Choose which event the family is keeping.'),{status:400})
+  const result=await sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    const findings=await tx<any[]>`select id,consequence_type,event_id,related_event_id,status from public.consequences where id=${consequenceId}::uuid and household_id=${member.household_id}::uuid for update`
+    const finding=findings[0]
+    if(!finding||!['person_conflict','driver_conflict'].includes(finding.consequence_type))throw Object.assign(new Error('That conflict is no longer available.'),{status:404})
+    const expected=new Set([finding.event_id,finding.related_event_id].filter(Boolean))
+    if(expected.size!==2||!expected.has(keepEventId)||!expected.has(rejectEventId))throw Object.assign(new Error('Those events do not match this conflict.'),{status:409})
+    const events=await tx<any[]>`select id,title,visibility,owner_member_id,starts_at,external_organizer_email,external_organizer_name from public.events where household_id=${member.household_id}::uuid and id in (${keepEventId}::uuid,${rejectEventId}::uuid) for update`
+    const kept=events.find((item:any)=>item.id===keepEventId)
+    const rejected=events.find((item:any)=>item.id===rejectEventId)
+    if(!kept||!rejected)throw Object.assign(new Error('One of those events is no longer available.'),{status:404})
+    if(rejected.visibility==='private'&&rejected.owner_member_id!==member.id)throw Object.assign(new Error('That private event can only be changed by its owner.'),{status:403})
+    await tx`update public.events set status='canceled',canonical_status_override='canceled',updated_at=now() where id=${rejectEventId}::uuid and household_id=${member.household_id}::uuid`
+    await tx`update public.consequences set status='resolved',resolved_at=now(),last_seen_at=now() where id=${consequenceId}::uuid and household_id=${member.household_id}::uuid`
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'conflict_resolved','consequence',${consequenceId}::uuid,${`${kept.title} kept; ${rejected.title} canceled.`})`
+    await tx`select public.recompute_household_consequences(${member.household_id}::uuid)`
+    return {kept,rejected}
+  })
+  return {ok:true,...result}
+}
 async function updateFamilyItem(member:any,body:any){
   const itemType=String(body.item_type||'')
   const itemId=String(body.id||'')
@@ -63,7 +136,7 @@ async function updateFamilyItem(member:any,body:any){
       }else{
         if(!adult(member)&&item.owner_member_id!==member.id&&item.creator_member_id!==member.id)throw Object.assign(new Error('You cannot change that task.'),{status:403})
         const status=operation==='complete'?'completed':operation==='cancel'?'canceled':'open'
-        await tx`update public.tasks set status=${status},updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+        await tx`update public.tasks set status=${status},completed_at=case when ${operation}='complete' then now() else null end,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       }
       const summary=operation==='assign'?`${item.title} was assigned.`:`${item.title} was ${operation==='reopen'?'reopened':operation+'ed'}.`
       await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${`task_${operation}`},'task',${itemId}::uuid,${summary})`
@@ -84,15 +157,17 @@ async function updateFamilyItem(member:any,body:any){
       }
     }else{
       const status=operation==='complete'?'completed':operation==='cancel'?'canceled':'confirmed'
-      if(operation==='complete')await tx`update public.events set status=${status},transport_status=case when transport_owner_member_id is null then transport_status else 'completed' end,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-      else await tx`update public.events set status=${status},updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      if(operation==='complete')await tx`update public.events set status=${status},canonical_status_override='completed',transport_status=case when transport_owner_member_id is null then transport_status else 'completed' end,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      else if(operation==='cancel')await tx`update public.events set status=${status},canonical_status_override='canceled',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      else await tx`update public.events set status=${status},canonical_status_override=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
     }
     const summary=operation==='assign'?`${item.title} driver changed.`:`${item.title} was ${operation==='reopen'?'restored':operation+'ed'}.`
     await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${`event_${operation}`},'event',${itemId}::uuid,${summary})`
+    await tx`select public.recompute_household_consequences(${member.household_id}::uuid)`
     return {ok:true,item_type:itemType,id:itemId,operation}
   })
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.2',backend:'supabase',frontend:'vercel'});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.3',backend:'supabase',frontend:'vercel'});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 const token=req.headers.get('x-pepper-session')||'';const member=await validSession(token);if(!member)return json(req,{error:'Unlock Pepper again to continue.',code:'session_required'},401);await sql`update public.member_sessions set last_seen_at=now() where token=${token}::uuid`;
 if(action==='logout'){await sql`update public.member_sessions set revoked_at=now() where token=${token}::uuid`;return json(req,{ok:true})}
@@ -100,9 +175,9 @@ const headers:any={'content-type':'application/json','x-pepper-session':token,ap
 if(action==='state'){
   const core=await proxy(TARGET,headers,{action:'state'});if(!core.ok)return json(req,core.data,core.status)
   const prep=await proxy(PREPARATION,headers,{action:'list'})
-  const [cr,ir,hr,calendarResult,rr,xr]=await Promise.all([proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'})])
+  const [cr,ir,hr,calendarResult,rr,xr,chores]=await Promise.all([proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'}),choreState(member)])
   const csr=calendarResult.ok?calendarResult.data:{...await calendarState(member),configured:false,last_error:calendarResult.data?.error||'Calendar service is unavailable.'}
-  const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;
+  const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;
   if(state.horizon&&prep.ok&&Array.isArray(prep.data?.now)){
     const existing=Array.isArray(state.horizon.readiness)?state.horizon.readiness:[]
     const fingerprints=new Set(existing.map((x:any)=>`${x.type}|${x.title}|${x.summary}`))
@@ -110,10 +185,12 @@ if(action==='state'){
     state.horizon.readiness=[...additions,...existing]
     if(state.horizon.coverage)state.horizon.coverage.preparation_now=additions.length
   }
-  state.apiVersion='1.2';return json(req,{state})
+  state.apiVersion='1.3';return json(req,{state})
 }
 if(action==='member_state'){return json(req,{state:await memberState(member,String(b.member_slug||''))})}
 if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}
+if(action==='chore_create'){return json(req,await createChore(member,b))}
+if(action==='conflict_resolve'){return json(req,await resolveConflict(member,b))}
 if(action==='tell'){const r=await proxy(TELL,headers,{action:'tell',text:b.text,source:b.source,idempotency_key:b.idempotency_key});return json(req,r.data,r.status)}
 if(action==='capture_reviews'){const r=await proxy(TELL,headers,{action:'review_list',limit:b.limit});return json(req,r.data,r.status)}
 if(action==='capture_review_resolve'){const r=await proxy(TELL,headers,{action:'review_resolve',capture_id:b.capture_id,idempotency_key:b.idempotency_key,resolution:b.resolution});return json(req,r.data,r.status)}

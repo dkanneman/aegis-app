@@ -86,7 +86,7 @@ Deno.serve(async (req: Request) => {
   const eventIds = [...new Set((findings || []).flatMap((x: any) => [x.event_id, x.related_event_id]).filter(Boolean))]
   const [{ data: events }, { data: adults }] = await Promise.all([
     eventIds.length
-      ? db.from('events').select('id,title,visibility,owner_member_id,person_slug,starts_at,ends_at,kind,location').in('id', eventIds)
+      ? db.from('events').select('id,title,visibility,owner_member_id,person_slug,starts_at,ends_at,kind,location,status,transport_owner_member_id,transport_status,source,external_url,external_organizer_email,external_organizer_name').in('id', eventIds)
       : Promise.resolve({ data: [] as any[] }),
     db.from('household_members').select('id,slug,display_name,role').eq('household_id', m.household_id).in('role', ['adult_admin','adult']),
   ])
@@ -121,8 +121,9 @@ Deno.serve(async (req: Request) => {
 
     let summary = c.summary
     const when = whenLabel(startsAt)
+    const availableDrivers = primary ? unbookedAdults(primary) : []
     if (c.consequence_type === 'missing_transport' && primary) {
-      const available = unbookedAdults(primary).map((a: any) => a.display_name)
+      const available = availableDrivers.map((a: any) => a.display_name)
       summary = `${primary.title}${when ? ` · ${when}` : ''} needs a driver.`
       if (available.length) summary += ` ${names(available)} ${available.length === 1 ? 'looks' : 'look'} unbooked in Pepper at that time.`
     } else if (c.consequence_type === 'missing_required_adult' && primary) {
@@ -144,9 +145,19 @@ Deno.serve(async (req: Request) => {
       severity: c.severity,
       title: c.title,
       summary,
+      event_id: c.event_id,
+      related_event_id: c.related_event_id,
+      affected_member_id: c.affected_member_id,
       starts_at: startsAt,
       detected_at: c.detected_at,
       last_seen_at: c.last_seen_at,
+      primary_event: canSee(primary) ? primary : null,
+      related_event: canSee(related) ? related : null,
+      available_drivers: availableDrivers.map((adult: any) => ({
+        id: adult.id,
+        slug: adult.slug,
+        display_name: adult.display_name,
+      })),
     }]
   }).sort((a: any, b: any) => {
     const severity = severityRank(a.severity) - severityRank(b.severity)

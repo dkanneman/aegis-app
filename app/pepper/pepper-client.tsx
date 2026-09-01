@@ -4,16 +4,27 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
+  Cable,
   CalendarDays,
+  CalendarRange,
   Check,
-  ChevronDown,
   ChevronRight,
   CircleX,
+  ClipboardCheck,
   Copy,
   HeartPulse,
+  House,
+  Info,
+  LockKeyhole,
   Mail,
   Mic,
+  Plus,
+  RefreshCw,
   RotateCcw,
+  School,
+  ShieldCheck,
+  Telescope,
+  UsersRound,
   X,
 } from "lucide-react";
 import { minutesInTimeZone, pepperAtmosphereAt } from "./pepper-atmosphere";
@@ -53,9 +64,13 @@ type FamilyTask = {
   source?: string | null;
   area?: string | null;
   project?: string | null;
+  classification?: string | null;
   tags?: string[] | null;
   recurrence?: string | null;
   next_action?: string | null;
+  completed_at?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
 };
 
 type FamilyEvent = {
@@ -72,6 +87,9 @@ type FamilyEvent = {
   transport_owner_member_id?: string | null;
   transport_status?: string | null;
   source?: string | null;
+  external_url?: string | null;
+  external_organizer_email?: string | null;
+  external_organizer_name?: string | null;
 };
 
 type MemberState = {
@@ -129,9 +147,18 @@ type GroceryItem = {
 
 type Consequence = {
   id: string;
+  type?: string | null;
   title: string;
   summary: string;
   status?: string | null;
+  severity?: string | null;
+  event_id?: string | null;
+  related_event_id?: string | null;
+  affected_member_id?: string | null;
+  starts_at?: string | null;
+  primary_event?: FamilyEvent | null;
+  related_event?: FamilyEvent | null;
+  available_drivers?: Member[];
 };
 
 type ReadinessItem = {
@@ -139,7 +166,15 @@ type ReadinessItem = {
   title: string;
   summary: string;
   severity?: string | null;
+  consequence_id?: string | null;
+  consequence_type?: string | null;
+  event_id?: string | null;
+  related_event_id?: string | null;
+  primary_event?: FamilyEvent | null;
+  related_event?: FamilyEvent | null;
 };
+
+type AttentionItem = Consequence | ReadinessItem;
 
 type HorizonRowItem = {
   id: string;
@@ -265,6 +300,7 @@ type PepperState = {
   events: FamilyEvent[];
   familyTasks: FamilyTask[];
   privateTasks: FamilyTask[];
+  chores?: FamilyTask[];
   groceries: GroceryItem[];
   captures: Capture[];
   metrics?: Record<string, unknown>;
@@ -301,7 +337,21 @@ type PepperState = {
   };
 };
 
-type View = "today" | "week" | "ahead" | "family" | "member" | "connections";
+type View =
+  | "today"
+  | "week"
+  | "ahead"
+  | "chores"
+  | "family"
+  | "member"
+  | "connections";
+
+type ChoreDraft = {
+  title: string;
+  ownerMemberId: string;
+  dueDate: string;
+  recurrence: "none" | "daily" | "weekly" | "monthly";
+};
 
 type HealthSetup = {
   pairing_token: string;
@@ -322,6 +372,25 @@ function localDate() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+}
+
+function localDateFor(value?: string | null) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(parsed);
+}
+
+function addDateDays(date: string, amount: number) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + amount))
+    .toISOString()
+    .slice(0, 10);
 }
 
 function time(ts?: string | null) {
@@ -499,6 +568,8 @@ export function PepperClient() {
   const [memberState, setMemberState] = useState<MemberState | null>(null);
   const [memberBusy, setMemberBusy] = useState(false);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
+  const [conflictResolution, setConflictResolution] =
+    useState<AttentionItem | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [atmosphere, setAtmosphere] = useState(() =>
     pepperAtmosphereAt(minutesInTimeZone(TZ)),
@@ -608,6 +679,88 @@ export function PepperClient() {
       setMessage(
         error instanceof Error ? error.message : "Pepper could not update that.",
       );
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  function openAttention(item: AttentionItem) {
+    const type =
+      ("consequence_type" in item ? item.consequence_type : null) ||
+      item.type ||
+      "";
+    if (
+      ["person_conflict", "driver_conflict"].includes(type) &&
+      item.primary_event &&
+      item.related_event
+    ) {
+      setSelectedItem(null);
+      setConflictResolution(item);
+      return;
+    }
+    if (item.primary_event) {
+      setConflictResolution(null);
+      setSelectedItem({ type: "event", item: item.primary_event });
+      return;
+    }
+    setMessage(
+      "Pepper knows this needs attention, but the linked schedule item is not available to this profile.",
+    );
+  }
+
+  async function resolveConflict(
+    item: AttentionItem,
+    keepEventId: string,
+    rejectEventId: string,
+  ) {
+    const consequenceId = "id" in item ? item.id : item.consequence_id;
+    if (!consequenceId) {
+      setMessage("Pepper could not identify that conflict.");
+      return false;
+    }
+    setActionBusy(true);
+    try {
+      await call({
+        action: "conflict_resolve",
+        consequence_id: consequenceId,
+        keep_event_id: keepEventId,
+        reject_event_id: rejectEventId,
+      });
+      setMessage("Conflict resolved. Pepper updated the family plan.");
+      setConflictResolution(null);
+      await load();
+      if (memberState?.member.slug) await loadMember(memberState.member.slug);
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not resolve that conflict.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function createChore(draft: ChoreDraft) {
+    setActionBusy(true);
+    try {
+      await call({
+        action: "chore_create",
+        title: draft.title,
+        owner_member_id: draft.ownerMemberId || null,
+        due_date: draft.dueDate || null,
+        recurrence: draft.recurrence,
+      });
+      setMessage("Chore added. Pepper updated everyone’s plan.");
+      await load();
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Pepper could not add that chore.",
+      );
+      return false;
     } finally {
       setActionBusy(false);
     }
@@ -1057,17 +1210,23 @@ export function PepperClient() {
           </div>
         </header>
 
-        <nav className={styles.tabs} aria-label="Pepper planning views">
-          {[
-            ["today", "Today"],
-            ["week", "Next 7"],
-            ["ahead", "Ahead"],
-            ["family", "Family"],
-            ["connections", "Connect"],
-          ].map(([key, label]) => (
+        <nav className={styles.tabs} aria-label="Pepper primary navigation">
+          {([
+            ["today", "Today", House],
+            ["week", "Next 7", CalendarRange],
+            ["chores", "Chores", ClipboardCheck],
+            ["ahead", "Ahead", Telescope],
+            ["family", "Family", UsersRound],
+            ["connections", "Connect", Cable],
+          ] as const).map(([key, label, Icon]) => (
             <button
               key={key}
               type="button"
+              aria-current={
+                view === key || (view === "member" && key === "family")
+                  ? "page"
+                  : undefined
+              }
               className={
                 view === key || (view === "member" && key === "family")
                   ? styles.tabActive
@@ -1075,7 +1234,8 @@ export function PepperClient() {
               }
               onClick={() => setView(key as View)}
             >
-              {label}
+              <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
+              <span>{label}</span>
             </button>
           ))}
         </nav>
@@ -1111,10 +1271,11 @@ export function PepperClient() {
                 <div className={styles.sectionLabel}>Needs attention</div>
                 <div className={styles.noticeStack}>
                   {openConsequences.slice(0, 4).map((item) => (
-                    <article className={styles.notice} key={item.id}>
-                      <strong>{item.title}</strong>
-                      <p>{item.summary}</p>
-                    </article>
+                    <AttentionCard
+                      item={item}
+                      key={item.id}
+                      onOpen={() => openAttention(item)}
+                    />
                   ))}
                 </div>
               </section>
@@ -1541,19 +1702,23 @@ export function PepperClient() {
               <section className={styles.section}>
                 <div className={styles.sectionLabel}>Prepare / decide</div>
                 <div className={styles.noticeStack}>
-                  {[...coordination, ...prepare].slice(0, 8).map((item, index) => (
-                    <article
-                      className={
-                        item.severity === "prepare"
-                          ? styles.prepareCard
-                          : styles.notice
-                      }
-                      key={`${item.type}-${item.title}-${index}`}
-                    >
-                      <strong>{item.title}</strong>
-                      <p>{item.summary}</p>
-                    </article>
-                  ))}
+                  {[...coordination, ...prepare].slice(0, 8).map((item, index) =>
+                    item.severity === "prepare" ? (
+                      <article
+                        className={styles.prepareCard}
+                        key={`${item.type}-${item.title}-${index}`}
+                      >
+                        <strong>{item.title}</strong>
+                        <p>{item.summary}</p>
+                      </article>
+                    ) : (
+                      <AttentionCard
+                        item={item}
+                        key={`${item.type}-${item.title}-${index}`}
+                        onOpen={() => openAttention(item)}
+                      />
+                    ),
+                  )}
                 </div>
               </section>
             ) : null}
@@ -1684,6 +1849,22 @@ export function PepperClient() {
           </>
         ) : null}
 
+        {view === "chores" ? (
+          <ChoresPage
+            chores={state.chores || []}
+            state={state}
+            busy={actionBusy}
+            onCreate={createChore}
+            onOpen={(task) => setSelectedItem({ type: "task", item: task })}
+            onToggle={(task) =>
+              void updateItem(
+                { type: "task", item: task },
+                task.status === "completed" ? "reopen" : "complete",
+              )
+            }
+          />
+        ) : null}
+
         {view === "family" ? (
           <FamilyDirectory
             members={state.members}
@@ -1714,6 +1895,7 @@ export function PepperClient() {
             }
             onEmail={() => void connectEmail()}
             onHealth={() => void pairHealth()}
+            onFamily={() => setView("family")}
           />
         ) : null}
       </div>
@@ -1726,6 +1908,18 @@ export function PepperClient() {
           onClose={() => setSelectedItem(null)}
           onUpdate={(operation, ownerMemberId) =>
             void updateItem(selectedItem, operation, ownerMemberId)
+          }
+        />
+      ) : null}
+
+      {conflictResolution ? (
+        <ConflictResolutionSheet
+          item={conflictResolution}
+          state={state}
+          busy={actionBusy}
+          onClose={() => setConflictResolution(null)}
+          onResolve={(keepEventId, rejectEventId) =>
+            resolveConflict(conflictResolution, keepEventId, rejectEventId)
           }
         />
       ) : null}
@@ -1766,6 +1960,40 @@ export function PepperClient() {
 
 function memberName(state: PepperState, id?: string | null) {
   return displayName(state.members?.find((member) => member.id === id));
+}
+
+function AttentionCard({
+  item,
+  onOpen,
+}: {
+  item: AttentionItem;
+  onOpen: () => void;
+}) {
+  const type =
+    ("consequence_type" in item ? item.consequence_type : null) ||
+    item.type ||
+    "";
+  const isConflict = ["person_conflict", "driver_conflict"].includes(type);
+  const canResolve = isConflict
+    ? Boolean(item.primary_event && item.related_event)
+    : Boolean(item.primary_event);
+  const action = isConflict ? "Choose a plan" : "Assign or cancel";
+
+  return (
+    <button
+      type="button"
+      className={`${styles.notice} ${styles.noticeButton}`}
+      disabled={!canResolve}
+      onClick={onOpen}
+    >
+      <span>
+        <strong>{item.title}</strong>
+        <p>{item.summary}</p>
+        {canResolve ? <small className={styles.noticeAction}>{action}</small> : null}
+      </span>
+      {canResolve ? <ChevronRight size={19} aria-hidden="true" /> : null}
+    </button>
+  );
 }
 
 function EventRow({
@@ -1843,6 +2071,7 @@ function ConnectionsPage({
   onCalendar,
   onEmail,
   onHealth,
+  onFamily,
 }: {
   calendar?: CalendarStatus;
   gmail?: NonNullable<PepperState["integrations"]>["gmail"];
@@ -1853,6 +2082,7 @@ function ConnectionsPage({
   onCalendar: () => void;
   onEmail: () => void;
   onHealth: () => void;
+  onFamily: () => void;
 }) {
   const [openProvider, setOpenProvider] = useState<string | null>(null);
   const calendarConnection = calendar?.connection;
@@ -1862,121 +2092,259 @@ function ConnectionsPage({
     ),
   );
   const familyCoverage = members.map(displayName).join(", ");
+  const schoolCoverage = members
+    .filter((candidate) => ["teen", "child"].includes(candidate.role))
+    .map(displayName)
+    .join(", ");
+  const providers: ConnectionProviderView[] = [
+    {
+      id: "calendar",
+      group: "Email and calendars",
+      icon: <CalendarDays size={21} />,
+      mark: "G",
+      title: "Google Calendar",
+      identifier:
+        calendarConnection?.calendar_name || "Primary Google Calendar",
+      summary: calendar?.connected
+        ? "Calendar evidence is flowing into schedules, transportation, and conflict checks."
+        : "Read-only schedule evidence for events, locations, and conflicts.",
+      state: calendar?.connected
+        ? "connected"
+        : calendar?.configured
+          ? "available"
+          : "setup",
+      statusLabel: calendar?.connected
+        ? "Connected"
+        : calendar?.configured
+          ? "Ready to connect"
+          : "Setup pending",
+      owner: calendarOwner || "Assigned when connected",
+      privacy: "Per event",
+      coverage: familyCoverage,
+      lastActivity: connectionActivity(calendarConnection?.last_synced_at),
+      reads: [
+        "Event title, time, location, attendance, and provider changes",
+        "Owner and transportation signals included with calendar evidence",
+      ],
+      automatic: [
+        "Compare calendar evidence with the canonical family plan",
+        "Raise schedule, ownership, and transportation conflicts",
+      ],
+      approval: [
+        "Creating or changing an external calendar event",
+        "Invitations, notifications, and new commitments",
+      ],
+      sharing:
+        "Calendar evidence keeps the household or private visibility of the family item it supports.",
+      feeds: ["Today", "Next 7", "Family schedules"],
+      action: calendar?.connected
+        ? "Refresh"
+        : calendar?.configured
+          ? "Connect"
+          : "Setup pending",
+      actionDisabled: !calendar?.configured,
+      actionIcon: calendar?.connected ? <RefreshCw size={15} /> : <Plus size={15} />,
+      onAction: onCalendar,
+    },
+    {
+      id: "gmail",
+      group: "Email and calendars",
+      icon: <Mail size={21} />,
+      mark: "M",
+      title: "Gmail",
+      identifier: gmail?.metadata?.email || "Private inbox",
+      summary: gmail?.connected
+        ? "The account is linked for permission-safe, action-needed signals."
+        : "Private intake for commitments, deadlines, and decisions.",
+      state: gmail?.connected
+        ? "connected"
+        : gmail?.configured
+          ? "available"
+          : "setup",
+      statusLabel: gmail?.connected
+        ? "Connected"
+        : gmail?.configured
+          ? "Ready to connect"
+          : "Setup pending",
+      owner: displayName(member),
+      privacy: "Private source",
+      coverage: displayName(member),
+      lastActivity: gmail?.connected ? "Account linked" : "No verified activity yet",
+      reads: [
+        "Google account identity for the connected member",
+        "Message ingestion remains off in this preview",
+      ],
+      automatic: [
+        "Nothing is marked handled without a canonical One Brain change",
+      ],
+      approval: [
+        "Sending email or sharing private content",
+        "Creating any new external commitment",
+      ],
+      sharing:
+        "Private by default. Only permission-safe family actions may leave the member's private context.",
+      feeds: ["Private intake", "Future action-needed signals"],
+      action: gmail?.connected
+        ? undefined
+        : gmail?.configured
+          ? "Connect"
+          : "Setup pending",
+      actionDisabled: !gmail?.configured,
+      actionIcon: <Plus size={15} />,
+      onAction: onEmail,
+    },
+    {
+      id: "school",
+      group: "Schools and activities",
+      icon: <School size={21} />,
+      mark: "S",
+      title: "School schedules",
+      identifier: "La Mariposa · Las Colinas · Rancho Campana",
+      summary:
+        "Official 2026–27 rules and dated exceptions live directly in One Brain.",
+      state: "builtin",
+      statusLabel: "Built into One Brain",
+      owner: "Pepper",
+      privacy: "Family",
+      coverage: schoolCoverage || "Chloe, Lyra, Posey",
+      lastActivity: "2026–27 rules loaded",
+      reads: [
+        "Official school-day, minimum-day, early-release, finals, and no-school rules",
+        "Family arrival targets, pickup ownership, and activity handoffs",
+      ],
+      automatic: [
+        "Replace normal pickup times when an exception applies",
+        "Check missing drivers and impossible transportation handoffs",
+      ],
+      approval: [
+        "Changing a driver or canceling an active plan",
+        "Any new external school commitment",
+      ],
+      sharing:
+        "School logistics are shared only with members of this Pepper household.",
+      feeds: ["Today", "Next 7", "Family pages"],
+      action: "Open family",
+      actionIcon: <UsersRound size={15} />,
+      onAction: onFamily,
+    },
+    {
+      id: "health",
+      group: "Health and personal",
+      icon: <HeartPulse size={21} />,
+      mark: "H",
+      title: "Apple Health",
+      identifier: health?.connected
+        ? `Last received ${health.latest?.metric_date || "recently"}`
+        : health?.status === "pending"
+          ? "HealthKit Shortcut waiting"
+          : "This iPhone",
+      summary: health?.connected
+        ? "Approved daily steps, goals, and active minutes are reaching Pepper."
+        : "A private iPhone pathway for steps, goals, and active minutes.",
+      state: health?.connected
+        ? "connected"
+        : health?.status === "pending"
+          ? "available"
+          : "setup",
+      statusLabel: health?.connected
+        ? "Connected"
+        : health?.status === "pending"
+          ? "Pairing ready"
+          : "Not connected",
+      owner: displayName(member),
+      privacy: "Private",
+      coverage: displayName(member),
+      lastActivity: health?.latest?.metric_date
+        ? dateLabel(health.latest.metric_date)
+        : "No verified activity yet",
+      reads: [
+        "Only daily steps, step goal, and active minutes approved in the iPhone Shortcut",
+      ],
+      automatic: [
+        "Update this member's private Home health summary when the paired device reports",
+      ],
+      approval: [
+        "Every HealthKit category is selected on the iPhone",
+        "Pepper never writes data back to HealthKit",
+      ],
+      sharing:
+        "Private to this member. Health details do not appear on other family pages.",
+      feeds: ["Private Home health"],
+      action: health?.connected ? "Reconnect" : "Connect on iPhone",
+      actionIcon: <Plus size={15} />,
+      onAction: onHealth,
+    },
+  ];
+  const groups = ["Email and calendars", "Schools and activities", "Health and personal"];
+  const activeCount = providers.filter((provider) =>
+    ["connected", "builtin"].includes(provider.state),
+  ).length;
+  const selectedProvider =
+    providers.find((provider) => provider.id === openProvider) || null;
+
+  function runProviderAction(provider: ConnectionProviderView) {
+    if (provider.actionDisabled || !provider.onAction) return;
+    setOpenProvider(null);
+    provider.onAction();
+  }
 
   return (
     <>
-      <section className={styles.hero}>
+      <section className={`${styles.hero} ${styles.connectionHero}`}>
         <div className={styles.eyebrow}>Connections</div>
-        <h1>Bring the right signals into Pepper.</h1>
-        <p>
-          Connected services supply evidence. Pepper remains the source of truth
-          for the family plan.
-        </p>
+        <h1>Your connected world.</h1>
+        <p>{activeCount} active pathways · Pepper remains the source of truth for the family plan.</p>
       </section>
 
-      <section className={styles.connectionGroup}>
-        <div className={styles.sectionLabel}>Email and calendars</div>
-        <div className={styles.connectionList}>
-        <ConnectionRow
-          id="calendar"
-          icon={<CalendarDays size={22} />}
-          title="Google Calendar"
-          detail={
-            calendar?.connected
-              ? `${calendarConnection?.calendar_name || "Calendar"} · synced ${calendarConnection?.last_synced_at ? time(calendarConnection.last_synced_at) : "recently"}`
-              : "Read-only calendar evidence for schedules and conflicts."
-          }
-          connected={Boolean(calendar?.connected)}
-          action={
-            calendar?.connected
-              ? "Refresh"
-              : calendar?.configured
-                ? "Connect"
-                : "Setup pending"
-          }
-          disabled={!calendar?.configured}
-          expanded={openProvider === "calendar"}
-          onToggle={() =>
-            setOpenProvider(openProvider === "calendar" ? null : "calendar")
-          }
-          onAction={onCalendar}
-        >
-          <ConnectionDetails
-            owner={calendarOwner || "Assigned when connected"}
-            privacy="Calendar evidence follows each event's household or private visibility."
-            coverage={familyCoverage}
-            reads="Event title, time, location, and provider changes from the selected calendar."
-            automatic="Refresh evidence and check the canonical family plan for conflicts."
-            approval="External calendar writes and new commitments."
-          />
-        </ConnectionRow>
-        <ConnectionRow
-          id="gmail"
-          icon={<Mail size={22} />}
-          title="Gmail"
-          detail={
-            gmail?.connected
-              ? gmail.metadata?.email || "Connected for action-needed signals."
-              : "Read-only intake for commitments, deadlines, and decisions."
-          }
-          connected={Boolean(gmail?.connected)}
-          action={
-            gmail?.connected
-              ? "Connected"
-              : gmail?.configured
-                ? "Connect"
-                : "Setup pending"
-          }
-          disabled={Boolean(gmail?.connected) || !gmail?.configured}
-          expanded={openProvider === "gmail"}
-          onToggle={() =>
-            setOpenProvider(openProvider === "gmail" ? null : "gmail")
-          }
-          onAction={onEmail}
-        >
-          <ConnectionDetails
-            owner={displayName(member)}
-            privacy="Private source. Only permission-safe family actions may be shared."
-            coverage="The connected member; family impact is reconciled through One Brain."
-            reads="Read-only Gmail profile today. Message ingestion is not enabled in this preview."
-            automatic="Nothing from email is marked handled without a canonical state change."
-            approval="Sending email, sharing private content, or creating an external commitment."
-          />
-        </ConnectionRow>
+      <section className={styles.connectionsOverview} aria-label="Connection summary">
+        <div className={styles.connectionsOverviewLead}>
+          <span aria-hidden="true"><ShieldCheck size={20} /></span>
+          <p>
+            <small>Connection center</small>
+            <strong>{activeCount} active pathways</strong>
+            <em>Every source keeps its own privacy and authority boundary.</em>
+          </p>
         </div>
+        <dl>
+          <div><dt>External actions</dt><dd>Ask first</dd></div>
+          <div><dt>Visibility</dt><dd>Per source</dd></div>
+          <div><dt>Credentials</dt><dd>Hidden</dd></div>
+        </dl>
       </section>
 
+      {groups.map((group) => {
+        const groupProviders = providers.filter((provider) => provider.group === group);
+        return (
+          <section className={styles.connectionGroup} key={group}>
+            <header className={styles.connectionGroupHeader}>
+              <h2>{group}</h2>
+              <span>{groupProviders.length}</span>
+            </header>
+            <div className={styles.connectionGrid}>
+              {groupProviders.map((provider) => (
+                <ConnectionCard
+                  key={provider.id}
+                  provider={provider}
+                  onDetails={() => setOpenProvider(provider.id)}
+                  onAction={() => runProviderAction(provider)}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
       <section className={styles.connectionGroup}>
-        <div className={styles.sectionLabel}>Health and personal</div>
-        <div className={styles.connectionList}>
-        <ConnectionRow
-          id="health"
-          icon={<HeartPulse size={22} />}
-          title="Apple Health"
-          detail={
-            health?.connected
-              ? `Last received ${health.latest?.metric_date || "recently"}.`
-              : health?.status === "pending"
-                ? "Waiting for the HealthKit Shortcut on this iPhone."
-                : "Steps, goals, and active minutes through HealthKit."
-          }
-          connected={Boolean(health?.connected)}
-          action={health?.connected ? "Reconnect" : "Connect on iPhone"}
-          expanded={openProvider === "health"}
-          onToggle={() =>
-            setOpenProvider(openProvider === "health" ? null : "health")
-          }
-          onAction={onHealth}
-        >
-          <ConnectionDetails
-            owner={displayName(member)}
-            privacy="Private to this member. Health metrics are not placed on family pages."
-            coverage={displayName(member)}
-            reads="Only the daily steps, step goal, and active minutes approved in the iPhone Shortcut."
-            automatic="Update the member's Home health summary when a paired device reports."
-            approval="Every HealthKit category is selected on the iPhone; Pepper never writes to HealthKit."
-          />
-        </ConnectionRow>
+        <header className={styles.connectionGroupHeader}>
+          <h2>Household services</h2>
+          <span>0</span>
+        </header>
+        <div className={styles.connectionEmpty}>
+          <House size={19} aria-hidden="true" />
+          <span>
+            <strong>No household service is connected.</strong>
+            <small>Only verified providers will appear here.</small>
+          </span>
         </div>
       </section>
 
@@ -1995,118 +2363,224 @@ function ConnectionsPage({
           <CopyField label="Pairing token" value={healthSetup.pairing_token} />
         </section>
       ) : null}
+
+      {selectedProvider ? (
+        <ConnectionDetailDrawer
+          provider={selectedProvider}
+          onClose={() => setOpenProvider(null)}
+          onAction={() => runProviderAction(selectedProvider)}
+        />
+      ) : null}
     </>
   );
 }
 
-function ConnectionRow({
-  id,
-  icon,
-  title,
-  detail,
-  connected,
-  action,
-  disabled,
-  expanded,
-  onToggle,
-  onAction,
-  children,
-}: {
+type ConnectionProviderState = "connected" | "available" | "setup" | "builtin";
+
+type ConnectionProviderView = {
   id: string;
   icon: React.ReactNode;
+  mark: string;
+  group: string;
   title: string;
-  detail: string;
-  connected: boolean;
-  action: string;
-  disabled?: boolean;
-  expanded: boolean;
-  onToggle: () => void;
+  identifier: string;
+  summary: string;
+  state: ConnectionProviderState;
+  statusLabel: string;
+  owner: string;
+  privacy: string;
+  coverage: string;
+  lastActivity: string;
+  reads: string[];
+  automatic: string[];
+  approval: string[];
+  sharing: string;
+  feeds: string[];
+  action?: string;
+  actionDisabled?: boolean;
+  actionIcon?: React.ReactNode;
+  onAction?: () => void;
+};
+
+function connectionActivity(value?: string | null) {
+  if (!value) return "No verified activity yet";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Activity time unavailable";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function ConnectionCard({
+  provider,
+  onDetails,
+  onAction,
+}: {
+  provider: ConnectionProviderView;
+  onDetails: () => void;
   onAction: () => void;
-  children: React.ReactNode;
 }) {
+  const stateClass =
+    provider.state === "connected"
+      ? styles.connectionStateConnected
+      : provider.state === "builtin"
+        ? styles.connectionStateBuiltin
+        : provider.state === "available"
+          ? styles.connectionStateAvailable
+          : styles.connectionStateSetup;
   return (
-    <article className={styles.connectionEntry}>
-      <div className={styles.connectionRow}>
-      <span className={styles.connectionIcon} aria-hidden="true">
-        {icon}
-      </span>
-      <span className={styles.connectionText}>
-        <strong>{title}</strong>
-        <small>{detail}</small>
-      </span>
-      <span className={connected ? styles.connectedBadge : styles.readyBadge}>
-        {connected ? "Connected" : "Not connected"}
-      </span>
-      <button
-        type="button"
-        className={styles.connectionDetailsButton}
-        aria-expanded={expanded}
-        aria-controls={`connection-${id}`}
-        onClick={onToggle}
-      >
-        Details
-        <ChevronDown size={16} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className={styles.secondaryButton}
-        disabled={disabled}
-        onClick={onAction}
-      >
-        {action}
-      </button>
-      </div>
-      {expanded ? (
-        <div className={styles.connectionDetail} id={`connection-${id}`}>
-          {children}
+    <article className={styles.connectionProvider}>
+      <header>
+        <ProviderMark icon={provider.icon} mark={provider.mark} />
+        <p>
+          <strong>{provider.title}</strong>
+          <small>{provider.identifier}</small>
+        </p>
+        <span className={`${styles.connectionState} ${stateClass}`}>
+          {provider.statusLabel}
+        </span>
+      </header>
+      <p className={styles.connectionSummary}>{provider.summary}</p>
+      <dl className={styles.connectionMetadata}>
+        <div><dt>Owner</dt><dd>{provider.owner}</dd></div>
+        <div><dt>Privacy</dt><dd>{provider.privacy}</dd></div>
+        <div><dt>Last activity</dt><dd>{provider.lastActivity}</dd></div>
+      </dl>
+      <footer>
+        <span>{provider.coverage}</span>
+        <div>
+          <button type="button" className={styles.connectionManage} onClick={onDetails}>
+            Manage <ChevronRight size={14} aria-hidden="true" />
+          </button>
+          {provider.action ? (
+            <button
+              type="button"
+              className={styles.connectionAction}
+              disabled={provider.actionDisabled}
+              onClick={onAction}
+            >
+              {provider.actionIcon}
+              {provider.action}
+            </button>
+          ) : null}
         </div>
-      ) : null}
+      </footer>
     </article>
   );
 }
 
-function ConnectionDetails({
-  owner,
-  privacy,
-  coverage,
-  reads,
-  automatic,
-  approval,
+function ProviderMark({ icon, mark }: { icon: React.ReactNode; mark: string }) {
+  return (
+    <span className={styles.providerMark} aria-hidden="true">
+      {icon}
+      <em>{mark}</em>
+    </span>
+  );
+}
+
+function ConnectionDetailDrawer({
+  provider,
+  onClose,
+  onAction,
 }: {
-  owner: string;
-  privacy: string;
-  coverage: string;
-  reads: string;
-  automatic: string;
-  approval: string;
+  provider: ConnectionProviderView;
+  onClose: () => void;
+  onAction: () => void;
 }) {
   return (
-    <dl className={styles.connectionFacts}>
-      <div>
-        <dt>Account owner</dt>
-        <dd>{owner}</dd>
-      </div>
-      <div>
-        <dt>Privacy</dt>
-        <dd>{privacy}</dd>
-      </div>
-      <div>
-        <dt>Covers</dt>
-        <dd>{coverage}</dd>
-      </div>
-      <div>
-        <dt>Pepper can read</dt>
-        <dd>{reads}</dd>
-      </div>
-      <div>
-        <dt>Automatic</dt>
-        <dd>{automatic}</dd>
-      </div>
-      <div>
-        <dt>Ask first</dt>
-        <dd>{approval}</dd>
-      </div>
-    </dl>
+    <div
+      className={styles.connectionBackdrop}
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        className={styles.connectionDrawer}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connection-drawer-title"
+      >
+        <header className={styles.connectionDrawerHeader}>
+          <div>
+            <ProviderMark icon={provider.icon} mark={provider.mark} />
+            <p>
+              <small>{provider.group}</small>
+              <strong id="connection-drawer-title">{provider.title}</strong>
+              <span>{provider.statusLabel}</span>
+            </p>
+          </div>
+          <button type="button" aria-label="Close connection details" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className={styles.connectionDrawerBody}>
+          <p className={styles.connectionDrawerLead}>{provider.summary}</p>
+          <dl className={styles.connectionDrawerFacts}>
+            <div><dt>Account owner</dt><dd>{provider.owner}</dd></div>
+            <div><dt>Visibility</dt><dd>{provider.privacy}</dd></div>
+            <div><dt>Covers</dt><dd>{provider.coverage}</dd></div>
+            <div><dt>Last activity</dt><dd>{provider.lastActivity}</dd></div>
+          </dl>
+
+          <section className={styles.connectionCapabilities}>
+            <ConnectionCapability title="What Pepper reads" icon={<Check size={15} />} items={provider.reads} />
+            <ConnectionCapability title="What happens automatically" icon={<RefreshCw size={15} />} items={provider.automatic} />
+            <ConnectionCapability title="What still needs approval" icon={<LockKeyhole size={15} />} items={provider.approval} />
+          </section>
+
+          <p className={styles.connectionSharing}>
+            <ShieldCheck size={16} aria-hidden="true" />
+            {provider.sharing}
+          </p>
+          <div className={styles.connectionFeeds}>
+            <span>Feeds</span>
+            {provider.feeds.map((feed) => <em key={feed}>{feed}</em>)}
+          </div>
+        </div>
+
+        <footer className={styles.connectionDrawerFooter}>
+          <button type="button" className={styles.secondaryButton} onClick={onClose}>
+            Done
+          </button>
+          {provider.action ? (
+            <button
+              type="button"
+              className={styles.primaryButtonSmall}
+              disabled={provider.actionDisabled}
+              onClick={onAction}
+            >
+              {provider.actionIcon}
+              {provider.action}
+            </button>
+          ) : null}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ConnectionCapability({
+  title,
+  icon,
+  items,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  items: string[];
+}) {
+  return (
+    <article>
+      <h3>{title}</h3>
+      {items.map((item) => (
+        <p key={item}><span aria-hidden="true">{icon}</span>{item}</p>
+      ))}
+    </article>
   );
 }
 
@@ -2126,6 +2600,306 @@ function CopyField({ label, value }: { label: string; value: string }) {
       >
         <Copy size={17} />
       </button>
+    </div>
+  );
+}
+
+type ChoreFilter = "today" | "week" | "all";
+
+function ChoresPage({
+  chores,
+  state,
+  busy,
+  onCreate,
+  onOpen,
+  onToggle,
+}: {
+  chores: FamilyTask[];
+  state: PepperState;
+  busy: boolean;
+  onCreate: (draft: ChoreDraft) => Promise<boolean>;
+  onOpen: (task: FamilyTask) => void;
+  onToggle: (task: FamilyTask) => void;
+}) {
+  const [filter, setFilter] = useState<ChoreFilter>("today");
+  const [composerOpen, setComposerOpen] = useState(false);
+  const today = localDate();
+  const weekEnd = addDateDays(today, 6);
+  const matchesFilter = (task: FamilyTask) => {
+    if (filter === "all") return true;
+    const relevantDate = ["completed", "canceled"].includes(task.status)
+      ? localDateFor(task.completed_at || task.updated_at)
+      : localDateFor(task.due_at);
+    if (!relevantDate) return false;
+    return filter === "today"
+      ? relevantDate === today
+      : relevantDate >= today && relevantDate <= weekEnd;
+  };
+  const visible = chores.filter(matchesFilter);
+  const active = visible.filter(
+    (task) => !["completed", "canceled"].includes(task.status),
+  );
+  const handled = visible.filter((task) =>
+    ["completed", "canceled"].includes(task.status),
+  );
+
+  return (
+    <>
+      <section className={`${styles.hero} ${styles.choreHero}`}>
+        <div className={styles.eyebrow}>Family</div>
+        <h1>Family chores</h1>
+        <p>See every chore. Assign it once.</p>
+      </section>
+
+      <div className={styles.choreToolbar}>
+        <div className={styles.choreFilters} role="tablist" aria-label="Chore range">
+          {([
+            ["today", "Today"],
+            ["week", "Week"],
+            ["all", "All"],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={filter === value}
+              className={filter === value ? styles.choreFilterActive : styles.choreFilter}
+              onClick={() => setFilter(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <section className={styles.choreList} aria-label={`${filter} chores`}>
+        {active.length ? (
+          active.map((task) => (
+            <ChoreRow
+              key={task.id}
+              task={task}
+              state={state}
+              busy={busy}
+              onOpen={() => onOpen(task)}
+              onToggle={() => onToggle(task)}
+            />
+          ))
+        ) : (
+          <div className={styles.choreEmpty}>
+            <Check size={18} aria-hidden="true" />
+            <span>{filter === "today" ? "No chores due today." : filter === "week" ? "No chores due this week." : "No open chores."}</span>
+          </div>
+        )}
+      </section>
+
+      <button
+        type="button"
+        className={styles.choreAddButton}
+        onClick={() => setComposerOpen(true)}
+      >
+        <span><Plus size={20} aria-hidden="true" /> Add a chore</span>
+        <ChevronRight size={19} aria-hidden="true" />
+      </button>
+
+      <div className={styles.choreSharedNote}>
+        <Info size={18} aria-hidden="true" />
+        <span>One shared list · updates everyone</span>
+      </div>
+
+      {handled.length ? (
+        <details className={styles.handledDetails}>
+          <summary>{handled.length} completed or canceled</summary>
+          {handled.map((task) => (
+            <ChoreRow
+              key={task.id}
+              task={task}
+              state={state}
+              busy={busy}
+              quiet
+              onOpen={() => onOpen(task)}
+              onToggle={() => onToggle(task)}
+            />
+          ))}
+        </details>
+      ) : null}
+
+      {composerOpen ? (
+        <ChoreComposer
+          members={state.members}
+          actor={state.member}
+          busy={busy}
+          onClose={() => setComposerOpen(false)}
+          onCreate={async (draft) => {
+            const created = await onCreate(draft);
+            if (created) setComposerOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ChoreRow({
+  task,
+  state,
+  busy,
+  quiet = false,
+  onOpen,
+  onToggle,
+}: {
+  task: FamilyTask;
+  state: PepperState;
+  busy: boolean;
+  quiet?: boolean;
+  onOpen: () => void;
+  onToggle: () => void;
+}) {
+  const owner = state.members.find((member) => member.id === task.owner_member_id);
+  const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+  const canChange =
+    actorIsAdult ||
+    task.owner_member_id === state.member.id ||
+    task.creator_member_id === state.member.id;
+  const completed = task.status === "completed";
+  const canceled = task.status === "canceled";
+  const schedule = choreSchedule(task);
+
+  return (
+    <article className={`${styles.choreRow} ${quiet ? styles.choreRowQuiet : ""}`}>
+      <button
+        type="button"
+        className={`${styles.choreCheck} ${completed ? styles.choreCheckDone : ""}`}
+        disabled={busy || !canChange}
+        aria-label={completed ? `Restore ${task.title}` : canceled ? `Open ${task.title}` : `Complete ${task.title}`}
+        onClick={canceled ? onOpen : onToggle}
+      >
+        {completed ? <Check size={17} aria-hidden="true" /> : canceled ? <CircleX size={16} aria-hidden="true" /> : null}
+      </button>
+      <button type="button" className={styles.choreBody} onClick={onOpen}>
+        <strong>{task.title}</strong>
+        <small>{canceled ? "Canceled" : completed ? "Completed" : schedule}</small>
+      </button>
+      <button
+        type="button"
+        className={`${styles.choreOwner} ${owner ? "" : styles.choreOwnerEmpty}`}
+        data-member={owner?.slug || "unassigned"}
+        onClick={onOpen}
+        aria-label={owner ? `Assigned to ${displayName(owner)}` : `Assign ${task.title}`}
+      >
+        {owner ? displayName(owner) : <><Plus size={15} aria-hidden="true" /> Assign</>}
+      </button>
+    </article>
+  );
+}
+
+function choreSchedule(task: FamilyTask) {
+  const due = localDateFor(task.due_at);
+  const today = localDate();
+  const recurrence = task.recurrence && task.recurrence !== "none"
+    ? `${task.recurrence.slice(0, 1).toUpperCase()}${task.recurrence.slice(1)}`
+    : "";
+  const dueText = due === today
+    ? "Today"
+    : due === addDateDays(today, 1)
+      ? "Tomorrow"
+      : due
+        ? dateLabel(due)
+        : "No due date";
+  return recurrence ? `${dueText} · ${recurrence}` : dueText;
+}
+
+function ChoreComposer({
+  members,
+  actor,
+  busy,
+  onClose,
+  onCreate,
+}: {
+  members: PepperState["members"];
+  actor: PepperState["member"];
+  busy: boolean;
+  onClose: () => void;
+  onCreate: (draft: ChoreDraft) => Promise<void>;
+}) {
+  const actorIsAdult = ["adult_admin", "adult"].includes(actor.role);
+  const [draft, setDraft] = useState<ChoreDraft>({
+    title: "",
+    ownerMemberId: actorIsAdult ? "" : actor.id,
+    dueDate: localDate(),
+    recurrence: "none",
+  });
+
+  return (
+    <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
+      <form
+        className={`${styles.actionSheet} ${styles.choreComposer}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-chore-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (draft.title.trim()) void onCreate({ ...draft, title: draft.title.trim() });
+        }}
+      >
+        <button type="button" className={styles.sheetClose} onClick={onClose} aria-label="Close">
+          <X size={19} />
+        </button>
+        <div className={styles.eyebrow}>Family</div>
+        <h2 id="add-chore-title">Add a chore</h2>
+
+        <label className={styles.choreField}>
+          Chore
+          <input
+            autoFocus
+            value={draft.title}
+            maxLength={240}
+            placeholder="What needs doing?"
+            onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+          />
+        </label>
+        <label className={styles.choreField}>
+          Assign to
+          <select
+            value={draft.ownerMemberId}
+            disabled={!actorIsAdult || busy}
+            onChange={(event) => setDraft({ ...draft, ownerMemberId: event.target.value })}
+          >
+            {actorIsAdult ? <option value="">Needs an owner</option> : null}
+            {members.map((member) => (
+              <option key={member.id} value={member.id}>{displayName(member)}</option>
+            ))}
+          </select>
+        </label>
+        <div className={styles.choreFieldGrid}>
+          <label className={styles.choreField}>
+            Due
+            <input
+              type="date"
+              value={draft.dueDate}
+              onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })}
+            />
+          </label>
+          <label className={styles.choreField}>
+            Repeats
+            <select
+              value={draft.recurrence}
+              onChange={(event) => setDraft({ ...draft, recurrence: event.target.value as ChoreDraft["recurrence"] })}
+            >
+              <option value="none">Once</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </label>
+        </div>
+        <div className={styles.sheetActions}>
+          <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || !draft.title.trim()}>
+            <Plus size={17} aria-hidden="true" /> {busy ? "Adding…" : "Add chore"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -2169,12 +2943,15 @@ function FamilyDirectory({
 
 function isChore(task: FamilyTask) {
   const area = (task.area || "").toLowerCase();
+  const classification = (task.classification || "").toLowerCase();
+  const project = (task.project || "").toLowerCase();
   const tags = (task.tags || []).map((tag) => tag.toLowerCase());
   return (
-    area === "home" ||
-    area === "family" ||
+    classification === "chore" ||
+    area === "chores" ||
+    project === "family chores" ||
     tags.includes("chore") ||
-    Boolean(task.recurrence && task.recurrence !== "none")
+    tags.includes("chores")
   );
 }
 
@@ -2476,6 +3253,140 @@ function ItemActionSheet({
         ) : (
           <p className={styles.permissionNote}>An adult or the current owner can change this item.</p>
         )}
+      </section>
+    </div>
+  );
+}
+
+function ConflictResolutionSheet({
+  item,
+  state,
+  busy,
+  onClose,
+  onResolve,
+}: {
+  item: AttentionItem;
+  state: PepperState;
+  busy: boolean;
+  onClose: () => void;
+  onResolve: (keepEventId: string, rejectEventId: string) => Promise<boolean>;
+}) {
+  const events = [item.primary_event, item.related_event].filter(
+    (event): event is FamilyEvent => Boolean(event),
+  );
+  const [keepEventId, setKeepEventId] = useState("");
+  const [declineMessage, setDeclineMessage] = useState("");
+  const keepEvent = events.find((event) => event.id === keepEventId);
+  const rejectEvent = events.find((event) => event.id !== keepEventId);
+  const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+
+  function chooseEvent(event: FamilyEvent) {
+    const rejected = events.find((candidate) => candidate.id !== event.id);
+    setKeepEventId(event.id);
+    setDeclineMessage(
+      rejected
+        ? `Hi,\n\nOur family will not be able to attend ${rejected.title} on ${dateLabel(
+            rejected.starts_at.slice(0, 10),
+          )} at ${time(rejected.starts_at)}.\n\nThank you for understanding,\n${displayName(
+            state.member,
+          )}`
+        : "",
+    );
+  }
+
+  async function confirmResolution() {
+    if (!keepEvent || !rejectEvent) return;
+    const resolved = await onResolve(keepEvent.id, rejectEvent.id);
+    if (!resolved || !rejectEvent.external_organizer_email) return;
+    const subject = `Unable to attend: ${rejectEvent.title}`;
+    window.location.assign(
+      `mailto:${rejectEvent.external_organizer_email}?subject=${encodeURIComponent(
+        subject,
+      )}&body=${encodeURIComponent(declineMessage)}`,
+    );
+  }
+
+  return (
+    <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
+      <section
+        className={`${styles.actionSheet} ${styles.conflictSheet}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="conflict-resolution-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button type="button" className={styles.sheetClose} onClick={onClose} aria-label="Close">
+          <X size={19} />
+        </button>
+        <div className={styles.eyebrow}>Resolve the double booking</div>
+        <h2 id="conflict-resolution-title">Which event are you keeping?</h2>
+        <p className={styles.sheetIntro}>
+          Pepper will keep one event in the family plan and cancel the other.
+        </p>
+
+        <div className={styles.conflictChoices}>
+          {events.map((event) => (
+            <button
+              type="button"
+              className={`${styles.conflictChoice} ${
+                event.id === keepEventId ? styles.conflictChoiceActive : ""
+              }`}
+              disabled={busy || !actorIsAdult}
+              key={event.id}
+              onClick={() => chooseEvent(event)}
+            >
+              <span className={styles.conflictChoiceMarker} aria-hidden="true" />
+              <span>
+                <strong>{event.title}</strong>
+                <small>
+                  {dateLabel(event.starts_at.slice(0, 10))} at {time(event.starts_at)}
+                  {event.location ? ` · ${event.location}` : ""}
+                </small>
+              </span>
+              <span className={styles.keepLabel}>
+                {event.id === keepEventId ? "Keeping" : "Keep this"}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {!actorIsAdult ? (
+          <p className={styles.permissionNote}>An adult can resolve this family conflict.</p>
+        ) : keepEvent && rejectEvent ? (
+          <div className={styles.conflictReview}>
+            <div className={styles.conflictDecision}>
+              <span><strong>Keep</strong>{keepEvent.title}</span>
+              <span><strong>Cancel</strong>{rejectEvent.title}</span>
+            </div>
+            {rejectEvent.external_organizer_email ? (
+              <label className={styles.declineField}>
+                Decline note to {rejectEvent.external_organizer_name || rejectEvent.external_organizer_email}
+                <textarea
+                  value={declineMessage}
+                  maxLength={3000}
+                  disabled={busy}
+                  onChange={(event) => setDeclineMessage(event.target.value)}
+                />
+              </label>
+            ) : (
+              <p className={styles.sourceNote}>
+                This calendar event did not include an organizer email. Pepper can cancel it in the family plan, but cannot address a decline draft.
+              </p>
+            )}
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={busy}
+              onClick={() => void confirmResolution()}
+            >
+              {busy
+                ? "Updating the family plan…"
+                : rejectEvent.external_organizer_email
+                  ? "Cancel event and open email draft"
+                  : "Cancel conflicting event"}
+            </button>
+          </div>
+        ) : null}
       </section>
     </div>
   );

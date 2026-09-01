@@ -70,6 +70,7 @@ type GoogleEvent = {
   start?: { dateTime?: string; date?: string; timeZone?: string };
   end?: { dateTime?: string; date?: string; timeZone?: string };
   attendees?: Array<{ self?: boolean; responseStatus?: string }>;
+  organizer?: { email?: string; displayName?: string; self?: boolean };
 };
 
 class HttpError extends Error {
@@ -536,7 +537,7 @@ async function upsertGoogleEvent(
     if (!existingId) return { seen: 1, upserted: 0, merged: 0 };
     await sql`
       update public.events
-      set status = 'canceled', sync_status = 'removed', last_synced_at = ${scanStarted}::timestamptz
+      set status = coalesce(canonical_status_override, 'canceled'), sync_status = 'removed', last_synced_at = ${scanStarted}::timestamptz
       where id = ${existingId}::uuid
     `;
     return { seen: 1, upserted: 1, merged: 0 };
@@ -581,7 +582,7 @@ async function upsertGoogleEvent(
           starts_at = ${startsAt}::timestamptz,
           ends_at = ${endsAt}::timestamptz,
           location = ${location},
-          status = ${status},
+          status = coalesce(canonical_status_override, ${status}),
           visibility = ${visibility},
           owner_member_id = coalesce(owner_member_id, ${connection.connected_by_member_id}::uuid),
           kind = ${kind},
@@ -592,6 +593,8 @@ async function upsertGoogleEvent(
           external_calendar_id = ${connection.provider_calendar_id},
           external_ical_uid = ${event.iCalUID || null},
           external_url = ${event.htmlLink || null},
+          external_organizer_email = ${event.organizer?.email || null},
+          external_organizer_name = ${event.organizer?.displayName || null},
           external_updated_at = ${event.updated || null}::timestamptz,
           notes = ${notes},
           response_status = ${response},
@@ -615,7 +618,8 @@ async function upsertGoogleEvent(
         household_id, title, person_slug, starts_at, ends_at, location, status,
         visibility, owner_member_id, kind, source, external_connection_id,
         external_provider, external_event_id, external_calendar_id,
-        external_ical_uid, external_url, external_updated_at, notes,
+        external_ical_uid, external_url, external_organizer_email,
+        external_organizer_name, external_updated_at, notes,
         response_status, sync_status, last_synced_at, all_day, dedupe_key,
         adult_required, adult_requirement_label, adult_requirement_status
       ) values (
@@ -624,7 +628,8 @@ async function upsertGoogleEvent(
         ${visibility}, ${connection.connected_by_member_id}::uuid, ${kind},
         'google_calendar', ${connection.id}::uuid, 'google', ${event.id},
         ${connection.provider_calendar_id}, ${event.iCalUID || null},
-        ${event.htmlLink || null}, ${event.updated || null}::timestamptz,
+        ${event.htmlLink || null}, ${event.organizer?.email || null},
+        ${event.organizer?.displayName || null}, ${event.updated || null}::timestamptz,
         ${notes}, ${response}, 'synced', ${scanStarted}::timestamptz,
         ${allDay}, ${dedupeKey}, ${requirement.required}, ${requirement.label},
         ${requirement.required ? 'unassigned' : null}
@@ -690,7 +695,7 @@ async function syncConnection(
 
     const removedRows = await sql<Array<{ id: string }>>`
       update public.events
-      set status = 'canceled', sync_status = 'removed', updated_at = now()
+      set status = coalesce(canonical_status_override, 'canceled'), sync_status = 'removed', updated_at = now()
       where external_connection_id = ${connection.id}::uuid
         and starts_at >= ${from.toISOString()}::timestamptz
         and starts_at < ${to.toISOString()}::timestamptz

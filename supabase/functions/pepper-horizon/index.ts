@@ -224,10 +224,30 @@ Deno.serve(async (req: Request) => {
         `,
         sql<any[]>`
           select c.id, c.consequence_type, c.title, c.summary, c.severity,
-            c.status, c.event_id, c.affected_member_id, c.detected_at,
-            c.last_seen_at, e.starts_at event_starts_at
+            c.status, c.event_id, c.related_event_id, c.affected_member_id,
+            c.detected_at, c.last_seen_at, e.starts_at event_starts_at,
+            e.title event_title, e.person_slug event_person_slug,
+            e.ends_at event_ends_at, e.location event_location,
+            e.status event_status, e.visibility event_visibility,
+            e.owner_member_id event_owner_member_id, e.kind event_kind,
+            e.transport_owner_member_id event_transport_owner_member_id,
+            e.transport_status event_transport_status, e.source event_source,
+            e.external_url event_external_url,
+            e.external_organizer_email event_external_organizer_email,
+            e.external_organizer_name event_external_organizer_name,
+            re.title related_title, re.person_slug related_person_slug,
+            re.starts_at related_starts_at, re.ends_at related_ends_at,
+            re.location related_location, re.status related_status,
+            re.visibility related_visibility,
+            re.owner_member_id related_owner_member_id, re.kind related_kind,
+            re.transport_owner_member_id related_transport_owner_member_id,
+            re.transport_status related_transport_status, re.source related_source,
+            re.external_url related_external_url,
+            re.external_organizer_email related_external_organizer_email,
+            re.external_organizer_name related_external_organizer_name
           from public.consequences c
           left join public.events e on e.id = c.event_id
+          left join public.events re on re.id = c.related_event_id
           where c.household_id = ${currentMember.household_id}::uuid
             and c.status = 'open'
           order by case c.severity
@@ -423,6 +443,8 @@ Deno.serve(async (req: Request) => {
           date: item.date,
           title: item.title,
           summary: `${item.title}${item.starts_at ? ` - ${timeLabel(item.starts_at)}` : ''} needs a driver.`,
+          event_id: item.item_type === 'event' ? item.id : null,
+          primary_event: item.item_type === 'event' ? item : null,
         })
       }
       if (item.adult_required && !item.adult_owner_member_id) {
@@ -432,6 +454,8 @@ Deno.serve(async (req: Request) => {
           date: item.date,
           title: item.title,
           summary: `${item.title}${item.starts_at ? ` - ${timeLabel(item.starts_at)}` : ''} needs an adult assigned.`,
+          event_id: item.item_type === 'event' ? item.id : null,
+          primary_event: item.item_type === 'event' ? item : null,
         })
       }
     }
@@ -463,12 +487,59 @@ Deno.serve(async (req: Request) => {
         ? localDate(consequence.event_starts_at)
         : null
       if (consequenceDate && consequenceDate <= end7) {
+        const canSeePrimary = consequence.event_visibility === 'household'
+          || consequence.event_owner_member_id === currentMember.id
+        const canSeeRelated = !consequence.related_event_id
+          || consequence.related_visibility === 'household'
+          || consequence.related_owner_member_id === currentMember.id
         readiness.push({
           type: 'consequence',
           severity: consequence.severity,
           date: consequenceDate,
           title: consequence.title,
-          summary: consequence.summary,
+          summary: canSeePrimary && canSeeRelated
+            ? consequence.summary
+            : `${consequence.title}. Two commitments overlap; one is private.`,
+          consequence_id: consequence.id,
+          consequence_type: consequence.consequence_type,
+          event_id: consequence.event_id,
+          related_event_id: consequence.related_event_id,
+          primary_event: consequence.event_id && canSeePrimary ? {
+            id: consequence.event_id,
+            title: consequence.event_title,
+            person_slug: consequence.event_person_slug,
+            starts_at: consequence.event_starts_at,
+            ends_at: consequence.event_ends_at,
+            location: consequence.event_location,
+            status: consequence.event_status,
+            visibility: consequence.event_visibility,
+            owner_member_id: consequence.event_owner_member_id,
+            kind: consequence.event_kind,
+            transport_owner_member_id: consequence.event_transport_owner_member_id,
+            transport_status: consequence.event_transport_status,
+            source: consequence.event_source,
+            external_url: consequence.event_external_url,
+            external_organizer_email: consequence.event_external_organizer_email,
+            external_organizer_name: consequence.event_external_organizer_name,
+          } : null,
+          related_event: consequence.related_event_id && canSeeRelated ? {
+            id: consequence.related_event_id,
+            title: consequence.related_title,
+            person_slug: consequence.related_person_slug,
+            starts_at: consequence.related_starts_at,
+            ends_at: consequence.related_ends_at,
+            location: consequence.related_location,
+            status: consequence.related_status,
+            visibility: consequence.related_visibility,
+            owner_member_id: consequence.related_owner_member_id,
+            kind: consequence.related_kind,
+            transport_owner_member_id: consequence.related_transport_owner_member_id,
+            transport_status: consequence.related_transport_status,
+            source: consequence.related_source,
+            external_url: consequence.related_external_url,
+            external_organizer_email: consequence.related_external_organizer_email,
+            external_organizer_name: consequence.related_external_organizer_name,
+          } : null,
         })
       }
     }
