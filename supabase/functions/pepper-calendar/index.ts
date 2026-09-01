@@ -10,7 +10,7 @@ import {
   stripHtml,
 } from './logic.ts';
 
-const APP_URL = 'https://olgyfgqlqrhfaujkfjtj.supabase.co/functions/v1/pepper-family-beta-01-web';
+const APP_URL = Deno.env.get('PEPPER_APP_URL') || 'https://pepper-v6-private-preview.vercel.app/pepper';
 const APP_ORIGIN = new URL(APP_URL).origin;
 const FUNCTION_NAME = 'pepper-calendar';
 const FAMILY_TIME_ZONE = 'America/Los_Angeles';

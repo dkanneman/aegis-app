@@ -1,8 +1,8 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 const db=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-const H={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'content-type,x-pepper-session','Access-Control-Allow-Methods':'GET,POST,OPTIONS'}
+const H={'Access-Control-Allow-Origin':'https://pepper-family-beta.vercel.app','Access-Control-Allow-Headers':'content-type,x-pepper-session','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Vary':'Origin'}
 const TZ='America/Los_Angeles', now=()=>new Date().toISOString()
-const TELL='https://olgyfgqlqrhfaujkfjtj.supabase.co/functions/v1/pepper-tell-v2'
+const TELL=(Deno.env.get('SUPABASE_URL')||'')+'/functions/v1/pepper-tell-v2'
 const dateLA=()=>new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
 const bounds=()=>{const d=dateLA();const a=new Date(d+'T00:00:00-07:00');const b=new Date(a);b.setDate(b.getDate()+1);return [a.toISOString(),b.toISOString()]}
 const ft=(x:string)=>new Date(x).toLocaleTimeString('en-US',{timeZone:TZ,hour:'numeric',minute:'2-digit'})

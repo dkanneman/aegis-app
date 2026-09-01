@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Aegis Alpha · First Useful Day",
-  description: "Calm intelligence that turns the scattered pieces of life into one clear, realistic plan.",
+  title: "Pepper · Family Concierge",
+  description:
+    "A calm family concierge for schedules, responsibilities, and the things that need follow-through.",
   other: {
     "codex-preview": "development",
   },
