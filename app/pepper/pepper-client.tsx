@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
+  Armchair,
   ArrowLeft,
   Briefcase,
   Cable,
@@ -17,6 +18,7 @@ import {
   House,
   Info,
   LockKeyhole,
+  ListTodo,
   Mail,
   Mic,
   Plus,
@@ -24,8 +26,12 @@ import {
   RotateCcw,
   School,
   ShieldCheck,
+  ShoppingBasket,
+  Sparkles,
   Telescope,
+  Utensils,
   UsersRound,
+  UserPlus,
   X,
 } from "lucide-react";
 import { minutesInTimeZone, pepperAtmosphereAt } from "./pepper-atmosphere";
@@ -75,6 +81,7 @@ type FamilyTask = {
   source?: string | null;
   area?: string | null;
   project?: string | null;
+  priority?: string | null;
   classification?: string | null;
   tags?: string[] | null;
   recurrence?: string | null;
@@ -122,6 +129,7 @@ type MemberState = {
       dismissal_at?: string | null;
     }>;
   } | null;
+  setup?: MemberSetupProfile | null;
 };
 
 type SelectedItem =
@@ -154,6 +162,68 @@ type GroceryItem = {
   id: string;
   item: string;
   status: string;
+  owner_member_id?: string | null;
+  meal_plan_id?: string | null;
+  completed_by_member_id?: string | null;
+};
+
+type MealPlanItem = {
+  id: string;
+  meal_date: string;
+  meal_name: string;
+  prep_at?: string | null;
+  eat_at?: string | null;
+  owner_member_id?: string | null;
+  shopping_owner_member_id?: string | null;
+};
+
+type MealNeed = {
+  id: string;
+  member_id: string;
+  need_type: "allergy" | "avoidance" | "preference" | "nutrition" | "schedule";
+  label: string;
+  details?: string | null;
+  active: boolean;
+};
+
+type MemberSetupProfile = {
+  member_id: string;
+  activities: string[];
+  school_name: string;
+  grade_label: string;
+  dietary_preferences: string[];
+  medications: string[];
+  goals: string[];
+  updated_at?: string | null;
+};
+
+type FrontSeatParticipant = {
+  id: string;
+  slug: string;
+  display_name: string;
+  role: string;
+};
+
+type FrontSeatDay = {
+  date: string;
+  scheduled_member_id: string;
+  assigned_member_id: string;
+  assigned_member: FrontSeatParticipant;
+  status: "planned" | "confirmed";
+  source: "rotation" | "manual";
+  confirmed_at?: string | null;
+  can_confirm: boolean;
+};
+
+type FrontSeatState = {
+  id: string;
+  key: string;
+  label: string;
+  anchor_date: string;
+  participants: FrontSeatParticipant[];
+  days: FrontSeatDay[];
+  today: FrontSeatDay;
+  can_manage: boolean;
 };
 
 type Consequence = {
@@ -282,7 +352,13 @@ type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 type MorningRitual = {
   headline?: string | null;
-  today_events?: unknown[] | null;
+  today_events?: Array<{
+    id: string;
+    title: string;
+    time?: string | null;
+    starts_at?: string | null;
+    location?: string | null;
+  }> | null;
   today_event_count?: number | null;
   event_count?: number | null;
   due_today?:
@@ -294,9 +370,25 @@ type MorningRitual = {
   due_today_count?: number | null;
   due_today_information?: string | null;
   due_today_summary?: string | null;
-  preparation?: unknown[] | null;
+  focus_tasks?: FamilyTask[] | null;
+  task_summary?: {
+    open?: number | null;
+    due_today?: number | null;
+    overdue?: number | null;
+    high_priority?: number | null;
+  } | null;
+  attention?: Consequence[] | null;
+  preparation?: PreparationItem[] | null;
   preparation_count?: number | null;
-  tomorrow?: { headline?: string | null } | null;
+  tomorrow?: {
+    headline?: string | null;
+    events?: Array<{
+      id: string;
+      title: string;
+      time?: string | null;
+      starts_at?: string | null;
+    }> | null;
+  } | null;
   tomorrow_headline?: string | null;
 };
 
@@ -304,6 +396,8 @@ type EveningRitual = {
   headline?: string | null;
   reflection_prompt?: string | null;
   prompt?: string | null;
+  handled_today?: number | null;
+  today_events?: number | null;
   tomorrow_headline?: string | null;
 };
 
@@ -315,6 +409,10 @@ type PepperState = {
   privateTasks: FamilyTask[];
   chores?: FamilyTask[];
   groceries: GroceryItem[];
+  meals?: MealPlanItem[];
+  mealNeeds?: MealNeed[];
+  memberProfiles?: MemberSetupProfile[];
+  frontSeat?: FrontSeatState | null;
   captures: Capture[];
   metrics?: Record<string, unknown>;
   consequences?: Consequence[];
@@ -354,10 +452,12 @@ type View =
   | "today"
   | "week"
   | "work"
+  | "meals"
   | "ahead"
   | "chores"
   | "family"
   | "member"
+  | "setup"
   | "connections";
 
 type ChoreDraft = {
@@ -365,6 +465,45 @@ type ChoreDraft = {
   ownerMemberId: string;
   dueDate: string;
   recurrence: "none" | "daily" | "weekly" | "monthly";
+};
+
+type MealDraft = {
+  mealDate: string;
+  mealName: string;
+  ownerMemberId: string;
+  shoppingOwnerMemberId: string;
+};
+
+type GroceryDraft = {
+  item: string;
+  ownerMemberId: string;
+  mealPlanId: string;
+};
+
+type MealNeedDraft = {
+  memberId: string;
+  needType: MealNeed["need_type"];
+  label: string;
+  details: string;
+};
+
+type PersonalTaskDraft = {
+  title: string;
+  dueDate: string;
+  priority: "P0" | "P1" | "P2" | "P3";
+};
+
+type MemberSetupDraft = {
+  memberId: string;
+  displayName: string;
+  role: "adult_admin" | "adult" | "teen" | "child";
+  pin: string;
+  activities: string;
+  schoolName: string;
+  gradeLabel: string;
+  dietaryPreferences: string;
+  medications: string;
+  goals: string;
 };
 
 type HealthSetup = {
@@ -466,53 +605,6 @@ function countLabel(value: number, singular: string, plural = `${singular}s`) {
   return `${value} ${value === 1 ? singular : plural}`;
 }
 
-function dueTodayText(morning?: MorningRitual) {
-  const provided =
-    morning?.due_today_information || morning?.due_today_summary || "";
-  if (provided) return provided;
-
-  const due = morning?.due_today;
-  if (typeof due === "string") return due;
-  if (typeof due === "number") {
-    return countLabel(due, "thing due today", "things due today");
-  }
-  if (Array.isArray(due)) {
-    if (!due.length) return "Nothing is due today.";
-    const titles = due
-      .map((item) =>
-        typeof item === "string"
-          ? item
-          : item && typeof item === "object" && "title" in item
-            ? String(item.title)
-            : "",
-      )
-      .filter(Boolean);
-    return titles.length
-      ? titles.join(" · ")
-      : countLabel(due.length, "thing due today", "things due today");
-  }
-  if (due && typeof due === "object") {
-    const detail = due as Record<string, unknown>;
-    const text = detail.headline || detail.summary || detail.label;
-    if (typeof text === "string") return text;
-    if (typeof detail.count === "number") {
-      return countLabel(
-        detail.count,
-        "thing due today",
-        "things due today",
-      );
-    }
-  }
-  if (typeof morning?.due_today_count === "number") {
-    return countLabel(
-      morning.due_today_count,
-      "thing due today",
-      "things due today",
-    );
-  }
-  return "";
-}
-
 function captureText(capture: Capture) {
   return (
     capture.summary ||
@@ -612,6 +704,7 @@ export function PepperClient() {
   const [tell, setTell] = useState("");
   const [reflection, setReflection] = useState("");
   const [reflectionSaved, setReflectionSaved] = useState(false);
+  const [reflectionSavedText, setReflectionSavedText] = useState("");
   const [ritualOpen, setRitualOpen] = useState<Ritual | null>(null);
   const [ritualBusy, setRitualBusy] = useState(false);
   const [handlingPreparation, setHandlingPreparation] = useState("");
@@ -619,6 +712,7 @@ export function PepperClient() {
   const [healthSetup, setHealthSetup] = useState<HealthSetup | null>(null);
   const [insightOpen, setInsightOpen] = useState(false);
   const [insightRefs, setInsightRefs] = useState<ReflectionEvidence[]>([]);
+  const [frontSeatOpen, setFrontSeatOpen] = useState(false);
 
   async function call(body: Record<string, unknown>, session = token) {
     if (!API || !SUPABASE_ANON_KEY) {
@@ -785,20 +879,13 @@ export function PepperClient() {
   }
 
   function revealWeekDecisions() {
-    const target = document.getElementById("week-decisions");
-    if (!target) {
+    const nextDecision = coordination[0];
+    if (!nextDecision) {
       setMessage("Pepper is refreshing the decisions that need you.");
       void load();
       return;
     }
-    const reducedMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
-    target.scrollIntoView({
-      behavior: reducedMotion ? "auto" : "smooth",
-      block: "start",
-    });
-    target.focus({ preventScroll: true });
+    openAttention(nextDecision);
   }
 
   async function createChore(draft: ChoreDraft) {
@@ -817,6 +904,235 @@ export function PepperClient() {
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Pepper could not add that chore.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function updateFrontSeat(
+    operation: "assign" | "reset" | "confirm",
+    assignedMemberId?: string,
+  ) {
+    setActionBusy(true);
+    try {
+      const result = await call({
+        action: "front_seat_update",
+        operation,
+        assigned_member_id: assignedMemberId || null,
+      });
+      const rider = result.frontSeat?.today?.assigned_member?.display_name;
+      setMessage(
+        operation === "confirm"
+          ? `${rider || "Today’s rider"} is confirmed in front.`
+          : operation === "reset"
+            ? `Back to the regular rotation. ${rider || "Today’s rider"} has the front seat.`
+            : `${rider || "Today’s rider"} has the front seat today.`,
+      );
+      await load();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not update the front-seat turn.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function saveMeal(draft: MealDraft) {
+    setActionBusy(true);
+    try {
+      await call({
+        action: "meal_upsert",
+        meal_date: draft.mealDate,
+        meal_name: draft.mealName,
+        owner_member_id: draft.ownerMemberId || null,
+        shopping_owner_member_id: draft.shoppingOwnerMemberId || null,
+      });
+      setMessage("Meal saved. Pepper updated the weekly plan.");
+      await load();
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Pepper could not save that meal.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function saveMealNeed(draft: MealNeedDraft) {
+    setActionBusy(true);
+    try {
+      await call({
+        action: "meal_need_upsert",
+        member_id: draft.memberId,
+        need_type: draft.needType,
+        label: draft.label,
+        details: draft.details,
+      });
+      setMessage("Family meal need saved.");
+      await load();
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not save that meal need.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function removeMealNeed(id: string) {
+    setActionBusy(true);
+    try {
+      await call({ action: "meal_need_upsert", id, active: false });
+      setMessage("Meal need removed from the active plan.");
+      await load();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not update that meal need.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function createGrocery(draft: GroceryDraft) {
+    setActionBusy(true);
+    try {
+      await call({
+        action: "grocery_create",
+        item: draft.item,
+        owner_member_id: draft.ownerMemberId || null,
+        meal_plan_id: draft.mealPlanId || null,
+      });
+      setMessage("Grocery added to the weekly meal plan.");
+      await load();
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not add that grocery.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function changeGrocery(
+    id: string,
+    operation: "assign" | "attach" | "complete" | "reopen",
+    value?: string,
+  ) {
+    setActionBusy(true);
+    try {
+      await call({
+        action: "grocery_update",
+        id,
+        operation,
+        ...(operation === "assign" ? { owner_member_id: value || null } : {}),
+        ...(operation === "attach" ? { meal_plan_id: value || null } : {}),
+      });
+      setMessage("Grocery plan updated for everyone.");
+      await load();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not update that grocery.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function generateMealPlan() {
+    setActionBusy(true);
+    try {
+      const result = await call({
+        action: "meal_plan_generate",
+        start_date: localDate(),
+      });
+      setMessage(
+        `Week planned from ${result.needs_considered || 0} saved family meal ${result.needs_considered === 1 ? "need" : "needs"}. Review meals and assign cooking or shopping.`,
+      );
+      await load();
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not generate the meal plan.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function createPersonalTask(draft: PersonalTaskDraft) {
+    setActionBusy(true);
+    try {
+      await call({
+        action: "personal_task_create",
+        title: draft.title,
+        due_date: draft.dueDate || null,
+        priority: draft.priority,
+      });
+      setMessage("Added to your private to-do list.");
+      await load();
+      if (memberState?.member.slug) await loadMember(memberState.member.slug);
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Pepper could not add that to-do.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function saveMemberSetup(draft: MemberSetupDraft) {
+    setActionBusy(true);
+    try {
+      await call({
+        action: "member_setup_save",
+        member_id: draft.memberId || null,
+        display_name: draft.displayName,
+        role: draft.role,
+        pin: draft.pin || null,
+        activities: draft.activities,
+        school_name: draft.schoolName,
+        grade_label: draft.gradeLabel,
+        dietary_preferences: draft.dietaryPreferences,
+        medications: draft.medications,
+        goals: draft.goals,
+      });
+      setMessage(
+        draft.memberId
+          ? `${draft.displayName}’s details are updated.`
+          : `${draft.displayName} was added to the family.`,
+      );
+      await load();
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not save that family member.",
       );
       return false;
     } finally {
@@ -889,10 +1205,22 @@ export function PepperClient() {
 
   useEffect(() => {
     const saved = localStorage.getItem("pepper_family_session") || "";
-    if (!saved) return;
     const timer = window.setTimeout(() => {
-      setToken(saved);
-      void load(saved);
+      if (saved) {
+        setToken(saved);
+        void load(saved);
+        return;
+      }
+      void call({ action: "login_members" }, "")
+        .then((result) => {
+          if (Array.isArray(result.members) && result.members.length) {
+            setMembers(result.members);
+            if (!result.members.some((member: Member) => member.slug === selected)) {
+              setSelected(result.members[0].slug);
+            }
+          }
+        })
+        .catch(() => undefined);
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -945,13 +1273,6 @@ export function PepperClient() {
   const preparationNow = state?.preparation?.now || [];
   const morning = state?.rituals?.morning;
   const evening = state?.rituals?.evening;
-  const todayEventCount = Array.isArray(morning?.today_events)
-    ? morning.today_events.length
-    : morning?.today_event_count ?? morning?.event_count;
-  const dueToday = dueTodayText(morning);
-  const preparationCount = Array.isArray(morning?.preparation)
-    ? morning.preparation.length
-    : morning?.preparation_count;
   const morningTomorrowHeadline =
     morning?.tomorrow?.headline || morning?.tomorrow_headline || "";
   const eveningTomorrowHeadline =
@@ -973,7 +1294,6 @@ export function PepperClient() {
     (item) =>
       item.severity === "urgent" || item.severity === "needs_attention",
   );
-  const prepare = readiness.filter((item) => item.severity === "prepare");
   const activeFamilyTasks = (state?.familyTasks || []).filter(
     (task) => !["completed", "canceled"].includes(task.status),
   );
@@ -1070,12 +1390,7 @@ export function PepperClient() {
   }
 
   async function updateGrocery(id: string, complete: boolean) {
-    await call({
-      action: "grocery",
-      id,
-      status: complete ? "completed" : "open",
-    });
-    await load();
+    await changeGrocery(id, complete ? "complete" : "reopen");
   }
 
   async function handlePreparation(id: string) {
@@ -1101,6 +1416,7 @@ export function PepperClient() {
     setRitualBusy(true);
     try {
       await call({ action: "reflect", type: "reflection", text: clean });
+      setReflectionSavedText(clean);
       setReflection("");
       setReflectionSaved(true);
       setMessage("Saved privately.");
@@ -1119,7 +1435,10 @@ export function PepperClient() {
   function openRitual(ritual: Ritual) {
     setView("today");
     setRitualOpen(ritual);
-    if (ritual === "evening") setReflectionSaved(false);
+    if (ritual === "evening") {
+      setReflectionSaved(false);
+      setReflectionSavedText("");
+    }
   }
 
   async function exploreInsight() {
@@ -1278,14 +1597,14 @@ export function PepperClient() {
   const calendarConfigured = Boolean(calendar?.configured);
   const calendarConnected = Boolean(calendar?.connected);
   const coverage = horizon?.coverage;
-  const weekIssueCount =
-    coverage?.coordination_issues ?? coordination.length ?? 0;
+  const weekIssueCount = coordination.length;
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
   const primaryNavigation = [
     ["today", "Today", House],
     ["week", "Next 7", CalendarRange],
     ...(actorIsAdult ? [["work", "Work", Briefcase] as const] : []),
     ["chores", "Chores", ClipboardCheck],
+    ["meals", "Meals", Utensils],
     ["ahead", "Ahead", Telescope],
     ["family", "Family", UsersRound],
     ["connections", "Connect", Cable],
@@ -1322,12 +1641,12 @@ export function PepperClient() {
               key={key}
               type="button"
               aria-current={
-                view === key || (view === "member" && key === "family")
+                view === key || (["member", "setup"].includes(view) && key === "family")
                   ? "page"
                   : undefined
               }
               className={
-                view === key || (view === "member" && key === "family")
+                view === key || (["member", "setup"].includes(view) && key === "family")
                   ? styles.tabActive
                   : styles.tab
               }
@@ -1432,8 +1751,11 @@ export function PepperClient() {
                   <span className={styles.arrow}>→</span>
                 </button>
               ) : rhythmPhase === "tomorrow" ? (
-                <article
-                  className={`${styles.lookAhead} ${styles.rhythmQuiet}`}
+                <button
+                  type="button"
+                  className={styles.lookAhead}
+                  aria-label="Open tomorrow's plan"
+                  onClick={() => setView("week")}
                 >
                   <div>
                     <span className={styles.sectionLabel}>
@@ -1443,9 +1765,10 @@ export function PepperClient() {
                     <p>
                       {tomorrowHeadline ||
                         "Pepper is keeping tomorrow in view without asking anything of you yet."}
-                    </p>
+                      </p>
                   </div>
-                </article>
+                  <span className={styles.arrow}>→</span>
+                </button>
               ) : (
                 <button
                   type="button"
@@ -1506,80 +1829,65 @@ export function PepperClient() {
                   </button>
 
                   {ritualOpen === "morning" ? (
-                    <>
-                      <div className={styles.eyebrow}>Morning Brief</div>
-                      <h2>
-                        {morning?.headline || "Here is the shape of today."}
-                      </h2>
-                      <div
-                        className={`${styles.evidence} ${styles.briefFacts}`}
-                      >
-                        {typeof todayEventCount === "number" ? (
-                          <p>
-                            <strong>
-                              {countLabel(todayEventCount, "event")}
-                            </strong>{" "}
-                            on today&apos;s calendar.
-                          </p>
-                        ) : null}
-                        {dueToday ? <p>{dueToday}</p> : null}
-                        {typeof preparationCount === "number" ? (
-                          <p>
-                            <strong>
-                              {countLabel(preparationCount, "preparation")}
-                            </strong>{" "}
-                            ready to handle before it becomes urgent.
-                          </p>
-                        ) : null}
-                      </div>
-                      {morningTomorrowHeadline ? (
-                        <div
-                          className={`${styles.prepareCard} ${styles.tomorrowPreview}`}
-                        >
-                          <span className={styles.sectionLabel}>Tomorrow</span>
-                          <p>{morningTomorrowHeadline}</p>
-                        </div>
-                      ) : null}
-                    </>
+                    <MorningBriefPanel
+                      state={state}
+                      morning={morning}
+                      openConsequences={openConsequences}
+                      preparation={preparationNow}
+                      onOpenItem={setSelectedItem}
+                      onOpenAttention={openAttention}
+                      onMeals={() => setView("meals")}
+                      onWeek={() => setView("week")}
+                      onMember={() => void openMember(state.member.slug)}
+                    />
                   ) : (
                     <>
-                      <div className={styles.eyebrow}>Evening Reflection</div>
-                      <h2>What is worth carrying forward?</h2>
-                      <p>
-                        {evening?.reflection_prompt ||
-                          evening?.prompt ||
-                          "What do you want to remember about today?"}
-                      </p>
-                      <textarea
-                        value={reflection}
-                        onChange={(event) => {
-                          setReflection(event.target.value);
-                          setReflectionSaved(false);
-                        }}
-                        placeholder={
-                          evening?.reflection_prompt ||
-                          evening?.prompt ||
-                          "Write a private reflection…"
-                        }
-                        rows={4}
-                        autoFocus
-                      />
-                      <button
-                        type="button"
-                        className={styles.secondaryButton}
-                        disabled={ritualBusy || !reflection.trim()}
-                        onClick={() => void saveReflection()}
-                      >
-                        {ritualBusy ? "Saving…" : "Save privately"}
-                      </button>
-                      {reflectionSaved && eveningTomorrowHeadline ? (
-                        <div
-                          className={`${styles.prepareCard} ${styles.tomorrowPreview}`}
-                        >
-                          <span className={styles.sectionLabel}>Tomorrow</span>
-                          <p>{eveningTomorrowHeadline}</p>
-                        </div>
-                      ) : null}
+                      {!reflectionSaved ? (
+                        <>
+                          <div className={styles.eyebrow}>
+                            {displayName(state.member)} · Evening Reflection
+                          </div>
+                          <h2>What is worth carrying forward?</h2>
+                          <p>
+                            {evening?.reflection_prompt ||
+                              evening?.prompt ||
+                              "What changed, what moved closer, and what can be released tonight?"}
+                          </p>
+                          <label className={styles.reflectionInput}>
+                            Daily inputs
+                            <textarea
+                              value={reflection}
+                              onChange={(event) => {
+                                setReflection(event.target.value);
+                                setReflectionSaved(false);
+                              }}
+                              placeholder={
+                                evening?.reflection_prompt ||
+                                evening?.prompt ||
+                                "Progress, drift, gratitude, health, and anything Pepper should remember…"
+                              }
+                              rows={6}
+                              autoFocus
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            disabled={ritualBusy || !reflection.trim()}
+                            onClick={() => void saveReflection()}
+                          >
+                            {ritualBusy ? "Saving…" : "Save privately and reflect"}
+                          </button>
+                        </>
+                      ) : (
+                        <EveningReflectionOutput
+                          state={state}
+                          input={reflectionSavedText}
+                          evening={evening}
+                          tomorrowHeadline={eveningTomorrowHeadline}
+                          onTomorrow={() => setView("week")}
+                        />
+                      )}
                     </>
                   )}
                 </article>
@@ -1615,6 +1923,13 @@ export function PepperClient() {
                 onOpen={(event) =>
                   setSelectedItem({ type: "event", item: event })
                 }
+              />
+            ) : null}
+
+            {state.frontSeat ? (
+              <FrontSeatCard
+                frontSeat={state.frontSeat}
+                onOpen={() => setFrontSeatOpen(true)}
               />
             ) : null}
 
@@ -1791,7 +2106,6 @@ export function PepperClient() {
                 weekIssueCount ? styles.confidenceNeedsWork : ""
               }`}
               disabled={!weekIssueCount}
-              aria-controls={weekIssueCount ? "week-decisions" : undefined}
               onClick={revealWeekDecisions}
             >
               <div className={styles.confidenceIcon}>
@@ -1813,39 +2127,10 @@ export function PepperClient() {
               </div>
               {weekIssueCount ? (
                 <span className={styles.confidenceActionLabel}>
-                  View decisions <ChevronRight size={19} aria-hidden="true" />
+                  Resolve next <ChevronRight size={19} aria-hidden="true" />
                 </span>
               ) : null}
             </button>
-
-            {readiness.length ? (
-              <section
-                className={styles.section}
-                id="week-decisions"
-                tabIndex={-1}
-              >
-                <div className={styles.sectionLabel}>Prepare / decide</div>
-                <div className={styles.noticeStack}>
-                  {[...coordination, ...prepare].slice(0, 8).map((item, index) =>
-                    item.severity === "prepare" ? (
-                      <article
-                        className={styles.prepareCard}
-                        key={`${item.type}-${item.title}-${index}`}
-                      >
-                        <strong>{item.title}</strong>
-                        <p>{item.summary}</p>
-                      </article>
-                    ) : (
-                      <AttentionCard
-                        item={item}
-                        key={`${item.type}-${item.title}-${index}`}
-                        onOpen={() => openAttention(item)}
-                      />
-                    ),
-                  )}
-                </div>
-              </section>
-            ) : null}
 
             <section className={styles.section}>
               <div className={styles.sectionLabel}>The week</div>
@@ -1949,6 +2234,22 @@ export function PepperClient() {
           />
         ) : null}
 
+        {view === "meals" ? (
+          <MealsPage
+            meals={state.meals || []}
+            mealNeeds={state.mealNeeds || []}
+            groceries={state.groceries || []}
+            state={state}
+            busy={actionBusy}
+            onSaveMeal={saveMeal}
+            onSaveNeed={saveMealNeed}
+            onRemoveNeed={removeMealNeed}
+            onGenerate={generateMealPlan}
+            onCreateGrocery={createGrocery}
+            onChangeGrocery={changeGrocery}
+          />
+        ) : null}
+
         {view === "work" && actorIsAdult ? (
           <WorkPage
             tasks={[...(state.familyTasks || []), ...(state.privateTasks || [])]}
@@ -1961,6 +2262,17 @@ export function PepperClient() {
           <FamilyDirectory
             members={state.members}
             onOpen={(slug) => void openMember(slug)}
+            canManage={actorIsAdult}
+            onSetup={() => setView("setup")}
+          />
+        ) : null}
+
+        {view === "setup" && actorIsAdult ? (
+          <FamilySetupPage
+            state={state}
+            busy={actionBusy}
+            onBack={() => setView("family")}
+            onSave={saveMemberSetup}
           />
         ) : null}
 
@@ -1968,9 +2280,12 @@ export function PepperClient() {
           <MemberPage
             state={memberState}
             busy={memberBusy}
+            actionBusy={actionBusy}
             household={state}
             onBack={() => setView("family")}
             onOpen={setSelectedItem}
+            onCreateChore={createChore}
+            onCreatePersonalTask={createPersonalTask}
           />
         ) : null}
 
@@ -2016,42 +2331,736 @@ export function PepperClient() {
         />
       ) : null}
 
-      <div className={styles.composer}>
-        {message ? <div className={styles.toast}>{message}</div> : null}
-        <div className={styles.composeInner}>
-          <button
-            type="button"
-            className={styles.mic}
-            onClick={listen}
-            aria-label="Talk to Pepper"
-          >
-            <Mic size={19} strokeWidth={1.8} />
-          </button>
-          <input
-            value={tell}
-            onChange={(event) => setTell(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void sendTell();
-            }}
-            placeholder="Tell Pepper what changed…"
-          />
-          <button
-            type="button"
-            className={styles.send}
-            disabled={busy || !tell.trim()}
-            onClick={() => void sendTell()}
-            aria-label="Send to Pepper"
-          >
-            ↑
-          </button>
+      {frontSeatOpen && state.frontSeat ? (
+        <FrontSeatSheet
+          frontSeat={state.frontSeat}
+          busy={actionBusy}
+          onClose={() => setFrontSeatOpen(false)}
+          onUpdate={updateFrontSeat}
+        />
+      ) : null}
+
+      {ritualOpen && message ? (
+        <div className={styles.ritualToast} role="status">
+          {message}
         </div>
-      </div>
+      ) : null}
+
+      {!ritualOpen ? (
+        <div className={styles.composer}>
+          {message ? <div className={styles.toast}>{message}</div> : null}
+          <div className={styles.composeInner}>
+            <button
+              type="button"
+              className={styles.mic}
+              onClick={listen}
+              aria-label="Talk to Pepper"
+            >
+              <Mic size={19} strokeWidth={1.8} />
+            </button>
+            <input
+              value={tell}
+              onChange={(event) => setTell(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void sendTell();
+              }}
+              placeholder="Tell Pepper what changed…"
+            />
+            <button
+              type="button"
+              className={styles.send}
+              disabled={busy || !tell.trim()}
+              onClick={() => void sendTell()}
+              aria-label="Send to Pepper"
+            >
+              ↑
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
 
 function memberName(state: PepperState, id?: string | null) {
   return displayName(state.members?.find((member) => member.id === id));
+}
+
+type BriefTaskGroup = "work" | "theatre" | "school" | "chores" | "personal";
+
+const BRIEF_TASK_LABELS: Record<BriefTaskGroup, string> = {
+  work: "Work",
+  theatre: "Theatre",
+  school: "School + homework",
+  chores: "Chores",
+  personal: "Personal + home",
+};
+
+function briefTaskText(task: FamilyTask) {
+  return [task.title, task.area, task.project, task.classification, ...(task.tags || [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function briefTaskGroup(task: FamilyTask): BriefTaskGroup {
+  const text = briefTaskText(task);
+  if (isChore(task)) return "chores";
+  if (/theat(?:er|re)|costum|wardrobe|rehearsal|production/.test(text)) {
+    return "theatre";
+  }
+  if (/homework|school|study|class|assignment|academic|test prep/.test(text)) {
+    return "school";
+  }
+  if (
+    isWorkTask(task) ||
+    /real estate|realtor|listing|escrow|open house|client property|broker/.test(text)
+  ) {
+    return "work";
+  }
+  return "personal";
+}
+
+function briefPriorityRank(task: FamilyTask) {
+  return {
+    critical: 0,
+    high: 1,
+    planned: 2,
+    later: 3,
+    unprioritized: 4,
+  }[workPriority(task)];
+}
+
+function compareBriefTasks(left: FamilyTask, right: FamilyTask) {
+  if (left.status !== right.status) {
+    if (left.status === "in_progress") return -1;
+    if (right.status === "in_progress") return 1;
+  }
+  const priorityDifference = briefPriorityRank(left) - briefPriorityRank(right);
+  if (priorityDifference) return priorityDifference;
+  if (left.due_at && right.due_at) {
+    const dueDifference = left.due_at.localeCompare(right.due_at);
+    if (dueDifference) return dueDifference;
+  } else if (left.due_at) {
+    return -1;
+  } else if (right.due_at) {
+    return 1;
+  }
+  return left.title.localeCompare(right.title);
+}
+
+function briefTaskTiming(task: FamilyTask, today: string) {
+  const due = localDateFor(task.due_at);
+  if (!due) return "No due date";
+  if (due < today) return "Overdue";
+  if (due === today) return "Due today";
+  return dateLabel(due);
+}
+
+function briefTaskPriority(task: FamilyTask) {
+  const priority = workPriority(task);
+  if (priority === "critical") return "Critical";
+  if (priority === "high") return "High priority";
+  if (priority === "planned") return "Planned";
+  if (priority === "later") return "Later";
+  return "Needs priority";
+}
+
+function MorningBriefPanel({
+  state,
+  morning,
+  openConsequences,
+  preparation,
+  onOpenItem,
+  onOpenAttention,
+  onMeals,
+  onWeek,
+  onMember,
+}: {
+  state: PepperState;
+  morning?: MorningRitual;
+  openConsequences: Consequence[];
+  preparation: PreparationItem[];
+  onOpenItem: (item: SelectedItem) => void;
+  onOpenAttention: (item: AttentionItem) => void;
+  onMeals: () => void;
+  onWeek: () => void;
+  onMember: () => void;
+}) {
+  const today = localDate();
+  const activeEvents = state.events
+    .filter(
+      (event) =>
+        localDateFor(event.starts_at) === today &&
+        !["completed", "canceled"].includes(event.status),
+    )
+    .sort(
+      (left, right) =>
+        new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
+    );
+  const taskMap = new Map<string, FamilyTask>();
+  for (const task of [
+    ...(state.familyTasks || []),
+    ...(state.privateTasks || []),
+    ...(state.chores || []),
+    ...(morning?.focus_tasks || []),
+  ]) {
+    taskMap.set(task.id, task);
+  }
+  const routineTaskTitles = new Set(
+    [...taskMap.values()]
+      .filter((task) => isChore(task) || isWorkTask(task))
+      .map((task) => task.title.trim().toLowerCase()),
+  );
+  const relevantPreparation = preparation.filter(
+    (item) => !routineTaskTitles.has(item.title.trim().toLowerCase()),
+  );
+  const focusTasks = [...taskMap.values()]
+    .filter(
+      (task) =>
+        task.owner_member_id === state.member.id &&
+        !["completed", "canceled"].includes(task.status),
+    )
+    .sort(compareBriefTasks);
+  const taskGroupOrder: BriefTaskGroup[] = ["work", "theatre", "school", "chores", "personal"];
+  const focusGroups = taskGroupOrder
+    .map((key) => {
+      const tasks = focusTasks.filter((task) => briefTaskGroup(task) === key);
+      const limit = key === "work" ? 6 : key === "theatre" ? 4 : 5;
+      return { key, label: BRIEF_TASK_LABELS[key], total: tasks.length, tasks: tasks.slice(0, limit) };
+    })
+    .filter((group) => group.total > 0);
+  const displayedTaskCount = focusGroups.reduce(
+    (total, group) => total + group.tasks.length,
+    0,
+  );
+  const transportEvents = activeEvents.filter(
+    (event) =>
+      Boolean(event.transport_status) ||
+      /pick[ -]?up|drop[ -]?off|school run|ride|transport/i.test(event.title),
+  );
+  const transportIssue = transportEvents.find(
+    (event) =>
+      event.transport_status === "unassigned" ||
+      !event.transport_owner_member_id,
+  );
+  const todayMeal = (state.meals || []).find(
+    (meal) => meal.meal_date === today,
+  );
+  const openGroceries = (state.groceries || []).filter(
+    (item) => item.status !== "completed",
+  );
+  const mealGroceries = todayMeal
+    ? openGroceries.filter((item) => item.meal_plan_id === todayMeal.id)
+    : openGroceries.filter((item) => !item.meal_plan_id);
+  const unassignedGroceries = mealGroceries.filter(
+    (item) => !item.owner_member_id,
+  );
+  const latestHealth = state.integrations?.apple_health?.latest;
+  const horizonDays = (state.horizon?.days || [])
+    .filter((day) => day.date > today)
+    .slice(0, 4);
+  const nextEvent = activeEvents[0];
+  const nextTask = focusTasks[0];
+  const firstAttention = openConsequences[0];
+  const firstTransport = transportIssue || transportEvents[0];
+  const outcomes = [
+    firstAttention
+      ? {
+          label: "Decision",
+          title: firstAttention.title,
+          detail: firstAttention.summary,
+          onOpen: () => onOpenAttention(firstAttention),
+        }
+      : nextTask
+        ? {
+            label: BRIEF_TASK_LABELS[briefTaskGroup(nextTask)],
+            title: nextTask.title,
+            detail: `${briefTaskPriority(nextTask)} · ${briefTaskTiming(nextTask, today)}${nextTask.project ? ` · ${nextTask.project}` : ""}`,
+            onOpen: () => onOpenItem({ type: "task", item: nextTask }),
+          }
+        : {
+            label: "Priority",
+            title: nextEvent?.title || "The known plan is covered",
+            detail: nextEvent
+              ? `Next at ${time(nextEvent.starts_at)}.`
+              : "No urgent outcome is unresolved.",
+            onOpen: nextEvent
+              ? () => onOpenItem({ type: "event", item: nextEvent })
+              : undefined,
+          },
+    firstTransport
+      ? {
+          label: "Handoff",
+          title: firstTransport.title,
+          detail: transportIssue
+            ? "A driver still needs to be assigned."
+            : `${memberName(state, firstTransport.transport_owner_member_id) || "Driver"} owns this ride.`,
+          onOpen: () => onOpenItem({ type: "event", item: firstTransport }),
+        }
+      : {
+          label: "Handoff",
+          title: "No uncovered ride found",
+          detail: "Pepper has no transportation gap in today's known plan.",
+        },
+    unassignedGroceries.length
+      ? {
+          label: "Capacity",
+          title: `${countLabel(unassignedGroceries.length, "grocery item")} need an owner`,
+          detail: todayMeal
+            ? `For tonight's ${todayMeal.meal_name}.`
+            : "Assign the weekly shop once.",
+          onOpen: onMeals,
+        }
+      : todayMeal
+        ? {
+            label: "Capacity",
+            title: todayMeal.meal_name,
+            detail: `Tonight's meal is in the plan${memberName(state, todayMeal.owner_member_id) ? ` with ${memberName(state, todayMeal.owner_member_id)} cooking` : ""}.`,
+            onOpen: onMeals,
+          }
+        : {
+            label: "Capacity",
+            title: latestHealth?.step_count
+              ? `${latestHealth.step_count.toLocaleString()} steps recorded`
+              : "Protect some recovery space",
+            detail: "Capacity is part of the plan, not an afterthought.",
+          },
+  ];
+
+  return (
+    <div className={styles.morningBrief}>
+      <header className={styles.morningBriefMasthead}>
+        <div>
+          <div className={styles.eyebrow}>
+            {displayName(state.member)} · Morning Brief
+          </div>
+          <h2>Protect the hinge points.</h2>
+        </div>
+        <div className={styles.morningBriefDate}>
+          <strong>{longDate()}</strong>
+          <span>{morning?.headline || "Live family state"}</span>
+        </div>
+      </header>
+
+      <section className={styles.morningBriefOutcomes}>
+        <div className={styles.morningBriefBandTitle}>
+          Three must-protect outcomes
+        </div>
+        <div className={styles.morningBriefOutcomeGrid}>
+          {outcomes.map((outcome, index) => {
+            const content = (
+              <>
+                <span>{index + 1}</span>
+                <div>
+                  <small>{outcome.label}</small>
+                  <strong>{outcome.title}</strong>
+                  <p>{outcome.detail}</p>
+                </div>
+              </>
+            );
+            return outcome.onOpen ? (
+              <button
+                type="button"
+                className={styles.morningBriefOutcome}
+                key={outcome.label}
+                onClick={outcome.onOpen}
+              >
+                {content}
+              </button>
+            ) : (
+              <div className={styles.morningBriefOutcome} key={outcome.label}>
+                {content}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className={styles.morningBriefColumns}>
+        <div className={styles.morningBriefColumn}>
+          <BriefSection title="Places to be + transportation">
+            {activeEvents.length ? (
+              activeEvents.slice(0, 7).map((event) => (
+                <button
+                  type="button"
+                  className={styles.morningBriefRow}
+                  key={event.id}
+                  onClick={() => onOpenItem({ type: "event", item: event })}
+                >
+                  <time>{time(event.starts_at)}</time>
+                  <span>
+                    <strong>{event.title}</strong>
+                    <small>
+                      {event.location || "Location not recorded"}
+                      {event.transport_status
+                        ? ` · ${memberName(state, event.transport_owner_member_id) || "Needs a driver"}`
+                        : ""}
+                    </small>
+                  </span>
+                  <ChevronRight size={16} aria-hidden="true" />
+                </button>
+              ))
+            ) : (
+              <BriefEmpty>No places are recorded for today.</BriefEmpty>
+            )}
+          </BriefSection>
+
+          <BriefSection title="Your task plan">
+            {focusGroups.length ? (
+              <>
+                <div className={styles.morningBriefTaskSummary}>
+                  <strong>
+                    {countLabel(
+                      morning?.task_summary?.open ?? focusTasks.length,
+                      "open task",
+                    )}
+                  </strong>
+                  <span>
+                    {morning?.task_summary?.high_priority
+                      ? `${countLabel(
+                          morning.task_summary.high_priority,
+                          "high-priority task",
+                          "high-priority tasks",
+                        )} · `
+                      : ""}
+                    Showing the next {displayedTaskCount}
+                  </span>
+                </div>
+                {focusGroups.map((group) => (
+                  <div className={styles.morningBriefTaskGroup} key={group.key}>
+                    <div className={styles.morningBriefTaskGroupHeader}>
+                      <strong>{group.label}</strong>
+                      <span>{group.total}</span>
+                    </div>
+                    {group.tasks.map((task) => (
+                      <button
+                        type="button"
+                        className={styles.morningBriefRow}
+                        key={task.id}
+                        onClick={() => onOpenItem({ type: "task", item: task })}
+                      >
+                        <span className={styles.morningBriefCheck} aria-hidden="true" />
+                        <span>
+                          <strong>{task.title}</strong>
+                          <small>
+                            {briefTaskPriority(task)} · {briefTaskTiming(task, today)}
+                            {task.project ? ` · ${task.project}` : ""}
+                          </small>
+                        </span>
+                        <ChevronRight size={16} aria-hidden="true" />
+                      </button>
+                    ))}
+                    {group.total > group.tasks.length ? (
+                      <button
+                        type="button"
+                        className={styles.morningBriefMore}
+                        onClick={onMember}
+                      >
+                        {group.total - group.tasks.length} more in {group.label.toLowerCase()}
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </>
+            ) : (
+              <BriefEmpty>No open task is assigned to you.</BriefEmpty>
+            )}
+          </BriefSection>
+
+          <BriefSection title="Confirm + think ahead" tone="coral">
+            {openConsequences.length || relevantPreparation.length ? (
+              <>
+                {openConsequences.slice(0, 3).map((item) => (
+                  <button
+                    type="button"
+                    className={styles.morningBriefDecision}
+                    key={item.id}
+                    onClick={() => onOpenAttention(item)}
+                  >
+                    <strong>{item.title}</strong>
+                    <span>{item.summary}</span>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                ))}
+                {relevantPreparation.slice(0, 3).map((item) => (
+                  <div className={styles.morningBriefDecision} key={item.id}>
+                    <strong>{item.title}</strong>
+                    <span>{item.summary || "Worth handling before it becomes urgent."}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <BriefEmpty>No decision is waiting on you.</BriefEmpty>
+            )}
+          </BriefSection>
+        </div>
+
+        <div className={styles.morningBriefColumn}>
+          <BriefSection title={"Tonight's dinner + groceries"} tone="green">
+            <button
+              type="button"
+              className={styles.morningBriefFeature}
+              onClick={onMeals}
+            >
+              <Utensils size={20} aria-hidden="true" />
+              <span>
+                <strong>{todayMeal?.meal_name || "Dinner is not planned yet"}</strong>
+                <small>
+                  {todayMeal
+                    ? [
+                        memberName(state, todayMeal.owner_member_id)
+                          ? `${memberName(state, todayMeal.owner_member_id)} cooks`
+                          : "Cook unassigned",
+                        memberName(state, todayMeal.shopping_owner_member_id)
+                          ? `${memberName(state, todayMeal.shopping_owner_member_id)} shops`
+                          : "Shop unassigned",
+                      ].join(" · ")
+                    : "Open Meals to choose dinner and assign the shop."}
+                </small>
+              </span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+            {mealGroceries.length ? (
+              <p className={styles.morningBriefInlineList}>
+                Groceries: {mealGroceries.slice(0, 4).map((item) => item.item).join(", ")}
+                {mealGroceries.length > 4 ? ` +${mealGroceries.length - 4} more` : ""}
+              </p>
+            ) : null}
+          </BriefSection>
+
+          <BriefSection title="No-surprises horizon" tone="blue">
+            <button
+              type="button"
+              className={styles.morningBriefFeature}
+              onClick={onWeek}
+            >
+              <CalendarRange size={20} aria-hidden="true" />
+              <span>
+                <strong>{morning?.tomorrow?.headline || "Open the next seven days"}</strong>
+                <small>Family events, appointments, exceptions, and decisions.</small>
+              </span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+            {horizonDays.map((day) => {
+              const familyItems = (day.items || []).filter(
+                (item) => item.item_type !== "task",
+              );
+              const count = familyItems.length + (day.watch || []).length;
+              return count ? (
+                <div className={styles.morningBriefHorizonRow} key={day.date}>
+                  <strong>{day.label || dateLabel(day.date)}</strong>
+                  <span>{countLabel(count, "known family item")}</span>
+                </div>
+              ) : null;
+            })}
+          </BriefSection>
+
+          <BriefSection title="Evening self-care" tone="lavender">
+            <div className={styles.morningBriefFeatureStatic}>
+              <HeartPulse size={20} aria-hidden="true" />
+              <span>
+                <strong>
+                  {latestHealth?.step_count
+                    ? `${latestHealth.step_count.toLocaleString()} steps so far`
+                    : "Leave capacity for the close of the day"}
+                </strong>
+                <small>
+                  {latestHealth?.step_goal
+                    ? `${latestHealth.step_goal.toLocaleString()} step goal · ${latestHealth.active_minutes || 0} active minutes`
+                    : "Health context stays private to the person who can see it."}
+                </small>
+              </span>
+            </div>
+          </BriefSection>
+
+          <BriefSection title="Heart + compass">
+            <dl className={styles.morningBriefCompass}>
+              <div>
+                <dt>Mindset</dt>
+                <dd>{state.weeklyInsight?.observation || "Protect what matters before adding more."}</dd>
+              </div>
+              <div>
+                <dt>Future {displayName(state.member)}</dt>
+                <dd>{morning?.tomorrow?.headline || "Carry forward only what remains truly open."}</dd>
+              </div>
+              <div>
+                <dt>Gratitude</dt>
+                <dd>Available for tonight&apos;s private reflection.</dd>
+              </div>
+            </dl>
+          </BriefSection>
+
+          <BriefSection title="Trust + freshness" tone="quiet">
+            <div className={styles.morningBriefTrust}>
+              <span>
+                Calendar {state.calendarStatus?.connected ? "connected" : "not connected"}
+                {state.calendarStatus?.last_synced_at
+                  ? ` · ${connectionActivity(state.calendarStatus.last_synced_at)}`
+                  : ""}
+              </span>
+              <span>
+                Email {state.integrations?.gmail?.connected ? "connected" : "not connected"}
+                {state.integrations?.gmail?.last_synced_at
+                  ? ` · ${connectionActivity(state.integrations.gmail.last_synced_at)}`
+                  : ""}
+              </span>
+              <span>Built for {displayName(state.member)} from permitted One Brain state.</span>
+            </div>
+          </BriefSection>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BriefSection({
+  title,
+  tone = "default",
+  children,
+}: {
+  title: string;
+  tone?: "default" | "blue" | "green" | "coral" | "lavender" | "quiet";
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={styles.morningBriefSection} data-tone={tone}>
+      <h3>{title}</h3>
+      <div>{children}</div>
+    </section>
+  );
+}
+
+function BriefEmpty({ children }: { children: React.ReactNode }) {
+  return <p className={styles.morningBriefEmpty}>{children}</p>;
+}
+
+function EveningReflectionOutput({
+  state,
+  input,
+  evening,
+  tomorrowHeadline,
+  onTomorrow,
+}: {
+  state: PepperState;
+  input: string;
+  evening?: EveningRitual;
+  tomorrowHeadline: string;
+  onTomorrow: () => void;
+}) {
+  const today = localDate();
+  const taskMap = new Map<string, FamilyTask>();
+  for (const task of [
+    ...(state.familyTasks || []),
+    ...(state.privateTasks || []),
+    ...(state.chores || []),
+  ]) {
+    taskMap.set(task.id, task);
+  }
+  const completedTasks = [...taskMap.values()].filter(
+    (task) =>
+      task.status === "completed" &&
+      localDateFor(task.completed_at || task.updated_at) === today,
+  );
+  const completedEvents = state.events.filter(
+    (event) =>
+      event.status === "completed" && localDateFor(event.starts_at) === today,
+  );
+  const openDue = [...taskMap.values()].filter(
+    (task) =>
+      !["completed", "canceled"].includes(task.status) &&
+      localDateFor(task.due_at) === today,
+  );
+  const openConsequences = (state.consequences || []).filter(
+    (item) => !item.status || item.status === "open",
+  );
+  const verifiedHandled =
+    completedTasks.length + completedEvents.length || evening?.handled_today || 0;
+  const latestHealth = state.integrations?.apple_health?.latest;
+  const usageToday = (state.captures || []).filter(
+    (capture) =>
+      localDateFor(
+        capture.created_at || capture.captured_at || capture.updated_at,
+      ) === today,
+  ).length;
+  const person = displayName(state.member);
+
+  return (
+    <div className={styles.eveningOutput}>
+      <header className={styles.eveningOutputHeader}>
+        <div className={styles.eyebrow}>{person} · Private reflection</div>
+        <h2>Pepper Evening Reflection</h2>
+        <span>{longDate()}</span>
+      </header>
+
+      <p className={styles.eveningLead}>
+        <strong>Provisional answer:</strong>{" "}
+        {verifiedHandled
+          ? `today moved closer through ${countLabel(verifiedHandled, "verified completion")}.`
+          : "Pepper does not yet have completion evidence for today; missing evidence is not the same as failure."}
+        {latestHealth?.step_count
+          ? ` Health shows ${latestHealth.step_count.toLocaleString()} steps${latestHealth.active_minutes ? ` and ${latestHealth.active_minutes} active minutes` : ""}.`
+          : ""}
+      </p>
+
+      <blockquote className={styles.eveningInputQuote}>
+        <strong>Your account of the day</strong>
+        <p>{input}</p>
+      </blockquote>
+
+      <section>
+        <h3>Today&apos;s principle: Carry only what is truly open.</h3>
+        <p>
+          Pepper separates verified completion, a deliberate cancelation, and a missing update. An incomplete record does not automatically become tonight&apos;s emergency.
+        </p>
+      </section>
+
+      <section>
+        <h3>Honest drift</h3>
+        <p>
+          {openDue.length || openConsequences.length
+            ? `${countLabel(openDue.length, "due item")} and ${countLabel(openConsequences.length, "decision")} remain visibly open. Pepper is not marking either as failed without evidence.`
+            : "Nothing due today or awaiting a decision remains open in the state this person is permitted to see."}
+        </p>
+      </section>
+
+      <section className={styles.enoughnessGate}>
+        <h3>Enoughness Gate</h3>
+        <p>
+          Do not turn every missing checkbox into tonight&apos;s work. Preserve what is already handled, repair only consequential gaps, and release optional resets that do not outrank health, family handoffs, or tomorrow&apos;s first commitment.
+        </p>
+      </section>
+
+      <section>
+        <h3>Values check</h3>
+        <p>
+          {state.weeklyInsight?.observation ||
+            "Truth means distinguishing scheduled from completed. Care means protecting capacity. Self-trust means defining enough before adding effort."}
+        </p>
+      </section>
+
+      <section>
+        <h3>Future {person}</h3>
+        <p>
+          {tomorrowHeadline ||
+            "Begin with a short exact-state check, protect the first commitment, and carry forward only verified gaps."}
+        </p>
+        <button type="button" className={styles.textButton} onClick={onTomorrow}>
+          Open tomorrow&apos;s plan <ChevronRight size={16} aria-hidden="true" />
+        </button>
+      </section>
+
+      <footer className={styles.eveningFreshness}>
+        <strong>Sync freshness</strong>
+        <span>
+          Reflection saved privately for {person}. {usageToday
+            ? `${countLabel(usageToday, "Pepper update")} recorded today. `
+            : ""}
+          Calendar {state.calendarStatus?.connected ? "connected" : "not connected"}; email {state.integrations?.gmail?.connected ? "connected" : "not connected"}.
+        </span>
+      </footer>
+    </div>
+  );
 }
 
 function AttentionCard({
@@ -2177,6 +3186,147 @@ function SchoolTransportGroup({
         ))}
       </div>
     </details>
+  );
+}
+
+function FrontSeatCard({
+  frontSeat,
+  onOpen,
+}: {
+  frontSeat: FrontSeatState;
+  onOpen: () => void;
+}) {
+  const today = frontSeat.today;
+  return (
+    <section className={styles.section}>
+      <button
+        type="button"
+        className={styles.frontSeatCard}
+        onClick={onOpen}
+        aria-label={`Front seat today: ${today.assigned_member.display_name}. Open the rotation.`}
+      >
+        <span className={styles.frontSeatIcon} aria-hidden="true">
+          <Armchair size={21} strokeWidth={1.7} />
+        </span>
+        <span className={styles.frontSeatCardBody}>
+          <span className={styles.sectionLabel}>Front seat today</span>
+          <strong>{today.assigned_member.display_name}</strong>
+          <small>
+            {today.status === "confirmed"
+              ? "Ride confirmed"
+              : today.source === "manual"
+                ? "Today’s turn was changed"
+                : "Posey → Chloe → Lyra"}
+          </small>
+        </span>
+        <ChevronRight size={19} aria-hidden="true" />
+      </button>
+    </section>
+  );
+}
+
+function FrontSeatSheet({
+  frontSeat,
+  busy,
+  onClose,
+  onUpdate,
+}: {
+  frontSeat: FrontSeatState;
+  busy: boolean;
+  onClose: () => void;
+  onUpdate: (
+    operation: "assign" | "reset" | "confirm",
+    assignedMemberId?: string,
+  ) => Promise<void>;
+}) {
+  const today = frontSeat.today;
+  return (
+    <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
+      <section
+        className={`${styles.actionSheet} ${styles.frontSeatSheet}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="front-seat-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button type="button" className={styles.sheetClose} onClick={onClose} aria-label="Close">
+          <X size={19} />
+        </button>
+        <div className={styles.eyebrow}>Family rotation</div>
+        <h2 id="front-seat-title">The front-seat turn</h2>
+        <p className={styles.sheetIntro}>
+          Youngest to oldest, one day at a time. A change today will not disturb tomorrow’s turn.
+        </p>
+
+        <div className={styles.frontSeatToday} data-confirmed={today.status === "confirmed"}>
+          <span className={styles.frontSeatTodayIcon} aria-hidden="true">
+            <Armchair size={26} strokeWidth={1.6} />
+          </span>
+          <span>
+            <small>Today</small>
+            <strong>{today.assigned_member.display_name}</strong>
+            <span>
+              {today.status === "confirmed"
+                ? "Confirmed in front"
+                : today.source === "manual"
+                  ? "Changed for today"
+                  : "Regular turn"}
+            </span>
+          </span>
+          {today.status === "confirmed" ? <Check size={21} aria-label="Confirmed" /> : null}
+        </div>
+
+        {frontSeat.can_manage ? (
+          <div className={styles.frontSeatManage}>
+            <span>Change today’s turn</span>
+            <div className={styles.frontSeatChoices} role="group" aria-label="Choose today’s front-seat rider">
+              {frontSeat.participants.map((participant) => (
+                <button
+                  type="button"
+                  key={participant.id}
+                  aria-pressed={participant.id === today.assigned_member_id}
+                  disabled={busy || participant.id === today.assigned_member_id}
+                  onClick={() => void onUpdate("assign", participant.id)}
+                >
+                  {participant.display_name}
+                </button>
+              ))}
+            </div>
+            {today.source === "manual" ? (
+              <button
+                type="button"
+                className={styles.frontSeatReset}
+                disabled={busy}
+                onClick={() => void onUpdate("reset")}
+              >
+                <RotateCcw size={15} aria-hidden="true" /> Restore regular turn
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <p className={styles.permissionNote}>Danielle or Matt can change today’s turn.</p>
+        )}
+
+        <div className={styles.frontSeatWeek}>
+          <strong>Coming up</strong>
+          {frontSeat.days.slice(1).map((day) => (
+            <div className={styles.frontSeatDay} key={day.date}>
+              <span>{dateLabel(day.date)}</span>
+              <strong>{day.assigned_member.display_name}</strong>
+              {day.source === "manual" ? <small>Changed</small> : null}
+            </div>
+          ))}
+        </div>
+
+        {today.can_confirm && today.status !== "confirmed" ? (
+          <div className={styles.sheetActions}>
+            <button type="button" disabled={busy} onClick={() => void onUpdate("confirm")}>
+              <Check size={17} aria-hidden="true" /> {busy ? "Saving…" : "Confirm today’s ride"}
+            </button>
+          </div>
+        ) : null}
+      </section>
+    </div>
   );
 }
 
@@ -3133,12 +4283,14 @@ function choreSchedule(task: FamilyTask) {
 function ChoreComposer({
   members,
   actor,
+  initialOwnerMemberId,
   busy,
   onClose,
   onCreate,
 }: {
   members: PepperState["members"];
   actor: PepperState["member"];
+  initialOwnerMemberId?: string;
   busy: boolean;
   onClose: () => void;
   onCreate: (draft: ChoreDraft) => Promise<void>;
@@ -3146,7 +4298,7 @@ function ChoreComposer({
   const actorIsAdult = ["adult_admin", "adult"].includes(actor.role);
   const [draft, setDraft] = useState<ChoreDraft>({
     title: "",
-    ownerMemberId: actorIsAdult ? "" : actor.id,
+    ownerMemberId: actorIsAdult ? initialOwnerMemberId || "" : actor.id,
     dueDate: localDate(),
     recurrence: "none",
   });
@@ -3226,12 +4378,698 @@ function ChoreComposer({
   );
 }
 
+function PersonalTaskComposer({
+  busy,
+  onClose,
+  onCreate,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onCreate: (draft: PersonalTaskDraft) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<PersonalTaskDraft>({
+    title: "",
+    dueDate: "",
+    priority: "P2",
+  });
+  return (
+    <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
+      <form
+        className={`${styles.actionSheet} ${styles.choreComposer}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-personal-task-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (draft.title.trim()) void onCreate({ ...draft, title: draft.title.trim() });
+        }}
+      >
+        <button type="button" className={styles.sheetClose} onClick={onClose} aria-label="Close">
+          <X size={19} />
+        </button>
+        <div className={styles.eyebrow}>Private to you</div>
+        <h2 id="add-personal-task-title">Add my to-do</h2>
+        <label className={styles.choreField}>
+          To-do
+          <input autoFocus maxLength={240} value={draft.title} placeholder="What do you need to do?" onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+        </label>
+        <div className={styles.choreFieldGrid}>
+          <label className={styles.choreField}>
+            Due
+            <input type="date" value={draft.dueDate} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })} />
+          </label>
+          <label className={styles.choreField}>
+            Priority
+            <select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as PersonalTaskDraft["priority"] })}>
+              <option value="P0">Critical</option>
+              <option value="P1">High</option>
+              <option value="P2">Planned</option>
+              <option value="P3">Later</option>
+            </select>
+          </label>
+        </div>
+        <div className={styles.sheetActions}>
+          <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || !draft.title.trim()}>
+            <Plus size={17} aria-hidden="true" /> {busy ? "Adding…" : "Add to-do"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function MealsPage({
+  meals,
+  mealNeeds,
+  groceries,
+  state,
+  busy,
+  onSaveMeal,
+  onSaveNeed,
+  onRemoveNeed,
+  onGenerate,
+  onCreateGrocery,
+  onChangeGrocery,
+}: {
+  meals: MealPlanItem[];
+  mealNeeds: MealNeed[];
+  groceries: GroceryItem[];
+  state: PepperState;
+  busy: boolean;
+  onSaveMeal: (draft: MealDraft) => Promise<boolean>;
+  onSaveNeed: (draft: MealNeedDraft) => Promise<boolean>;
+  onRemoveNeed: (id: string) => Promise<void>;
+  onGenerate: () => Promise<boolean>;
+  onCreateGrocery: (draft: GroceryDraft) => Promise<boolean>;
+  onChangeGrocery: (
+    id: string,
+    operation: "assign" | "attach" | "complete" | "reopen",
+    value?: string,
+  ) => Promise<void>;
+}) {
+  const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+  const [mealDraft, setMealDraft] = useState<MealDraft | null>(null);
+  const [needComposerOpen, setNeedComposerOpen] = useState(false);
+  const [groceryComposerOpen, setGroceryComposerOpen] = useState(false);
+  const today = localDate();
+  const weekDates = Array.from({ length: 7 }, (_, index) => addDateDays(today, index));
+  const weekMeals = weekDates.map((date) => ({
+    date,
+    meal: meals.find((candidate) => candidate.meal_date === date),
+  }));
+  const weekMealIds = new Set(weekMeals.flatMap(({ meal }) => (meal ? [meal.id] : [])));
+  const weekGroceries = groceries
+    .filter((item) => !item.meal_plan_id || weekMealIds.has(item.meal_plan_id))
+    .sort((left, right) => {
+      if (left.status !== right.status) return left.status === "completed" ? 1 : -1;
+      return left.item.localeCompare(right.item);
+    });
+  const openCount = weekGroceries.filter((item) => item.status !== "completed").length;
+  const unassignedCount = weekGroceries.filter(
+    (item) => item.status !== "completed" && !item.owner_member_id,
+  ).length;
+
+  return (
+    <>
+      <section className={`${styles.hero} ${styles.mealHero}`}>
+        <div className={styles.eyebrow}>Family table</div>
+        <h1>This week, fed.</h1>
+        <p>
+          Meals, family needs, groceries, and who is handling each item stay in one plan.
+        </p>
+      </section>
+
+      <section className={styles.mealNeedsSection}>
+        <div className={styles.sectionHeading}>
+          <div>
+            <div className={styles.sectionLabel}>Family meal needs</div>
+            <p>Pepper keeps these visible while every meal is planned.</p>
+          </div>
+          {actorIsAdult ? (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={() => setNeedComposerOpen(true)}
+            >
+              <Plus size={15} aria-hidden="true" /> Add need
+            </button>
+          ) : null}
+        </div>
+        {mealNeeds.length ? (
+          <div className={styles.mealNeedList}>
+            {mealNeeds.map((need) => {
+              const person = state.members.find((member) => member.id === need.member_id);
+              return (
+                <div className={styles.mealNeed} data-type={need.need_type} key={need.id}>
+                  <span>
+                    <strong>{displayName(person)}</strong>
+                    {need.label}
+                  </span>
+                  <small>{need.need_type}</small>
+                  {actorIsAdult ? (
+                    <button
+                      type="button"
+                      aria-label={`Remove ${need.label}`}
+                      disabled={busy}
+                      onClick={() => void onRemoveNeed(need.id)}
+                    >
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className={styles.mealNeedsEmpty}>
+            No allergies, avoidances, preferences, nutrition needs, or schedule constraints are saved yet.
+          </div>
+        )}
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
+          <div>
+            <div className={styles.sectionLabel}>Seven-day meal plan</div>
+            <p>Generated from saved family needs, then editable day by day.</p>
+          </div>
+          {actorIsAdult ? (
+            <button
+              type="button"
+              className={styles.generateMealButton}
+              disabled={busy}
+              onClick={() => void onGenerate()}
+            >
+              <Sparkles size={16} aria-hidden="true" />
+              {busy ? "Planning…" : "Plan my week"}
+            </button>
+          ) : null}
+        </div>
+        <div className={styles.mealWeek}>
+          {weekMeals.map(({ date, meal }) => {
+            const cook = memberName(state, meal?.owner_member_id);
+            const shopper = memberName(state, meal?.shopping_owner_member_id);
+            const linked = meal
+              ? weekGroceries.filter((item) => item.meal_plan_id === meal.id).length
+              : 0;
+            return (
+              <button
+                type="button"
+                className={`${styles.mealDayRow} ${meal ? "" : styles.mealDayEmpty}`}
+                key={date}
+                disabled={!actorIsAdult}
+                onClick={() =>
+                  setMealDraft({
+                    mealDate: date,
+                    mealName: meal?.meal_name || "",
+                    ownerMemberId: meal?.owner_member_id || "",
+                    shoppingOwnerMemberId: meal?.shopping_owner_member_id || "",
+                  })
+                }
+              >
+                <time>{dateLabel(date)}</time>
+                <span className={styles.mealDayBody}>
+                  <strong>{meal?.meal_name || "Meal not planned"}</strong>
+                  <small>
+                    {meal
+                      ? [cook && `${cook} cooking`, shopper && `${shopper} shopping`, `${linked} ${linked === 1 ? "item" : "items"}`]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : actorIsAdult
+                        ? "Tap to plan"
+                        : "Not planned yet"}
+                  </small>
+                </span>
+                {actorIsAdult ? <ChevronRight size={18} aria-hidden="true" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.groceryHeading}>
+          <div>
+            <div className={styles.sectionLabel}>Groceries for the plan</div>
+            <p>
+              {openCount} open{unassignedCount ? ` · ${unassignedCount} need an owner` : " · all assigned"}
+            </p>
+          </div>
+          <button
+            type="button"
+            className={styles.groceryAdd}
+            onClick={() => setGroceryComposerOpen(true)}
+          >
+            <Plus size={16} aria-hidden="true" /> Add item
+          </button>
+        </div>
+        <div className={styles.groceryList}>
+          {weekGroceries.length ? (
+            weekGroceries.map((item) => {
+              const completed = item.status === "completed";
+              const canComplete =
+                actorIsAdult || !item.owner_member_id || item.owner_member_id === state.member.id;
+              const linkedMeal = meals.find((meal) => meal.id === item.meal_plan_id);
+              return (
+                <article
+                  className={`${styles.groceryRow} ${completed ? styles.groceryRowDone : ""}`}
+                  key={item.id}
+                >
+                  <button
+                    type="button"
+                    className={`${styles.groceryCheck} ${completed ? styles.groceryCheckDone : ""}`}
+                    aria-label={completed ? `Restore ${item.item}` : `Complete ${item.item}`}
+                    disabled={busy || !canComplete}
+                    onClick={() =>
+                      void onChangeGrocery(item.id, completed ? "reopen" : "complete")
+                    }
+                  >
+                    {completed ? <Check size={16} aria-hidden="true" /> : null}
+                  </button>
+                  <div className={styles.groceryBody}>
+                    <strong>{item.item}</strong>
+                    <small>{linkedMeal?.meal_name || "Weekly staples"}</small>
+                  </div>
+                  {actorIsAdult ? (
+                    <div className={styles.groceryControls}>
+                      <label>
+                        <span>Meal</span>
+                        <select
+                          value={item.meal_plan_id || ""}
+                          disabled={busy}
+                          onChange={(event) =>
+                            void onChangeGrocery(item.id, "attach", event.target.value)
+                          }
+                        >
+                          <option value="">Weekly staples</option>
+                          {weekMeals.flatMap(({ meal }) =>
+                            meal ? [<option key={meal.id} value={meal.id}>{dateLabel(meal.meal_date)} · {meal.meal_name}</option>] : [],
+                          )}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Owner</span>
+                        <select
+                          value={item.owner_member_id || ""}
+                          disabled={busy}
+                          onChange={(event) =>
+                            void onChangeGrocery(item.id, "assign", event.target.value)
+                          }
+                        >
+                          <option value="">Needs an owner</option>
+                          {state.members.map((member) => (
+                            <option key={member.id} value={member.id}>{displayName(member)}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ) : (
+                    <span className={item.owner_member_id ? styles.ownerPill : styles.needPill}>
+                      {memberName(state, item.owner_member_id) || "Needs an owner"}
+                    </span>
+                  )}
+                </article>
+              );
+            })
+          ) : (
+            <div className={styles.groceryEmpty}>
+              <ShoppingBasket size={19} aria-hidden="true" />
+              <span>No groceries are attached to this week yet.</span>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {mealDraft ? (
+        <MealComposer
+          draft={mealDraft}
+          members={state.members}
+          mealNeeds={mealNeeds}
+          busy={busy}
+          onClose={() => setMealDraft(null)}
+          onSave={async (draft) => {
+            const saved = await onSaveMeal(draft);
+            if (saved) setMealDraft(null);
+          }}
+        />
+      ) : null}
+      {needComposerOpen ? (
+        <MealNeedComposer
+          members={state.members}
+          busy={busy}
+          onClose={() => setNeedComposerOpen(false)}
+          onSave={async (draft) => {
+            const saved = await onSaveNeed(draft);
+            if (saved) setNeedComposerOpen(false);
+          }}
+        />
+      ) : null}
+      {groceryComposerOpen ? (
+        <GroceryComposer
+          meals={weekMeals.flatMap(({ meal }) => (meal ? [meal] : []))}
+          members={state.members}
+          actor={state.member}
+          busy={busy}
+          onClose={() => setGroceryComposerOpen(false)}
+          onSave={async (draft) => {
+            const saved = await onCreateGrocery(draft);
+            if (saved) setGroceryComposerOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function MealComposer({
+  draft: initialDraft,
+  members,
+  mealNeeds,
+  busy,
+  onClose,
+  onSave,
+}: {
+  draft: MealDraft;
+  members: PepperState["members"];
+  mealNeeds: MealNeed[];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (draft: MealDraft) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(initialDraft);
+  return (
+    <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
+      <form
+        className={`${styles.actionSheet} ${styles.mealComposer}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plan-meal-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (draft.mealName.trim()) void onSave({ ...draft, mealName: draft.mealName.trim() });
+        }}
+      >
+        <button type="button" className={styles.sheetClose} onClick={onClose} aria-label="Close"><X size={19} /></button>
+        <div className={styles.eyebrow}>{dateLabel(draft.mealDate)}</div>
+        <h2 id="plan-meal-title">Plan this meal</h2>
+        {mealNeeds.length ? (
+          <div className={styles.mealComposerNeeds}>
+            <strong>Keep in view</strong>
+            <span>{mealNeeds.map((need) => `${displayName(members.find((member) => member.id === need.member_id))}: ${need.label}`).join(" · ")}</span>
+          </div>
+        ) : null}
+        <label className={styles.choreField}>
+          Meal
+          <input autoFocus maxLength={240} value={draft.mealName} placeholder="What are we eating?" onChange={(event) => setDraft({ ...draft, mealName: event.target.value })} />
+        </label>
+        <div className={styles.choreFieldGrid}>
+          <label className={styles.choreField}>
+            Cooking
+            <select value={draft.ownerMemberId} onChange={(event) => setDraft({ ...draft, ownerMemberId: event.target.value })}>
+              <option value="">Needs an owner</option>
+              {members.map((member) => <option key={member.id} value={member.id}>{displayName(member)}</option>)}
+            </select>
+          </label>
+          <label className={styles.choreField}>
+            Shopping
+            <select value={draft.shoppingOwnerMemberId} onChange={(event) => setDraft({ ...draft, shoppingOwnerMemberId: event.target.value })}>
+              <option value="">Needs an owner</option>
+              {members.map((member) => <option key={member.id} value={member.id}>{displayName(member)}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className={styles.sheetActions}>
+          <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || !draft.mealName.trim()}><Utensils size={17} aria-hidden="true" /> {busy ? "Saving…" : "Save meal"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function MealNeedComposer({ members, busy, onClose, onSave }: {
+  members: PepperState["members"];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (draft: MealNeedDraft) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<MealNeedDraft>({
+    memberId: members[0]?.id || "",
+    needType: "preference",
+    label: "",
+    details: "",
+  });
+  return (
+    <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
+      <form className={`${styles.actionSheet} ${styles.mealComposer}`} role="dialog" aria-modal="true" aria-labelledby="meal-need-title" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); if (draft.label.trim()) void onSave({ ...draft, label: draft.label.trim() }); }}>
+        <button type="button" className={styles.sheetClose} onClick={onClose} aria-label="Close"><X size={19} /></button>
+        <div className={styles.eyebrow}>Family table</div>
+        <h2 id="meal-need-title">Add a meal need</h2>
+        <div className={styles.choreFieldGrid}>
+          <label className={styles.choreField}>Person<select value={draft.memberId} onChange={(event) => setDraft({ ...draft, memberId: event.target.value })}>{members.map((member) => <option key={member.id} value={member.id}>{displayName(member)}</option>)}</select></label>
+          <label className={styles.choreField}>Type<select value={draft.needType} onChange={(event) => setDraft({ ...draft, needType: event.target.value as MealNeed["need_type"] })}><option value="allergy">Allergy</option><option value="avoidance">Avoidance</option><option value="preference">Preference</option><option value="nutrition">Nutrition</option><option value="schedule">Schedule</option></select></label>
+        </div>
+        <label className={styles.choreField}>Need<input autoFocus maxLength={160} value={draft.label} placeholder="For example, dairy-free" onChange={(event) => setDraft({ ...draft, label: event.target.value })} /></label>
+        <label className={styles.choreField}>Details (optional)<input maxLength={500} value={draft.details} placeholder="Anything Pepper should remember" onChange={(event) => setDraft({ ...draft, details: event.target.value })} /></label>
+        <div className={styles.sheetActions}><button type="button" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" disabled={busy || !draft.memberId || !draft.label.trim()}><Plus size={17} aria-hidden="true" /> {busy ? "Saving…" : "Add need"}</button></div>
+      </form>
+    </div>
+  );
+}
+
+function GroceryComposer({ meals, members, actor, busy, onClose, onSave }: {
+  meals: MealPlanItem[];
+  members: PepperState["members"];
+  actor: PepperState["member"];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (draft: GroceryDraft) => Promise<void>;
+}) {
+  const actorIsAdult = ["adult_admin", "adult"].includes(actor.role);
+  const [draft, setDraft] = useState<GroceryDraft>({ item: "", ownerMemberId: actorIsAdult ? "" : actor.id, mealPlanId: "" });
+  return (
+    <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
+      <form className={`${styles.actionSheet} ${styles.mealComposer}`} role="dialog" aria-modal="true" aria-labelledby="grocery-title" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); if (draft.item.trim()) void onSave({ ...draft, item: draft.item.trim() }); }}>
+        <button type="button" className={styles.sheetClose} onClick={onClose} aria-label="Close"><X size={19} /></button>
+        <div className={styles.eyebrow}>Weekly meal plan</div>
+        <h2 id="grocery-title">Add a grocery</h2>
+        <label className={styles.choreField}>Item<input autoFocus maxLength={200} value={draft.item} placeholder="What do we need?" onChange={(event) => setDraft({ ...draft, item: event.target.value })} /></label>
+        <div className={styles.choreFieldGrid}>
+          <label className={styles.choreField}>For meal<select value={draft.mealPlanId} onChange={(event) => setDraft({ ...draft, mealPlanId: event.target.value })}><option value="">Weekly staples</option>{meals.map((meal) => <option key={meal.id} value={meal.id}>{dateLabel(meal.meal_date)} · {meal.meal_name}</option>)}</select></label>
+          <label className={styles.choreField}>Assign to<select value={draft.ownerMemberId} disabled={!actorIsAdult} onChange={(event) => setDraft({ ...draft, ownerMemberId: event.target.value })}>{actorIsAdult ? <option value="">Needs an owner</option> : null}{members.map((member) => <option key={member.id} value={member.id}>{displayName(member)}</option>)}</select></label>
+        </div>
+        <div className={styles.sheetActions}><button type="button" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" disabled={busy || !draft.item.trim()}><ShoppingBasket size={17} aria-hidden="true" /> {busy ? "Adding…" : "Add grocery"}</button></div>
+      </form>
+    </div>
+  );
+}
+
+function setupDraft(
+  member?: PepperState["members"][number],
+  profile?: MemberSetupProfile,
+): MemberSetupDraft {
+  return {
+    memberId: member?.id || "",
+    displayName: displayName(member),
+    role: (member?.role as MemberSetupDraft["role"]) || "child",
+    pin: "",
+    activities: (profile?.activities || []).join("\n"),
+    schoolName: profile?.school_name || "",
+    gradeLabel: profile?.grade_label || "",
+    dietaryPreferences: (profile?.dietary_preferences || []).join("\n"),
+    medications: (profile?.medications || []).join("\n"),
+    goals: (profile?.goals || []).join("\n"),
+  };
+}
+
+function FamilySetupPage({
+  state,
+  busy,
+  onBack,
+  onSave,
+}: {
+  state: PepperState;
+  busy: boolean;
+  onBack: () => void;
+  onSave: (draft: MemberSetupDraft) => Promise<boolean>;
+}) {
+  const [selectedMemberId, setSelectedMemberId] = useState(
+    state.members[0]?.id || "new",
+  );
+  const selectedMember = state.members.find(
+    (member) => member.id === selectedMemberId,
+  );
+  const selectedProfile = state.memberProfiles?.find(
+    (profile) => profile.member_id === selectedMemberId,
+  );
+  const [draft, setDraft] = useState<MemberSetupDraft>(() =>
+    setupDraft(selectedMember, selectedProfile),
+  );
+
+  function chooseMember(memberId: string) {
+    setSelectedMemberId(memberId);
+    if (memberId === "new") {
+      setDraft(setupDraft());
+      return;
+    }
+    const member = state.members.find((candidate) => candidate.id === memberId);
+    const profile = state.memberProfiles?.find(
+      (candidate) => candidate.member_id === memberId,
+    );
+    setDraft(setupDraft(member, profile));
+  }
+
+  return (
+    <>
+      <button type="button" className={styles.backButton} onClick={onBack}>
+        <ArrowLeft size={17} /> Family
+      </button>
+      <section className={styles.hero}>
+        <div className={styles.eyebrow}>Private family setup</div>
+        <h1>Help Pepper know each person.</h1>
+        <p>These details shape schedules, meals, health context, and personal plans.</p>
+      </section>
+
+      <section className={styles.setupSurface}>
+        <div className={styles.setupMemberTabs} role="tablist" aria-label="Choose family member">
+          {state.members.map((member) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={selectedMemberId === member.id}
+              key={member.id}
+              onClick={() => chooseMember(member.id)}
+            >
+              {displayName(member)}
+            </button>
+          ))}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={selectedMemberId === "new"}
+            onClick={() => chooseMember("new")}
+          >
+            <Plus size={15} aria-hidden="true" /> Add family member
+          </button>
+        </div>
+
+        <form
+          className={styles.setupForm}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!draft.displayName.trim()) return;
+            void onSave({ ...draft, displayName: draft.displayName.trim() }).then(
+              (saved) => {
+                if (saved && selectedMemberId === "new") {
+                  setDraft(setupDraft());
+                }
+              },
+            );
+          }}
+        >
+          <div className={styles.setupIdentityGrid}>
+            <label className={styles.choreField}>
+              Name
+              <input
+                value={draft.displayName}
+                maxLength={100}
+                onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
+              />
+            </label>
+            <label className={styles.choreField}>
+              Role
+              <select
+                value={draft.role}
+                onChange={(event) =>
+                  setDraft({ ...draft, role: event.target.value as MemberSetupDraft["role"] })
+                }
+              >
+                <option value="adult_admin">Adult administrator</option>
+                <option value="adult">Adult</option>
+                <option value="teen">Teen</option>
+                <option value="child">Child</option>
+              </select>
+            </label>
+            <label className={styles.choreField}>
+              {draft.memberId ? "New PIN (optional)" : "PIN"}
+              <input
+                inputMode="numeric"
+                type="password"
+                value={draft.pin}
+                placeholder={draft.memberId ? "Leave unchanged" : "4–12 digits"}
+                onChange={(event) =>
+                  setDraft({ ...draft, pin: event.target.value.replace(/\D/g, "").slice(0, 12) })
+                }
+              />
+            </label>
+          </div>
+
+          <div className={styles.setupIdentityGrid}>
+            <label className={styles.choreField}>
+              School
+              <input
+                value={draft.schoolName}
+                placeholder="School name"
+                onChange={(event) => setDraft({ ...draft, schoolName: event.target.value })}
+              />
+            </label>
+            <label className={styles.choreField}>
+              Grade
+              <input
+                value={draft.gradeLabel}
+                placeholder="Grade or year"
+                onChange={(event) => setDraft({ ...draft, gradeLabel: event.target.value })}
+              />
+            </label>
+          </div>
+
+          <div className={styles.setupDetailsGrid}>
+            <SetupListField label="Activities" value={draft.activities} placeholder="Track\nTheatre" onChange={(activities) => setDraft({ ...draft, activities })} />
+            <SetupListField label="Dietary preferences" value={draft.dietaryPreferences} placeholder="No red meat\nFavorite: tacos" onChange={(dietaryPreferences) => setDraft({ ...draft, dietaryPreferences })} />
+            <SetupListField label="Medications" value={draft.medications} placeholder="Medication and schedule" privateField onChange={(medications) => setDraft({ ...draft, medications })} />
+            <SetupListField label="Goals" value={draft.goals} placeholder="What matters this season?" onChange={(goals) => setDraft({ ...draft, goals })} />
+          </div>
+
+          <div className={styles.setupActions}>
+            <span><LockKeyhole size={15} aria-hidden="true" /> Medications stay private to the member and adults.</span>
+            <button type="submit" disabled={busy || !draft.displayName.trim() || (!draft.memberId && draft.pin.length < 4)}>
+              <Check size={17} aria-hidden="true" /> {busy ? "Saving…" : "Save family details"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </>
+  );
+}
+
+function SetupListField({ label, value, placeholder, privateField, onChange }: {
+  label: string;
+  value: string;
+  placeholder: string;
+  privateField?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className={styles.choreField}>
+      <span>{label}{privateField ? <LockKeyhole size={13} aria-label="Private" /> : null}</span>
+      <textarea rows={4} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
 function FamilyDirectory({
   members,
   onOpen,
+  canManage,
+  onSetup,
 }: {
   members: PepperState["members"];
   onOpen: (slug: string) => void;
+  canManage: boolean;
+  onSetup: () => void;
 }) {
   return (
     <>
@@ -3240,6 +5078,18 @@ function FamilyDirectory({
         <h1>Everyone, in context.</h1>
         <p>Open a person to see their schedule, work, activities, and rides.</p>
       </section>
+      {canManage ? (
+        <button type="button" className={styles.familySetupLink} onClick={onSetup}>
+          <span>
+            <UserPlus size={19} aria-hidden="true" />
+            <span>
+              <strong>Family setup</strong>
+              <small>People, activities, schools, food needs, medications, and goals</small>
+            </span>
+          </span>
+          <ChevronRight size={19} aria-hidden="true" />
+        </button>
+      ) : null}
       <section className={styles.memberDirectory} aria-label="Family members">
         {members.map((member) => (
           <button
@@ -3268,30 +5118,43 @@ function isChore(task: FamilyTask) {
   const classification = (task.classification || "").toLowerCase();
   const project = (task.project || "").toLowerCase();
   const tags = (task.tags || []).map((tag) => tag.toLowerCase());
+  const title = task.title.toLowerCase();
   return (
     classification === "chore" ||
     area === "chores" ||
     project === "family chores" ||
     tags.includes("chore") ||
-    tags.includes("chores")
+    tags.includes("chores") ||
+    /\b(?:empty|unload|load) (?:the )?dishwasher\b|\b(?:wash|put away|fold) (?:the )?laundry\b|\b(?:do|wash) (?:the )?dishes\b|\b(?:take out|empty) (?:the )?trash\b|\b(?:clean|cleanup|tidy|vacuum|sweep|mop)\b|\b(?:feed|walk) (?:maggie|the (?:dog|cat|pet))\b|\bset (?:the )?table\b|\broom reset\b/.test(
+      title,
+    )
   );
 }
 
 function MemberPage({
   state,
   busy,
+  actionBusy,
   household,
   onBack,
   onOpen,
+  onCreateChore,
+  onCreatePersonalTask,
 }: {
   state: MemberState | null;
   busy: boolean;
+  actionBusy: boolean;
   household: PepperState;
   onBack: () => void;
   onOpen: (item: SelectedItem) => void;
+  onCreateChore: (draft: ChoreDraft) => Promise<boolean>;
+  onCreatePersonalTask: (draft: PersonalTaskDraft) => Promise<boolean>;
 }) {
+  const [choreComposerOpen, setChoreComposerOpen] = useState(false);
+  const [todoComposerOpen, setTodoComposerOpen] = useState(false);
   if (busy && !state) return <div className={styles.quietEmpty}>Opening family plan…</div>;
   if (!state) return null;
+  const actorIsAdult = ["adult_admin", "adult"].includes(household.member.role);
   const activeEvents = state.events.filter(
     (item) => !["completed", "canceled"].includes(item.status),
   );
@@ -3370,6 +5233,8 @@ function MemberPage({
         </section>
       ) : null}
 
+      {state.setup ? <MemberContext profile={state.setup} /> : null}
+
       <MemberSection
         title="Appointments & care"
         empty="No upcoming appointments or care tasks."
@@ -3405,7 +5270,21 @@ function MemberPage({
         ))}
       </MemberSection>
 
-      <MemberSection title="Tasks" empty="No open tasks.">
+      <MemberSection
+        title="Tasks"
+        empty="No open tasks."
+        action={
+          state.member.id === household.member.id ? (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={() => setTodoComposerOpen(true)}
+            >
+              <ListTodo size={15} aria-hidden="true" /> Add my to-do
+            </button>
+          ) : null
+        }
+      >
         {tasks.map((task) => (
           <TaskActionRow
             key={task.id}
@@ -3416,7 +5295,21 @@ function MemberPage({
         ))}
       </MemberSection>
 
-      <MemberSection title="Chores" empty="No chores assigned.">
+      <MemberSection
+        title="Chores"
+        empty="No chores assigned."
+        action={
+          actorIsAdult ? (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={() => setChoreComposerOpen(true)}
+            >
+              <Plus size={15} aria-hidden="true" /> Assign a chore
+            </button>
+          ) : null
+        }
+      >
         {chores.map((task) => (
           <TaskActionRow
             key={task.id}
@@ -3449,24 +5342,83 @@ function MemberPage({
           ))}
         </details>
       ) : null}
+
+      {choreComposerOpen ? (
+        <ChoreComposer
+          members={household.members}
+          actor={household.member}
+          initialOwnerMemberId={state.member.id}
+          busy={actionBusy}
+          onClose={() => setChoreComposerOpen(false)}
+          onCreate={async (draft) => {
+            const created = await onCreateChore(draft);
+            if (created) setChoreComposerOpen(false);
+          }}
+        />
+      ) : null}
+
+      {todoComposerOpen ? (
+        <PersonalTaskComposer
+          busy={actionBusy}
+          onClose={() => setTodoComposerOpen(false)}
+          onCreate={async (draft) => {
+            const created = await onCreatePersonalTask(draft);
+            if (created) setTodoComposerOpen(false);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function MemberContext({ profile }: { profile: MemberSetupProfile }) {
+  const groups = [
+    ["Activities", profile.activities],
+    ["Food", profile.dietary_preferences],
+    ["Medications", profile.medications],
+    ["Goals", profile.goals],
+  ] as const;
+  if (!groups.some(([, values]) => values.length) && !profile.school_name) return null;
+  return (
+    <section className={styles.memberContext} aria-label="Member details">
+      {profile.school_name ? (
+        <div>
+          <span>School</span>
+          <strong>{profile.school_name}</strong>
+          {profile.grade_label ? <small>{profile.grade_label}</small> : null}
+        </div>
+      ) : null}
+      {groups.map(([label, values]) =>
+        values.length ? (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{values.join(" · ")}</strong>
+          </div>
+        ) : null,
+      )}
+    </section>
   );
 }
 
 function MemberSection({
   title,
   empty,
+  action,
   children,
 }: {
   title: string;
   empty: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const items = Array.isArray(children) ? children.filter(Boolean) : children;
   const hasItems = Array.isArray(items) ? items.length > 0 : Boolean(items);
   return (
     <section className={styles.section}>
-      <div className={styles.sectionLabel}>{title}</div>
+      <div className={styles.sectionHeading}>
+        <div className={styles.sectionLabel}>{title}</div>
+        {action}
+      </div>
       <div className={styles.memberSectionBody}>
         {hasItems ? items : <div className={styles.empty}>{empty}</div>}
       </div>
@@ -3785,8 +5737,17 @@ function HorizonRow({ item }: { item: HorizonRowItem }) {
   );
 }
 
+function isFamilyWeekItem(item: HorizonRowItem) {
+  if (item.item_type === "task") return false;
+  const kind = (item.kind || "").toLowerCase();
+  const title = item.title.toLowerCase();
+  if (/work|task|chore/.test(kind)) return false;
+  if (/\bcw warren\b|\bhouse reset\b/.test(title)) return false;
+  return true;
+}
+
 function HorizonDayCard({ day }: { day: HorizonDay }) {
-  const items = day.items || [];
+  const items = (day.items || []).filter(isFamilyWeekItem);
   const groupedDropoffs = items.filter(
     (item) =>
       item.source === "routine" &&
@@ -3803,8 +5764,7 @@ function HorizonDayCard({ day }: { day: HorizonDay }) {
     [...groupedDropoffs, ...groupedPickups].map((item) => item.id),
   );
   const visibleItems = items.filter((item) => !groupedIds.has(item.id));
-  const knownCount =
-    items.length + (day.tasks?.length || 0) + (day.watch?.length || 0);
+  const knownCount = items.length + (day.watch?.length || 0);
 
   return (
     <article className={styles.dayCard}>
@@ -3835,16 +5795,6 @@ function HorizonDayCard({ day }: { day: HorizonDay }) {
             starts_at: `${item.date}T12:00:00Z`,
             title: item.title,
             item_type: "watch",
-          }}
-        />
-      ))}
-      {day.tasks?.map((item) => (
-        <HorizonRow
-          key={`task-${item.id}`}
-          item={{
-            ...item,
-            starts_at: item.due_at || `${day.date}T12:00:00Z`,
-            item_type: "task",
           }}
         />
       ))}
