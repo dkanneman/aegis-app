@@ -1168,10 +1168,10 @@ export function PepperClient() {
       }
       if (connection === "gmail_connected") {
         setView("connections");
-        setCalendarConfirmation("Gmail connected for action-needed signals.");
+        setCalendarConfirmation("Google email connected for action-needed signals.");
       } else if (connection === "gmail_error") {
         setView("connections");
-        setCalendarConfirmation("Gmail did not connect. Try again.");
+        setCalendarConfirmation("Google email did not connect. Try again.");
       }
     }, 0);
 
@@ -3429,6 +3429,7 @@ function ConnectionsPage({
 }) {
   const [openProvider, setOpenProvider] = useState<string | null>(null);
   const calendarConnection = calendar?.connection;
+  const canConnectEmail = ["adult_admin", "adult", "teen"].includes(member.role);
   const calendarOwner = displayName(
     members.find(
       (candidate) => candidate.id === calendarConnection?.connected_by_member_id,
@@ -3494,21 +3495,25 @@ function ConnectionsPage({
       group: "Email and calendars",
       icon: <Mail size={21} />,
       mark: "M",
-      title: "Gmail",
-      identifier: gmail?.metadata?.email || "Private inbox",
+      title: "Google email",
+      identifier: gmail?.metadata?.email || "Gmail or Google Workspace",
       summary: gmail?.connected
         ? "The account is linked for permission-safe, action-needed signals."
-        : "Private intake for commitments, deadlines, and decisions.",
+        : canConnectEmail
+          ? "Connect the personal, school, or work Google account you use most."
+          : "Email connections are available from adult and teen profiles.",
       state: gmail?.connected
         ? "connected"
-        : gmail?.configured
+        : gmail?.configured && canConnectEmail
           ? "available"
           : "setup",
       statusLabel: gmail?.connected
         ? "Connected"
-        : gmail?.configured
+        : gmail?.configured && canConnectEmail
           ? "Ready to connect"
-          : "Setup pending",
+          : canConnectEmail
+            ? "Setup pending"
+            : "Not available",
       owner: displayName(member),
       privacy: "Private source",
       coverage: displayName(member),
@@ -3529,10 +3534,12 @@ function ConnectionsPage({
       feeds: ["Private intake", "Future action-needed signals"],
       action: gmail?.connected
         ? undefined
-        : gmail?.configured
+        : gmail?.configured && canConnectEmail
           ? "Connect"
-          : "Setup pending",
-      actionDisabled: !gmail?.configured,
+          : canConnectEmail
+            ? "Setup pending"
+            : undefined,
+      actionDisabled: !gmail?.configured || !canConnectEmail,
       actionIcon: <Plus size={15} />,
       onAction: onEmail,
     },

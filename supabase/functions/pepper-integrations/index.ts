@@ -44,8 +44,8 @@ async function status(member:any){
 }
 
 async function beginGmail(member:any){
-  if(!['adult_admin','adult'].includes(member.role))throw Object.assign(new Error('Only an adult can connect family email.'),{status:403})
-  if(!configured())throw Object.assign(new Error('Gmail OAuth credentials are not configured in this preview yet.'),{status:503})
+  if(!['adult_admin','adult','teen'].includes(member.role))throw Object.assign(new Error('Google email can be connected by an adult or teen for their own account.'),{status:403})
+  if(!configured())throw Object.assign(new Error('Google email OAuth credentials are not configured in this preview yet.'),{status:503})
   const state=randomToken(),verifier=randomToken(64)
   await sql`delete from private.integration_oauth_states where expires_at<now() or consumed_at<now()-interval '1 hour'`
   await sql`insert into private.integration_oauth_states(provider,state_hash,code_verifier,household_id,member_id,expires_at) values('gmail',${await digest(state)},${verifier},${member.household_id}::uuid,${member.id}::uuid,now()+interval '10 minutes')`
