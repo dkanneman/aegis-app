@@ -38,7 +38,7 @@ function inferRule(title:string){ return rules.find(r=>r.re.test(title))||null }
 async function refresh(householdId:string){
   const today=dateLA(), horizon=addDays(today,90)
   const [events,watch] = await Promise.all([
-    sql<any[]>`select id,title,starts_at,visibility,owner_member_id,source,status from public.events where household_id=${householdId}::uuid and status in ('tentative','confirmed') and starts_at >= (${today}::date::timestamp at time zone ${TZ}) and starts_at < ((${horizon}::date + 1)::timestamp at time zone ${TZ}) order by starts_at`,
+    sql<any[]>`select id,title,starts_at,visibility,owner_member_id,source,status from public.events where household_id=${householdId}::uuid and deleted_at is null and status in ('tentative','confirmed') and starts_at >= (${today}::date::timestamp at time zone ${TZ}) and starts_at < ((${horizon}::date + 1)::timestamp at time zone ${TZ}) order by starts_at`,
     sql<any[]>`select id,title,category,starts_on::text,preparation_required,preparation_summary,prep_lead_days,owner_member_id,visibility,source,source_ref,confidence from private.future_watch_items where household_id=${householdId}::uuid and status not in ('canceled','completed') and starts_on between ${today}::date and ${horizon}::date order by starts_on`
   ])
   const seen:string[]=[]

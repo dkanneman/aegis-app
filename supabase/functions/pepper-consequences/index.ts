@@ -68,6 +68,27 @@ function names(values: string[]) {
   return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`
 }
 
+function normalized(value?: string | null) {
+  return (value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function productName(value?: string | null) {
+  return value === 'Elle' ? 'Danielle' : value || ''
+}
+
+function displayKey(item: any) {
+  return [
+    item.type || 'attention',
+    item.affected_member_id || '',
+    normalized(item.title),
+    normalized(item.summary),
+  ].join('|')
+}
+
+function sameCalendarOccurrence(primary: any, related: any) {
+  return Boolean(primary && related && normalized(primary.title) === normalized(related.title))
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (req.method !== 'POST') return Response.json({ error: 'POST required.' }, { status: 405, headers: cors })
@@ -86,7 +107,7 @@ Deno.serve(async (req: Request) => {
   const eventIds = [...new Set((findings || []).flatMap((x: any) => [x.event_id, x.related_event_id]).filter(Boolean))]
   const [{ data: events }, { data: adults }] = await Promise.all([
     eventIds.length
-      ? db.from('events').select('id,title,visibility,owner_member_id,person_slug,starts_at,ends_at,kind,location,status,transport_owner_member_id,transport_status,source,external_url,external_organizer_email,external_organizer_name').in('id', eventIds)
+      ? db.from('events').select('id,title,visibility,owner_member_id,person_slug,starts_at,ends_at,kind,location,status,transport_owner_member_id,transport_status,source,external_url,external_organizer_email,external_organizer_name').is('deleted_at', null).in('id', eventIds)
       : Promise.resolve({ data: [] as any[] }),
     db.from('household_members').select('id,slug,display_name,role').eq('household_id', m.household_id).in('role', ['adult_admin','adult']),
   ])
@@ -98,6 +119,7 @@ Deno.serve(async (req: Request) => {
     ? await db.from('events')
         .select('id,person_slug,starts_at,ends_at,status')
         .eq('household_id', m.household_id)
+        .is('deleted_at', null)
         .in('person_slug', adultSlugs)
         .in('status', ['tentative','confirmed'])
         .gte('starts_at', new Date(currentMs - 12 * 60 * 60 * 1000).toISOString())
@@ -108,7 +130,7 @@ Deno.serve(async (req: Request) => {
     return !(adultEvents || []).some((event: any) => event.person_slug === adult.slug && event.id !== primary?.id && overlaps(primary, event))
   })
 
-  const safe = (findings || []).flatMap((c: any) => {
+  const safeRows = (findings || []).flatMap((c: any) => {
     const primary: any = c.event_id ? eventMap.get(c.event_id) : null
     const related: any = c.related_event_id ? eventMap.get(c.related_event_id) : null
     const canSee = (e: any) => !e || e.visibility === 'household' || e.owner_member_id === m.id
@@ -118,16 +140,18 @@ Deno.serve(async (req: Request) => {
     // Today is for action, not the whole week's anxiety.
     if (startMs && (startMs < currentMs - 2 * 60 * 60 * 1000 || startMs > latestMs)) return []
     if (c.consequence_type === 'missing_transport' && !looksLikeTransport(primary)) return []
+    if (c.event_id && c.event_id === c.related_event_id) return []
+    if (sameCalendarOccurrence(primary, related)) return []
 
     let summary = c.summary
     const when = whenLabel(startsAt)
     const availableDrivers = primary ? unbookedAdults(primary) : []
     if (c.consequence_type === 'missing_transport' && primary) {
-      const available = availableDrivers.map((a: any) => a.display_name)
+      const available = availableDrivers.map((a: any) => productName(a.display_name))
       summary = `${primary.title}${when ? ` · ${when}` : ''} needs a driver.`
       if (available.length) summary += ` ${names(available)} ${available.length === 1 ? 'looks' : 'look'} unbooked in Pepper at that time.`
     } else if (c.consequence_type === 'missing_required_adult' && primary) {
-      const available = unbookedAdults(primary).map((a: any) => a.display_name)
+      const available = unbookedAdults(primary).map((a: any) => productName(a.display_name))
       summary = `${primary.title}${when ? ` · ${when}` : ''} needs an adult assigned.`
       if (available.length) summary += ` ${names(available)} ${available.length === 1 ? 'looks' : 'look'} unbooked in Pepper at that time.`
     }
@@ -156,9 +180,17 @@ Deno.serve(async (req: Request) => {
       available_drivers: availableDrivers.map((adult: any) => ({
         id: adult.id,
         slug: adult.slug,
-        display_name: adult.display_name,
+        display_name: productName(adult.display_name),
       })),
     }]
+  })
+
+  const seen = new Set<string>()
+  const safe = safeRows.filter((item: any) => {
+    const key = displayKey(item)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
   }).sort((a: any, b: any) => {
     const severity = severityRank(a.severity) - severityRank(b.severity)
     if (severity) return severity

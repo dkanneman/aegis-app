@@ -42,6 +42,18 @@ const schoolSeedPath = new URL(
   '../supabase/preview/20260901184500_preview_eriksen_school_schedules.sql',
   import.meta.url,
 )
+const editableItemsMigrationPath = new URL(
+  '../supabase/migrations/20260902193000_add_editable_family_items.sql',
+  import.meta.url,
+)
+const appManifestPath = new URL('../app/manifest.ts', import.meta.url)
+const appLayoutPath = new URL('../app/layout.tsx', import.meta.url)
+const appleTouchIconPath = new URL('../public/apple-touch-icon.png', import.meta.url)
+const testFlightReviewMigrationPath = new URL(
+  '../supabase/preview/20260903090333_add_testflight_review_household.sql',
+  import.meta.url,
+)
+const privacyPagePath = new URL('../app/privacy/page.tsx', import.meta.url)
 
 test('family API targets its own Supabase environment instead of production', async () => {
   const api = await readFile(apiPath, 'utf8')
@@ -49,6 +61,19 @@ test('family API targets its own Supabase environment instead of production', as
   assert.doesNotMatch(api, /olgyfgqlqrhfaujkfjtj/)
   assert.match(api, /action==='member_state'/)
   assert.match(api, /action==='item_update'/)
+})
+
+test('TestFlight reviewer access is isolated from the real family household', async () => {
+  const migration = await readFile(testFlightReviewMigrationPath, 'utf8')
+
+  assert.match(migration, /'pepper-review'/)
+  assert.match(migration, /'reviewer', 'Alex', 'adult_admin'/)
+  assert.match(migration, /pin_input[\s\S]*\^\[0-9\]\{10\}\$/)
+  assert.match(migration, /'pepper-review', 'reviewer', pin_input/)
+  assert.match(migration, /'eriksen', member_slug_input, pin_input/)
+  assert.match(migration, /reviewer PIN is provisioned out of band/i)
+  assert.doesNotMatch(migration, /Danielle|Matt|Chloe|Lyra|Posey|La Mariposa|Las Colinas|Rancho Campana/)
+  assert.doesNotMatch(migration, /pin_hash\s*=\s*crypt\('[0-9]+/)
 })
 
 test('member pages remain household and privacy scoped', async () => {
@@ -71,6 +96,32 @@ test('canonical mutations enforce roles and preserve actor context', async () =>
   assert.match(api, /update public\.tasks set status=/)
   assert.match(api, /update public\.events set status=/)
   assert.match(api, /insert into public\.audit_log/)
+})
+
+test('tasks and appointments support audited edits, holds, and soft deletion', async () => {
+  const [api, client, calendar, migration] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(clientPath, 'utf8'),
+    readFile(calendarPath, 'utf8'),
+    readFile(editableItemsMigrationPath, 'utf8'),
+  ])
+
+  assert.match(migration, /'on_hold'/)
+  assert.match(migration, /deleted_at timestamptz/)
+  assert.match(migration, /deleted_by_member_id uuid/)
+  assert.match(migration, /canonical_content_override jsonb/)
+  assert.match(api, /\['assign','edit','complete','cancel','delete','reopen'\]/)
+  assert.match(api, /operation==='edit'/)
+  assert.match(api, /operation==='delete'/)
+  assert.match(api, /status.*on_hold/s)
+  assert.match(api, /deleted_at=now\(\)/)
+  assert.match(api, /event_edit/)
+  assert.match(api, /task_edit/)
+  assert.match(client, /Edit task/)
+  assert.match(client, /Edit appointment/)
+  assert.match(client, /On hold/)
+  assert.match(client, /Delete from Pepper/)
+  assert.match(calendar, /canonical_content_override/)
 })
 
 test('Pepper UI includes the complete Home-to-member action path', async () => {
@@ -206,6 +257,23 @@ test('attention cards resolve canonical rides and conflicts instead of remaining
   assert.match(calendar, /external_organizer_email/)
 })
 
+test('showcase views suppress duplicate decisions and use progressive disclosure', async () => {
+  const [client, consequences] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(new URL('../supabase/functions/pepper-consequences/index.ts', import.meta.url), 'utf8'),
+  ])
+
+  assert.match(client, /function visibleConsequences/)
+  assert.match(client, /function visibleReadiness/)
+  assert.match(client, /function uniqueHorizonItems/)
+  assert.match(client, /group\.tasks\.length > initialCount/)
+  assert.match(client, /Show all \$\{group\.tasks\.length\}/)
+  assert.match(client, /Show all \$\{weekGroceries\.length\} groceries/)
+  assert.match(client, /window\.setTimeout\(\(\) => setMessage\(""\), 7000\)/)
+  assert.match(consequences, /function displayKey/)
+  assert.match(consequences, /const seen = new Set<string>/)
+})
+
 test('connections remain evidence inputs with explicit security boundaries', async () => {
   const [api, client, integrations, health, calendar] = await Promise.all([
     readFile(apiPath, 'utf8'),
@@ -313,4 +381,31 @@ test('task changes remain exportable from canonical One Brain state', async () =
   assert.match(sql, /current_setting\('pepper\.actor_member_id'/)
   assert.match(sql, /after insert or update or delete on public\.tasks/)
   assert.match(sql, /create or replace view private\.home_brain_task_snapshot/)
+})
+
+test('Pepper installs as a branded iPhone web app', async () => {
+  const [manifest, layout, icon] = await Promise.all([
+    readFile(appManifestPath, 'utf8'),
+    readFile(appLayoutPath, 'utf8'),
+    readFile(appleTouchIconPath),
+  ])
+  assert.match(manifest, /name: "Pepper Family Concierge"/)
+  assert.match(manifest, /start_url: "\/pepper"/)
+  assert.match(manifest, /display: "standalone"/)
+  assert.match(manifest, /pepper-icon-maskable-512\.png/)
+  assert.match(layout, /appleWebApp:/)
+  assert.match(layout, /apple-touch-icon\.png/)
+  assert.match(layout, /viewportFit: "cover"/)
+  assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
+  assert.ok(icon.byteLength > 1_000)
+})
+
+test('TestFlight has a public Pepper privacy notice without exposed contact credentials', async () => {
+  const privacy = await readFile(privacyPagePath, 'utf8')
+
+  assert.match(privacy, /Information Pepper uses/)
+  assert.match(privacy, /does not sell personal information/)
+  assert.match(privacy, /calendar events, relevant email content, or Apple Health summaries/)
+  assert.match(privacy, /through the Feedback option in TestFlight/)
+  assert.doesNotMatch(privacy, /@[a-z0-9.-]+\.[a-z]{2,}/i)
 })

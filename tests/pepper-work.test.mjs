@@ -21,9 +21,10 @@ test('work priorities normalize One Brain priority labels', () => {
   assert.equal(workPriority({ title: 'E' }), 'unprioritized')
 })
 
-test('work tasks sort active work, dated work, then undated work', () => {
+test('work tasks sort active work, dated work, held work, then undated work', () => {
   const tasks = [
     { title: 'Undated', status: 'open' },
+    { title: 'Held pipeline', status: 'on_hold', due_at: '2026-09-02T17:00:00Z' },
     { title: 'Later due', status: 'open', due_at: '2026-09-10T17:00:00Z' },
     { title: 'In progress', status: 'in_progress' },
     { title: 'Sooner due', status: 'open', due_at: '2026-09-03T17:00:00Z' },
@@ -31,6 +32,6 @@ test('work tasks sort active work, dated work, then undated work', () => {
 
   assert.deepEqual(
     tasks.map((task) => task.title),
-    ['In progress', 'Sooner due', 'Later due', 'Undated'],
+    ['In progress', 'Sooner due', 'Later due', 'Undated', 'Held pipeline'],
   )
 })

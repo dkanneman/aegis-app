@@ -505,6 +505,39 @@
   font-weight: 800;
 }
 
+.attentionMore {
+  display: flex;
+  min-height: 42px;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 2px 0 auto;
+  padding: 7px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--pepper-mediterranean);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.preparationMore {
+  padding-top: 2px;
+}
+
+.preparationMore > summary {
+  min-height: 42px;
+  padding: 10px 2px;
+  color: var(--pepper-mediterranean);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.preparationMore > .noticeStack {
+  margin-top: 8px;
+}
+
 .prepareCard {
   border-color: rgba(63, 113, 141, 0.11);
   background: rgba(229, 240, 246, 0.66);
@@ -1594,6 +1627,10 @@ button.morningBriefOutcome {
 }
 
 .toast {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 7px;
   padding: 10px 13px;
   border-radius: 16px;
@@ -1602,6 +1639,24 @@ button.morningBriefOutcome {
   font-size: 13px;
   line-height: 1.4;
   box-shadow: var(--shadow);
+}
+
+.toast button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  cursor: pointer;
+}
+
+.toast button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.72);
+  outline-offset: 2px;
 }
 
 .ritualToast {
@@ -2725,6 +2780,22 @@ button.morningBriefOutcome {
   opacity: 0.74;
 }
 
+.workReveal {
+  display: flex;
+  min-height: 42px;
+  gap: 7px;
+  align-items: center;
+  margin: 8px auto 0;
+  padding: 7px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--pepper-mediterranean);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
 .choreHero {
   width: min(760px, 100%);
   min-height: 168px;
@@ -3015,13 +3086,69 @@ button.morningBriefOutcome {
 }
 
 .mealNeedsSection {
-  padding: 18px 0 20px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  margin-top: 28px;
+  border: 1px solid rgba(23, 59, 86, 0.09);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.56);
 }
 
-.mealNeedsSection .sectionHeading {
-  align-items: flex-start;
+.mealNeedsSection > summary {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+}
+
+.mealNeedsSection > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mealNeedsSection > summary strong,
+.mealNeedsSection > summary small {
+  display: block;
+}
+
+.mealNeedsSection > summary strong {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.mealNeedsSection > summary small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mealNeedsSection > summary svg {
+  flex: 0 0 auto;
+  color: var(--pepper-riviera);
+  transition: transform 160ms ease;
+}
+
+.mealNeedsSection[open] > summary svg {
+  transform: rotate(90deg);
+}
+
+.mealNeedsSection > summary:focus-visible {
+  outline: 3px solid rgba(110, 157, 183, 0.28);
+  outline-offset: -3px;
+}
+
+.mealNeedsBody {
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.mealNeedsBody .sectionHeading {
+  align-items: center;
+  padding-top: 14px;
 }
 
 .mealNeedsSection .sectionLabel,
@@ -3053,6 +3180,7 @@ button.morningBriefOutcome {
 
 .mealNeed {
   display: inline-grid;
+  max-width: 100%;
   min-height: 38px;
   grid-template-columns: minmax(0, auto) auto auto;
   gap: 8px;
@@ -3062,6 +3190,11 @@ button.morningBriefOutcome {
   border-radius: 9px;
   background: rgba(200, 220, 232, 0.22);
   font-size: 12px;
+}
+
+.mealNeed > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .mealNeed[data-type="allergy"],
@@ -3280,6 +3413,26 @@ button.morningBriefOutcome {
   justify-content: center;
   color: var(--muted);
   font-size: 12px;
+}
+
+.groceryReveal {
+  display: flex;
+  min-height: 44px;
+  gap: 7px;
+  align-items: center;
+  margin: 11px auto 0;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--pepper-mediterranean);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.groceryReveal svg {
+  transition: transform 160ms ease;
 }
 
 .mealComposer {
@@ -3662,10 +3815,153 @@ button.morningBriefOutcome {
   font: inherit;
 }
 
+.itemEditForm {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.itemEditForm h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.editFieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.editField {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.editField input,
+.editField select,
+.editField textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.editField textarea {
+  resize: vertical;
+}
+
+.editField input:focus,
+.editField select:focus,
+.editField textarea:focus {
+  border-color: var(--pepper-riviera);
+  box-shadow: 0 0 0 3px rgba(110, 157, 183, 0.14);
+}
+
+.holdNote {
+  display: inline-flex;
+  width: fit-content;
+  margin: 4px 0 12px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(216, 199, 166, 0.28);
+  color: var(--pepper-midnight-sea);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.itemNotes {
+  margin: 14px 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .sheetActions {
   display: flex;
+  flex-wrap: wrap;
   gap: 9px;
   margin-top: 24px;
+}
+
+.itemEditForm .sheetActions button:last-child {
+  border-color: rgba(63, 113, 141, 0.2);
+  background: var(--pepper-midnight-sea);
+  color: var(--pepper-moon-ivory);
+}
+
+.deleteButton {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 8px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--pepper-bordeaux);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.deleteConfirmation {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 15px;
+  border: 1px solid rgba(130, 79, 89, 0.18);
+  border-radius: 12px;
+  background: rgba(201, 137, 125, 0.1);
+}
+
+.deleteConfirmation p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.deleteConfirmationActions {
+  display: flex;
+  gap: 9px;
+  justify-content: flex-end;
+}
+
+.deleteConfirmationActions button {
+  display: inline-flex;
+  min-height: 40px;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 12px;
+  border: 1px solid rgba(63, 113, 141, 0.15);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.deleteConfirmationActions button:last-child {
+  border-color: rgba(130, 79, 89, 0.22);
+  color: var(--pepper-bordeaux);
 }
 
 .sheetActions button {
@@ -3689,6 +3985,12 @@ button.morningBriefOutcome {
   border-color: rgba(130, 79, 89, 0.16);
   background: rgba(201, 137, 125, 0.13);
   color: var(--pepper-bordeaux);
+}
+
+.itemEditForm .sheetActions button:last-child {
+  border-color: rgba(63, 113, 141, 0.2);
+  background: var(--pepper-midnight-sea);
+  color: var(--pepper-moon-ivory);
 }
 
 .sheetActions button:disabled {
@@ -4460,7 +4762,8 @@ button.morningBriefOutcome {
     width: 100%;
   }
 
-  .mealHero + .mealNeedsSection .sectionHeading,
+  .mealHero + .section .sectionHeading,
+  .mealNeedsSection .sectionHeading,
   .mealNeedsSection + .section .sectionHeading {
     align-items: flex-start;
     flex-direction: column;
@@ -4475,6 +4778,19 @@ button.morningBriefOutcome {
     max-height: calc(100vh - 24px);
     padding: 22px 18px calc(22px + env(safe-area-inset-bottom));
     border-radius: 18px;
+  }
+
+  .editFieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sheetActions button {
+    min-width: calc(50% - 5px);
+  }
+
+  .deleteConfirmationActions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

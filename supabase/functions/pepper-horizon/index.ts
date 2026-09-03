@@ -175,6 +175,7 @@ Deno.serve(async (req: Request) => {
             adult_owner_member_id, adult_requirement_status
           from public.events
           where household_id = ${currentMember.household_id}::uuid
+            and deleted_at is null
             and status <> 'canceled'
             and starts_at >= (${start}::date::timestamp at time zone ${TZ})
             and starts_at < ((${end30}::date + 1)::timestamp at time zone ${TZ})
@@ -202,6 +203,7 @@ Deno.serve(async (req: Request) => {
           select id, title, owner_member_id, visibility, status, due_at, source
           from public.tasks
           where household_id = ${currentMember.household_id}::uuid
+            and deleted_at is null
             and status not in ('completed', 'canceled')
             and due_at is not null
             and due_at >= (${start}::date::timestamp at time zone ${TZ})

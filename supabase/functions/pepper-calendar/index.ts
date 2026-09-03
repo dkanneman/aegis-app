@@ -503,6 +503,7 @@ async function findLocalDuplicate(
     select id, title, person_slug, starts_at, notes
     from public.events
     where household_id = ${connection.household_id}::uuid
+      and deleted_at is null
       and external_event_id is null
       and status <> 'canceled'
       and starts_at between (${startsAt}::timestamptz - interval '15 minutes')
@@ -577,11 +578,23 @@ async function upsertGoogleEvent(
   if (targetId) {
     await sql`
       update public.events
-      set title = ${title},
+      set title = case
+            when canonical_content_override ? 'title' then canonical_content_override->>'title'
+            else ${title}
+          end,
           person_slug = ${personSlug},
-          starts_at = ${startsAt}::timestamptz,
-          ends_at = ${endsAt}::timestamptz,
-          location = ${location},
+          starts_at = case
+            when canonical_content_override ? 'starts_at' then (canonical_content_override->>'starts_at')::timestamptz
+            else ${startsAt}::timestamptz
+          end,
+          ends_at = case
+            when canonical_content_override ? 'ends_at' then nullif(canonical_content_override->>'ends_at', '')::timestamptz
+            else ${endsAt}::timestamptz
+          end,
+          location = case
+            when canonical_content_override ? 'location' then nullif(canonical_content_override->>'location', '')
+            else ${location}
+          end,
           status = coalesce(canonical_status_override, ${status}),
           visibility = ${visibility},
           owner_member_id = coalesce(owner_member_id, ${connection.connected_by_member_id}::uuid),
@@ -596,7 +609,10 @@ async function upsertGoogleEvent(
           external_organizer_email = ${event.organizer?.email || null},
           external_organizer_name = ${event.organizer?.displayName || null},
           external_updated_at = ${event.updated || null}::timestamptz,
-          notes = ${notes},
+          notes = case
+            when canonical_content_override ? 'notes' then nullif(canonical_content_override->>'notes', '')
+            else ${notes}
+          end,
           response_status = ${response},
           sync_status = 'synced',
           last_synced_at = ${scanStarted}::timestamptz,

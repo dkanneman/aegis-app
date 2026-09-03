@@ -65,8 +65,11 @@ export function workPriority(task: WorkTaskLike): WorkPriority {
 }
 
 export function compareWorkTasks(a: WorkTaskLike, b: WorkTaskLike) {
-  const statusRank = (task: WorkTaskLike) =>
-    task.status === "in_progress" ? 0 : 1;
+  const statusRank = (task: WorkTaskLike) => {
+    if (task.status === "in_progress") return 0;
+    if (task.status === "on_hold") return 2;
+    return 1;
+  };
   const statusDifference = statusRank(a) - statusRank(b);
   if (statusDifference) return statusDifference;
 

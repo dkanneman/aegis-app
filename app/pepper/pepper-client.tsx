@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   Armchair,
@@ -21,6 +21,7 @@ import {
   ListTodo,
   Mail,
   Mic,
+  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -29,6 +30,7 @@ import {
   ShoppingBasket,
   Sparkles,
   Telescope,
+  Trash2,
   Utensils,
   UsersRound,
   UserPlus,
@@ -76,7 +78,7 @@ type FamilyTask = {
   owner_member_id?: string | null;
   creator_member_id?: string | null;
   visibility: "household" | "private";
-  status: "open" | "in_progress" | "completed" | "canceled";
+  status: "open" | "in_progress" | "on_hold" | "completed" | "canceled";
   due_at?: string | null;
   source?: string | null;
   area?: string | null;
@@ -86,6 +88,8 @@ type FamilyTask = {
   tags?: string[] | null;
   recurrence?: string | null;
   next_action?: string | null;
+  notes?: string | null;
+  waiting_on?: string | null;
   completed_at?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
@@ -108,6 +112,7 @@ type FamilyEvent = {
   external_url?: string | null;
   external_organizer_email?: string | null;
   external_organizer_name?: string | null;
+  notes?: string | null;
 };
 
 type MemberState = {
@@ -135,6 +140,28 @@ type MemberState = {
 type SelectedItem =
   | { type: "task"; item: FamilyTask }
   | { type: "event"; item: FamilyEvent };
+
+type ItemOperation =
+  | "assign"
+  | "edit"
+  | "complete"
+  | "cancel"
+  | "delete"
+  | "reopen";
+
+type ItemUpdate = {
+  owner_member_id?: string | null;
+  title?: string;
+  status?: "open" | "in_progress" | "on_hold";
+  due_date?: string;
+  priority?: string;
+  notes?: string;
+  waiting_on?: string;
+  next_action?: string;
+  starts_local?: string;
+  ends_local?: string;
+  location?: string;
+};
 
 type Ritual = "morning" | "evening";
 
@@ -518,41 +545,78 @@ function displayName(member?: Pick<Member, "slug" | "display_name"> | null) {
   return member.slug === "elle" ? "Danielle" : member.display_name;
 }
 
-function localDate() {
-  return new Intl.DateTimeFormat("en-CA", {
+function productNameText(value?: string | null) {
+  return (value || "").replace(/\bElle\b/g, "Danielle");
+}
+
+function dateInTimeZone(value: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date());
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value || "";
+  const year = part("year");
+  const month = part("month");
+  const day = part("day");
+  return year && month && day ? `${year}-${month}-${day}` : "";
+}
+
+function localDate() {
+  return dateInTimeZone(new Date());
 }
 
 function localDateFor(value?: string | null) {
   if (!value) return "";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "";
-  return new Intl.DateTimeFormat("en-CA", {
+  return dateInTimeZone(parsed);
+}
+
+function localDateTimeFor(value?: string | null) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(parsed);
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(parsed);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
 }
 
 function addDateDays(date: string, amount: number) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "";
   const [year, month, day] = date.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day + amount))
-    .toISOString()
-    .slice(0, 10);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return "";
+  }
+  parsed.setUTCDate(parsed.getUTCDate() + amount);
+  return parsed.toISOString().slice(0, 10);
 }
 
 function time(ts?: string | null) {
   if (!ts) return "";
+  const parsed = new Date(ts);
+  if (Number.isNaN(parsed.getTime())) return "Time unavailable";
   return new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(ts));
+  }).format(parsed);
 }
 
 function localTimeLabel(value?: string | null) {
@@ -566,13 +630,89 @@ function localTimeLabel(value?: string | null) {
 }
 
 function dateLabel(date?: string | null) {
-  if (!date) return "";
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return "Date unavailable";
+  const parsed = new Date(`${date}T12:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return "Date unavailable";
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "UTC",
     weekday: "short",
     month: "short",
     day: "numeric",
-  }).format(new Date(`${date}T12:00:00Z`));
+  }).format(parsed);
+}
+
+function normalizedAttentionText(value?: string | null) {
+  return (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function consequenceDisplayKey(item: Consequence) {
+  return [
+    item.type || "attention",
+    item.affected_member_id || "",
+    normalizedAttentionText(item.title),
+    normalizedAttentionText(item.summary),
+  ].join("|");
+}
+
+function sameCalendarOccurrence(
+  primary?: FamilyEvent | null,
+  related?: FamilyEvent | null,
+) {
+  if (!primary || !related) return false;
+  if (normalizedAttentionText(primary.title) !== normalizedAttentionText(related.title)) {
+    return false;
+  }
+  return true;
+}
+
+function visibleConsequences(items: Consequence[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (item.status && item.status !== "open") return false;
+    if (item.event_id && item.event_id === item.related_event_id) return false;
+    if (sameCalendarOccurrence(item.primary_event, item.related_event)) return false;
+    const key = consequenceDisplayKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function visibleReadiness(items: ReadinessItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (item.event_id && item.event_id === item.related_event_id) return false;
+    if (sameCalendarOccurrence(item.primary_event, item.related_event)) return false;
+    const key = [
+      item.consequence_type || item.type,
+      normalizedAttentionText(item.title),
+      normalizedAttentionText(item.summary),
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueHorizonItems(items: HorizonRowItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.source === "routine"
+      ? [
+          "routine",
+          item.kind || "event",
+          item.person_slug || "",
+          item.starts_at || "",
+        ].join("|")
+      : [
+          item.item_type || item.kind || "event",
+          normalizedAttentionText(item.title),
+          normalizedAttentionText(item.location),
+        ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function longDate() {
@@ -714,6 +854,12 @@ export function PepperClient() {
   const [insightRefs, setInsightRefs] = useState<ReflectionEvidence[]>([]);
   const [frontSeatOpen, setFrontSeatOpen] = useState(false);
 
+  useEffect(() => {
+    if (!message) return;
+    const timeout = window.setTimeout(() => setMessage(""), 7000);
+    return () => window.clearTimeout(timeout);
+  }, [message]);
+
   async function call(body: Record<string, unknown>, session = token) {
     if (!API || !SUPABASE_ANON_KEY) {
       throw new Error("Pepper preview is not configured.");
@@ -788,8 +934,8 @@ export function PepperClient() {
 
   async function updateItem(
     item: SelectedItem,
-    operation: "assign" | "complete" | "cancel" | "reopen",
-    ownerMemberId?: string,
+    operation: ItemOperation,
+    changes: ItemUpdate = {},
   ) {
     setActionBusy(true);
     try {
@@ -798,11 +944,15 @@ export function PepperClient() {
         item_type: item.type,
         id: item.item.id,
         operation,
-        owner_member_id: ownerMemberId || null,
+        ...changes,
       });
       setMessage(
         operation === "assign"
           ? "Assigned. Pepper updated the family plan."
+          : operation === "edit"
+            ? "Saved. Pepper updated every affected view."
+            : operation === "delete"
+              ? "Deleted from Pepper. The change remains in the audit history."
           : operation === "reopen"
             ? "Restored. Pepper updated every view."
             : `${operation === "complete" ? "Completed" : "Canceled"}. Pepper updated every view.`,
@@ -1267,9 +1417,7 @@ export function PepperClient() {
         .slice(0, 5),
     [schoolTransportation, state],
   );
-  const openConsequences = (state?.consequences || []).filter(
-    (item) => !item.status || item.status === "open",
-  );
+  const openConsequences = visibleConsequences(state?.consequences || []);
   const preparationNow = state?.preparation?.now || [];
   const morning = state?.rituals?.morning;
   const evening = state?.rituals?.evening;
@@ -1290,9 +1438,11 @@ export function PepperClient() {
   const futureWatch = horizon?.ahead?.future_watch || [];
   const familyFutureWatch = futureWatch.filter((item) => item.type !== "task");
   const routineSummaries = horizon?.ahead?.routine_summaries || [];
-  const coordination = readiness.filter(
-    (item) =>
-      item.severity === "urgent" || item.severity === "needs_attention",
+  const coordination = visibleReadiness(
+    readiness.filter(
+      (item) =>
+        item.severity === "urgent" || item.severity === "needs_attention",
+    ),
   );
   const activeFamilyTasks = (state?.familyTasks || []).filter(
     (task) => !["completed", "canceled"].includes(task.status),
@@ -1598,6 +1748,9 @@ export function PepperClient() {
   const calendarConnected = Boolean(calendar?.connected);
   const coverage = horizon?.coverage;
   const weekIssueCount = coordination.length;
+  const weekCoverageHeadline = weekIssueCount
+    ? `Pepper sees ${weekIssueCount} ${weekIssueCount === 1 ? "decision" : "decisions"} to resolve in the family plan.`
+    : "The known family plan looks covered.";
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
   const primaryNavigation = [
     ["today", "Today", House],
@@ -1688,7 +1841,7 @@ export function PepperClient() {
               <section className={styles.section}>
                 <div className={styles.sectionLabel}>Needs attention</div>
                 <div className={styles.noticeStack}>
-                  {openConsequences.slice(0, 4).map((item) => (
+                  {openConsequences.slice(0, 3).map((item) => (
                     <AttentionCard
                       item={item}
                       key={item.id}
@@ -1696,6 +1849,16 @@ export function PepperClient() {
                     />
                   ))}
                 </div>
+                {openConsequences.length > 3 ? (
+                  <button
+                    type="button"
+                    className={styles.attentionMore}
+                    onClick={() => setView("week")}
+                  >
+                    View all {openConsequences.length} decisions
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                ) : null}
               </section>
             ) : null}
 
@@ -1705,7 +1868,7 @@ export function PepperClient() {
                   Prepare before it becomes urgent
                 </div>
                 <div className={styles.noticeStack}>
-                  {preparationNow.map((item) => (
+                  {preparationNow.slice(0, 2).map((item) => (
                     <article
                       className={`${styles.prepareCard} ${styles.preparationAction}`}
                       key={item.id}
@@ -1726,6 +1889,34 @@ export function PepperClient() {
                       </button>
                     </article>
                   ))}
+                  {preparationNow.length > 2 ? (
+                    <details className={styles.preparationMore}>
+                      <summary>
+                        {preparationNow.length - 2} more preparation {preparationNow.length - 2 === 1 ? "item" : "items"}
+                      </summary>
+                      <div className={styles.noticeStack}>
+                        {preparationNow.slice(2).map((item) => (
+                          <article
+                            className={`${styles.prepareCard} ${styles.preparationAction}`}
+                            key={item.id}
+                          >
+                            <div>
+                              <strong>{item.title}</strong>
+                              {item.summary ? <p>{item.summary}</p> : null}
+                            </div>
+                            <button
+                              type="button"
+                              className={styles.secondaryButton}
+                              disabled={handlingPreparation === item.id}
+                              onClick={() => void handlePreparation(item.id)}
+                            >
+                              {handlingPreparation === item.id ? "Handling…" : "Handled"}
+                            </button>
+                          </article>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
               </section>
             ) : null}
@@ -1972,7 +2163,7 @@ export function PepperClient() {
                           } still need attention.`
                         : "Pepper is looking after next week, too."}
                     </strong>
-                    <p>{coverage.headline}</p>
+                    <p>{weekCoverageHeadline}</p>
                   </div>
                   <span className={styles.arrow}>→</span>
                 </button>
@@ -2095,7 +2286,7 @@ export function PepperClient() {
               <div className={styles.eyebrow}>Planning horizon</div>
               <h1>Your next seven days.</h1>
               <p>
-                {coverage?.headline ||
+                {coverage ? weekCoverageHeadline :
                   "Pepper is building the family plan it currently knows about."}
               </p>
             </section>
@@ -2313,8 +2504,8 @@ export function PepperClient() {
           state={state}
           busy={actionBusy}
           onClose={() => setSelectedItem(null)}
-          onUpdate={(operation, ownerMemberId) =>
-            void updateItem(selectedItem, operation, ownerMemberId)
+          onUpdate={(operation, changes) =>
+            void updateItem(selectedItem, operation, changes)
           }
         />
       ) : null}
@@ -2348,7 +2539,18 @@ export function PepperClient() {
 
       {!ritualOpen ? (
         <div className={styles.composer}>
-          {message ? <div className={styles.toast}>{message}</div> : null}
+          {message ? (
+            <div className={styles.toast} role="status">
+              <span>{message}</span>
+              <button
+                type="button"
+                onClick={() => setMessage("")}
+                aria-label="Dismiss message"
+              >
+                <X size={15} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
           <div className={styles.composeInner}>
             <button
               type="button"
@@ -2435,6 +2637,8 @@ function compareBriefTasks(left: FamilyTask, right: FamilyTask) {
   if (left.status !== right.status) {
     if (left.status === "in_progress") return -1;
     if (right.status === "in_progress") return 1;
+    if (left.status === "on_hold") return 1;
+    if (right.status === "on_hold") return -1;
   }
   const priorityDifference = briefPriorityRank(left) - briefPriorityRank(right);
   if (priorityDifference) return priorityDifference;
@@ -2450,6 +2654,7 @@ function compareBriefTasks(left: FamilyTask, right: FamilyTask) {
 }
 
 function briefTaskTiming(task: FamilyTask, today: string) {
+  if (task.status === "on_hold") return "On hold";
   const due = localDateFor(task.due_at);
   if (!due) return "No due date";
   if (due < today) return "Overdue";
@@ -2971,9 +3176,7 @@ function EveningReflectionOutput({
       !["completed", "canceled"].includes(task.status) &&
       localDateFor(task.due_at) === today,
   );
-  const openConsequences = (state.consequences || []).filter(
-    (item) => !item.status || item.status === "open",
-  );
+  const openConsequences = visibleConsequences(state.consequences || []);
   const verifiedHandled =
     completedTasks.length + completedEvents.length || evening?.handled_today || 0;
   const latestHealth = state.integrations?.apple_health?.latest;
@@ -3088,8 +3291,8 @@ function AttentionCard({
       onClick={onOpen}
     >
       <span>
-        <strong>{item.title}</strong>
-        <p>{item.summary}</p>
+        <strong>{productNameText(item.title)}</strong>
+        <p>{productNameText(item.summary)}</p>
         {canResolve ? <small className={styles.noticeAction}>{action}</small> : null}
       </span>
       {canResolve ? <ChevronRight size={19} aria-hidden="true" /> : null}
@@ -3974,6 +4177,7 @@ function WorkPage({
   state: PepperState;
   onOpen: (task: FamilyTask) => void;
 }) {
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const workTasks = Array.from(
     new Map(tasks.filter(isWorkTask).map((task) => [task.id, task])).values(),
   );
@@ -4000,28 +4204,52 @@ function WorkPage({
 
       <div className={styles.workPriorityStack}>
         {grouped.length ? (
-          grouped.map((group) => (
-            <section className={styles.workPrioritySection} key={group.key}>
-              <header className={styles.workPriorityHeader}>
-                <span>
-                  <strong>{group.label}</strong>
-                  <small>{group.note}</small>
-                </span>
-                <span className={styles.workPriorityCount}>{group.tasks.length}</span>
-              </header>
-              <div className={styles.workTaskList}>
-                {group.tasks.map((task) => (
-                  <WorkTaskRow
-                    key={task.id}
-                    task={task}
-                    state={state}
-                    priority={group.key}
-                    onOpen={() => onOpen(task)}
-                  />
-                ))}
-              </div>
-            </section>
-          ))
+          grouped.map((group) => {
+            const initialCount = group.key === "critical" ? group.tasks.length : 8;
+            const expanded = Boolean(expandedGroups[group.key]);
+            const visibleTasks = expanded
+              ? group.tasks
+              : group.tasks.slice(0, initialCount);
+            return (
+              <section className={styles.workPrioritySection} key={group.key}>
+                <header className={styles.workPriorityHeader}>
+                  <span>
+                    <strong>{group.label}</strong>
+                    <small>{group.note}</small>
+                  </span>
+                  <span className={styles.workPriorityCount}>{group.tasks.length}</span>
+                </header>
+                <div className={styles.workTaskList}>
+                  {visibleTasks.map((task) => (
+                    <WorkTaskRow
+                      key={task.id}
+                      task={task}
+                      state={state}
+                      priority={group.key}
+                      onOpen={() => onOpen(task)}
+                    />
+                  ))}
+                </div>
+                {group.tasks.length > initialCount ? (
+                  <button
+                    type="button"
+                    className={styles.workReveal}
+                    onClick={() =>
+                      setExpandedGroups((current) => ({
+                        ...current,
+                        [group.key]: !expanded,
+                      }))
+                    }
+                  >
+                    {expanded
+                      ? `Show fewer ${group.label.toLowerCase()} tasks`
+                      : `Show all ${group.tasks.length} ${group.label.toLowerCase()} tasks`}
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </section>
+            );
+          })
         ) : (
           <div className={styles.quietEmpty}>
             <p>No open work tasks.</p>
@@ -4074,6 +4302,7 @@ function WorkTaskRow({
           <span className={!owner ? styles.workOwnerMissing : undefined}>
             {owner || "Needs an owner"}
           </span>
+          {task.status === "on_hold" ? " · On hold" : ""}
           {task.project ? ` · ${task.project}` : ""}
           {task.due_at ? ` · ${dateLabel(task.due_at.slice(0, 10))}` : ""}
         </small>
@@ -4256,7 +4485,7 @@ function ChoreRow({
       </button>
       <button type="button" className={styles.choreBody} onClick={onOpen}>
         <strong>{task.title}</strong>
-        <small>{canceled ? "Canceled" : completed ? "Completed" : schedule}</small>
+        <small>{canceled ? "Canceled" : completed ? "Completed" : task.status === "on_hold" ? "On hold" : schedule}</small>
       </button>
       <button
         type="button"
@@ -4480,6 +4709,7 @@ function MealsPage({
   const [mealDraft, setMealDraft] = useState<MealDraft | null>(null);
   const [needComposerOpen, setNeedComposerOpen] = useState(false);
   const [groceryComposerOpen, setGroceryComposerOpen] = useState(false);
+  const [showAllGroceries, setShowAllGroceries] = useState(false);
   const today = localDate();
   const weekDates = Array.from({ length: 7 }, (_, index) => addDateDays(today, index));
   const weekMeals = weekDates.map((date) => ({
@@ -4497,63 +4727,18 @@ function MealsPage({
   const unassignedCount = weekGroceries.filter(
     (item) => item.status !== "completed" && !item.owner_member_id,
   ).length;
+  const displayedGroceries = showAllGroceries
+    ? weekGroceries
+    : weekGroceries.slice(0, 8);
 
   return (
     <>
       <section className={`${styles.hero} ${styles.mealHero}`}>
         <div className={styles.eyebrow}>Family table</div>
-        <h1>This week, fed.</h1>
+        <h1>This week&apos;s meals</h1>
         <p>
           Meals, family needs, groceries, and who is handling each item stay in one plan.
         </p>
-      </section>
-
-      <section className={styles.mealNeedsSection}>
-        <div className={styles.sectionHeading}>
-          <div>
-            <div className={styles.sectionLabel}>Family meal needs</div>
-            <p>Pepper keeps these visible while every meal is planned.</p>
-          </div>
-          {actorIsAdult ? (
-            <button
-              type="button"
-              className={styles.textButton}
-              onClick={() => setNeedComposerOpen(true)}
-            >
-              <Plus size={15} aria-hidden="true" /> Add need
-            </button>
-          ) : null}
-        </div>
-        {mealNeeds.length ? (
-          <div className={styles.mealNeedList}>
-            {mealNeeds.map((need) => {
-              const person = state.members.find((member) => member.id === need.member_id);
-              return (
-                <div className={styles.mealNeed} data-type={need.need_type} key={need.id}>
-                  <span>
-                    <strong>{displayName(person)}</strong>
-                    {need.label}
-                  </span>
-                  <small>{need.need_type}</small>
-                  {actorIsAdult ? (
-                    <button
-                      type="button"
-                      aria-label={`Remove ${need.label}`}
-                      disabled={busy}
-                      onClick={() => void onRemoveNeed(need.id)}
-                    >
-                      <X size={14} aria-hidden="true" />
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className={styles.mealNeedsEmpty}>
-            No allergies, avoidances, preferences, nutrition needs, or schedule constraints are saved yet.
-          </div>
-        )}
       </section>
 
       <section className={styles.section}>
@@ -4616,6 +4801,64 @@ function MealsPage({
         </div>
       </section>
 
+      <details className={styles.mealNeedsSection}>
+        <summary>
+          <span>
+            <strong>Family meal needs</strong>
+            <small>
+              {mealNeeds.length
+                ? `${mealNeeds.length} saved for planning`
+                : "No needs saved yet"}
+            </small>
+          </span>
+          <ChevronRight size={18} aria-hidden="true" />
+        </summary>
+        <div className={styles.mealNeedsBody}>
+          <div className={styles.sectionHeading}>
+            <p>Allergies, preferences, nutrition, and schedule constraints.</p>
+            {actorIsAdult ? (
+              <button
+                type="button"
+                className={styles.textButton}
+                onClick={() => setNeedComposerOpen(true)}
+              >
+                <Plus size={15} aria-hidden="true" /> Add need
+              </button>
+            ) : null}
+          </div>
+          {mealNeeds.length ? (
+            <div className={styles.mealNeedList}>
+              {mealNeeds.map((need) => {
+                const person = state.members.find((member) => member.id === need.member_id);
+                return (
+                  <div className={styles.mealNeed} data-type={need.need_type} key={need.id}>
+                    <span>
+                      <strong>{displayName(person)}</strong>
+                      {need.label}
+                    </span>
+                    <small>{need.need_type}</small>
+                    {actorIsAdult ? (
+                      <button
+                        type="button"
+                        aria-label={`Remove ${need.label}`}
+                        disabled={busy}
+                        onClick={() => void onRemoveNeed(need.id)}
+                      >
+                        <X size={14} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className={styles.mealNeedsEmpty}>
+              No allergies, avoidances, preferences, nutrition needs, or schedule constraints are saved yet.
+            </div>
+          )}
+        </div>
+      </details>
+
       <section className={styles.section}>
         <div className={styles.groceryHeading}>
           <div>
@@ -4634,7 +4877,7 @@ function MealsPage({
         </div>
         <div className={styles.groceryList}>
           {weekGroceries.length ? (
-            weekGroceries.map((item) => {
+            displayedGroceries.map((item) => {
               const completed = item.status === "completed";
               const canComplete =
                 actorIsAdult || !item.owner_member_id || item.owner_member_id === state.member.id;
@@ -4707,6 +4950,16 @@ function MealsPage({
             </div>
           )}
         </div>
+        {weekGroceries.length > 8 ? (
+          <button
+            type="button"
+            className={styles.groceryReveal}
+            onClick={() => setShowAllGroceries((current) => !current)}
+          >
+            {showAllGroceries ? "Show fewer groceries" : `Show all ${weekGroceries.length} groceries`}
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        ) : null}
       </section>
 
       {mealDraft ? (
@@ -5450,6 +5703,7 @@ function TaskActionRow({
         <strong>{task.title}</strong>
         <small>
           {owner || "Needs an owner"}
+          {task.status === "on_hold" ? " · On hold" : ""}
           {task.project ? ` · ${task.project}` : ""}
           {task.due_at ? ` · ${dateLabel(task.due_at.slice(0, 10))}` : ""}
         </small>
@@ -5471,13 +5725,33 @@ function ItemActionSheet({
   busy: boolean;
   onClose: () => void;
   onUpdate: (
-    operation: "assign" | "complete" | "cancel" | "reopen",
-    ownerMemberId?: string,
+    operation: ItemOperation,
+    changes?: ItemUpdate,
   ) => void;
 }) {
   const item = selected.item;
   const eventItem = selected.type === "event" ? selected.item : null;
   const taskItem = selected.type === "task" ? selected.item : null;
+  const [editing, setEditing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [title, setTitle] = useState(item.title);
+  const [taskStatus, setTaskStatus] = useState<"open" | "in_progress" | "on_hold">(
+    taskItem?.status === "in_progress" || taskItem?.status === "on_hold"
+      ? taskItem.status
+      : "open",
+  );
+  const [dueDate, setDueDate] = useState(localDateFor(taskItem?.due_at));
+  const [priority, setPriority] = useState(taskItem?.priority || "");
+  const [notes, setNotes] = useState(taskItem?.notes || eventItem?.notes || "");
+  const [waitingOn, setWaitingOn] = useState(taskItem?.waiting_on || "");
+  const [nextAction, setNextAction] = useState(taskItem?.next_action || "");
+  const [startsLocal, setStartsLocal] = useState(
+    localDateTimeFor(eventItem?.starts_at),
+  );
+  const [endsLocal, setEndsLocal] = useState(
+    localDateTimeFor(eventItem?.ends_at),
+  );
+  const [location, setLocation] = useState(eventItem?.location || "");
   const currentOwner = eventItem
     ? eventItem.transport_owner_member_id || ""
     : taskItem?.owner_member_id || "";
@@ -5494,6 +5768,33 @@ function ItemActionSheet({
           taskItem.creator_member_id === state.member.id),
     );
   const handled = ["completed", "canceled"].includes(item.status);
+  const eventEditorLabel = eventItem && isMedicalAppointment(eventItem)
+    ? "Edit appointment"
+    : "Edit event";
+
+  function saveEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (taskItem) {
+      onUpdate("edit", {
+        title,
+        status: taskStatus,
+        due_date: dueDate,
+        priority,
+        notes,
+        waiting_on: waitingOn,
+        next_action: nextAction,
+      });
+      return;
+    }
+    onUpdate("edit", {
+      title,
+      starts_local: startsLocal,
+      ends_local: endsLocal,
+      location,
+      notes,
+    });
+  }
+
   return (
     <div className={styles.sheetBackdrop} role="presentation" onMouseDown={onClose}>
       <section
@@ -5510,28 +5811,165 @@ function ItemActionSheet({
           {eventItem ? "Schedule" : taskItem && isChore(taskItem) ? "Chore" : "Task"}
         </div>
         <h2 id="family-item-title">{item.title}</h2>
-        {eventItem ? (
+        {!editing && eventItem ? (
           <p className={styles.sheetMeta}>
             <CalendarDays size={15} /> {dateLabel(eventItem.starts_at.slice(0, 10))} at {time(eventItem.starts_at)}
             {eventItem.location ? ` · ${eventItem.location}` : ""}
           </p>
-        ) : taskItem?.due_at ? (
+        ) : !editing && taskItem?.due_at ? (
           <p className={styles.sheetMeta}>Due {dateLabel(taskItem.due_at.slice(0, 10))}</p>
         ) : null}
-        {taskItem?.project ? (
+        {!editing && taskItem?.status === "on_hold" ? (
+          <p className={styles.holdNote}>On hold{taskItem.waiting_on ? ` · ${taskItem.waiting_on}` : ""}</p>
+        ) : null}
+        {!editing && taskItem?.project ? (
           <p className={styles.sourceNote}>Project: {taskItem.project}</p>
         ) : null}
-        {item.source && item.source !== "pepper" ? (
+        {!editing && taskItem?.notes ? <p className={styles.itemNotes}>{taskItem.notes}</p> : null}
+        {!editing && eventItem?.notes ? <p className={styles.itemNotes}>{eventItem.notes}</p> : null}
+        {!editing && item.source && item.source !== "pepper" ? (
           <p className={styles.sourceNote}>Calendar supplied the evidence. Pepper owns this family plan.</p>
         ) : null}
 
-        {canAssign ? (
+        {editing ? (
+          <form className={styles.itemEditForm} onSubmit={saveEdit}>
+            <h3>{taskItem ? "Edit task" : eventEditorLabel}</h3>
+            <label className={styles.editField}>
+              Title
+              <input
+                value={title}
+                maxLength={240}
+                required
+                disabled={busy}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </label>
+            {taskItem ? (
+              <>
+                <div className={styles.editFieldGrid}>
+                  <label className={styles.editField}>
+                    Status
+                    <select
+                      value={taskStatus}
+                      disabled={busy}
+                      onChange={(event) =>
+                        setTaskStatus(event.target.value as typeof taskStatus)
+                      }
+                    >
+                      <option value="open">Open</option>
+                      <option value="in_progress">In progress</option>
+                      <option value="on_hold">On hold</option>
+                    </select>
+                  </label>
+                  <label className={styles.editField}>
+                    Priority
+                    <select
+                      value={priority}
+                      disabled={busy}
+                      onChange={(event) => setPriority(event.target.value)}
+                    >
+                      <option value="">Not set</option>
+                      <option value="P0">Critical</option>
+                      <option value="P1">High</option>
+                      <option value="P2">Planned</option>
+                      <option value="P3">Later</option>
+                    </select>
+                  </label>
+                </div>
+                <label className={styles.editField}>
+                  Due date
+                  <input
+                    type="date"
+                    value={dueDate}
+                    disabled={busy}
+                    onChange={(event) => setDueDate(event.target.value)}
+                  />
+                </label>
+                <label className={styles.editField}>
+                  Waiting on / hold reason
+                  <input
+                    value={waitingOn}
+                    maxLength={1000}
+                    disabled={busy}
+                    placeholder="For example: On hold until further notice"
+                    onChange={(event) => setWaitingOn(event.target.value)}
+                  />
+                </label>
+                <label className={styles.editField}>
+                  Next action
+                  <input
+                    value={nextAction}
+                    maxLength={1000}
+                    disabled={busy}
+                    placeholder="What should happen when this moves again?"
+                    onChange={(event) => setNextAction(event.target.value)}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <div className={styles.editFieldGrid}>
+                  <label className={styles.editField}>
+                    Starts
+                    <input
+                      type="datetime-local"
+                      value={startsLocal}
+                      required
+                      disabled={busy}
+                      onChange={(event) => setStartsLocal(event.target.value)}
+                    />
+                  </label>
+                  <label className={styles.editField}>
+                    Ends
+                    <input
+                      type="datetime-local"
+                      value={endsLocal}
+                      disabled={busy}
+                      onChange={(event) => setEndsLocal(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <label className={styles.editField}>
+                  Location
+                  <input
+                    value={location}
+                    maxLength={500}
+                    disabled={busy}
+                    onChange={(event) => setLocation(event.target.value)}
+                  />
+                </label>
+              </>
+            )}
+            <label className={styles.editField}>
+              Notes
+              <textarea
+                value={notes}
+                rows={4}
+                maxLength={8000}
+                disabled={busy}
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            </label>
+            <div className={styles.sheetActions}>
+              <button type="button" disabled={busy} onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+              <button type="submit" disabled={busy}>
+                <Check size={18} /> Save changes
+              </button>
+            </div>
+          </form>
+        ) : null}
+
+        {!editing && canAssign ? (
           <label className={styles.ownerSelect}>
             {eventItem ? "Driver" : "Owner"}
             <select
               value={currentOwner}
               disabled={busy}
-              onChange={(event) => onUpdate("assign", event.target.value)}
+              onChange={(event) =>
+                onUpdate("assign", { owner_member_id: event.target.value || null })
+              }
             >
               <option value="">{eventItem ? "Needs a driver" : "Needs an owner"}</option>
               {assignable.map((member) => (
@@ -5543,8 +5981,11 @@ function ItemActionSheet({
           </label>
         ) : null}
 
-        {canChangeStatus ? (
+        {!editing && canChangeStatus ? (
           <div className={styles.sheetActions}>
+            <button type="button" disabled={busy} onClick={() => setEditing(true)}>
+              <Pencil size={17} /> {taskItem ? "Edit task" : eventEditorLabel}
+            </button>
             {handled ? (
               <button type="button" disabled={busy} onClick={() => onUpdate("reopen")}>
                 <RotateCcw size={17} /> Restore
@@ -5554,15 +5995,45 @@ function ItemActionSheet({
                 <button type="button" disabled={busy} onClick={() => onUpdate("complete")}>
                   <Check size={18} /> Complete
                 </button>
-                <button type="button" disabled={busy} onClick={() => onUpdate("cancel")}>
-                  <CircleX size={18} /> Cancel
-                </button>
+                {eventItem ? (
+                  <button type="button" className={styles.cancelAction} disabled={busy} onClick={() => onUpdate("cancel")}>
+                    <CircleX size={18} /> Cancel event
+                  </button>
+                ) : null}
               </>
             )}
           </div>
-        ) : (
+        ) : !editing ? (
           <p className={styles.permissionNote}>An adult or the current owner can change this item.</p>
-        )}
+        ) : null}
+
+        {!editing && canChangeStatus ? (
+          confirmDelete ? (
+            <div className={styles.deleteConfirmation} role="alert">
+              <div>
+                <strong>Delete from Pepper?</strong>
+                <p>This removes it from every Pepper view. Its audit history remains.</p>
+              </div>
+              <div className={styles.deleteConfirmationActions}>
+                <button type="button" disabled={busy} onClick={() => setConfirmDelete(false)}>
+                  Keep it
+                </button>
+                <button type="button" disabled={busy} onClick={() => onUpdate("delete")}>
+                  <Trash2 size={17} /> Delete item
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className={styles.deleteButton}
+              disabled={busy}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 size={17} /> Delete
+            </button>
+          )
+        ) : null}
       </section>
     </div>
   );
@@ -5703,7 +6174,7 @@ function ConflictResolutionSheet({
 }
 
 function HorizonRow({ item }: { item: HorizonRowItem }) {
-  const driver = item.transport_owner_name;
+  const driver = productNameText(item.transport_owner_name);
   const label =
     item.item_type === "task"
       ? "Task"
@@ -5732,8 +6203,8 @@ function HorizonRow({ item }: { item: HorizonRowItem }) {
             : time(item.starts_at)}
       </div>
       <div>
-        <strong>{item.title}</strong>
-        {item.detail ? <p className={styles.horizonDetail}>{item.detail}</p> : null}
+        <strong>{productNameText(item.title)}</strong>
+        {item.detail ? <p className={styles.horizonDetail}>{productNameText(item.detail)}</p> : null}
         <div className={styles.horizonMeta}>
           <span>{label}</span>
           {item.location ? <span>{item.location}</span> : null}
@@ -5754,7 +6225,7 @@ function isFamilyWeekItem(item: HorizonRowItem) {
 }
 
 function HorizonDayCard({ day }: { day: HorizonDay }) {
-  const items = (day.items || []).filter(isFamilyWeekItem);
+  const items = uniqueHorizonItems((day.items || []).filter(isFamilyWeekItem));
   const groupedDropoffs = items.filter(
     (item) =>
       item.source === "routine" &&
@@ -5818,7 +6289,7 @@ function HorizonSchoolTransportGroup({
   label: "School drop-off" | "School pickup";
 }) {
   const drivers = Array.from(
-    new Set(items.map((item) => item.transport_owner_name).filter(Boolean)),
+    new Set(items.map((item) => productNameText(item.transport_owner_name)).filter(Boolean)),
   );
   const countLabel =
     label === "School drop-off"
