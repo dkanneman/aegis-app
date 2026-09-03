@@ -43,12 +43,12 @@ async function status(member:any){
   }
 }
 
-async function beginGmail(member:any){
+async function beginGmail(member:any,returnTarget:unknown){
   if(!['adult_admin','adult','teen'].includes(member.role))throw Object.assign(new Error('Google email can be connected by an adult or teen for their own account.'),{status:403})
   if(!configured())throw Object.assign(new Error('Google email OAuth credentials are not configured in this preview yet.'),{status:503})
-  const state=randomToken(),verifier=randomToken(64)
+  const state=randomToken(),verifier=randomToken(64),return_target=returnTarget==='pepper_ios'?'pepper_ios':'web'
   await sql`delete from private.integration_oauth_states where expires_at<now() or consumed_at<now()-interval '1 hour'`
-  await sql`insert into private.integration_oauth_states(provider,state_hash,code_verifier,household_id,member_id,expires_at) values('gmail',${await digest(state)},${verifier},${member.household_id}::uuid,${member.id}::uuid,now()+interval '10 minutes')`
+  await sql`insert into private.integration_oauth_states(provider,state_hash,code_verifier,household_id,member_id,return_target,expires_at) values('gmail',${await digest(state)},${verifier},${member.household_id}::uuid,${member.id}::uuid,${return_target},now()+interval '10 minutes')`
   const url=new URL('https://accounts.google.com/o/oauth2/v2/auth')
   url.searchParams.set('client_id',GOOGLE_CLIENT_ID)
   url.searchParams.set('redirect_uri',REDIRECT_URI)
@@ -80,7 +80,7 @@ Deno.serve(async(req:Request)=>{
   let body:any={};try{body=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}
   try{
     if(body.action==='status')return json(req,{ok:true,...await status(member)})
-    if(body.action==='gmail_start')return json(req,{ok:true,authorization_url:await beginGmail(member)})
+    if(body.action==='gmail_start')return json(req,{ok:true,authorization_url:await beginGmail(member,body.return_target)})
     if(body.action==='health_pair')return json(req,{ok:true,...await pairHealth(member)})
     return json(req,{error:'Unknown integration action.'},400)
   }catch(error){return json(req,{error:error instanceof Error?error.message:'Connection failed.'},Number((error as any)?.status||500))}

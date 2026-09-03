@@ -110,7 +110,13 @@ function json(req: Request, body: unknown, status = 200) {
   });
 }
 
-function redirectToApp(state: 'connected' | 'error', reason?: string) {
+function redirectToApp(state: 'connected' | 'error', reason?: string, returnTarget: unknown = 'web') {
+  if (returnTarget === 'pepper_ios') {
+    const nativeUrl = new URL('pepper://oauth');
+    nativeUrl.searchParams.set('calendar', state);
+    if (reason) nativeUrl.searchParams.set('reason', reason.slice(0, 80));
+    return Response.redirect(nativeUrl.toString(), 303);
+  }
   const url = new URL(APP_URL);
   url.searchParams.set('calendar', state);
   url.searchParams.set('view', 'week');
@@ -204,7 +210,7 @@ async function connectionForHousehold(householdId: string) {
   return rows[0] || null;
 }
 
-async function beginOAuth(member: Member) {
+async function beginOAuth(member: Member, returnTarget: unknown) {
   requireAdult(member);
   if (!oauthConfigured()) {
     throw new HttpError(
@@ -218,6 +224,7 @@ async function beginOAuth(member: Member) {
   const stateHash = await digest(state);
   const verifier = randomToken(64);
   const challenge = await pkceChallenge(verifier);
+  const return_target = returnTarget === 'pepper_ios' ? 'pepper_ios' : 'web';
 
   await sql`
     delete from private.calendar_oauth_states
@@ -225,10 +232,10 @@ async function beginOAuth(member: Member) {
   `;
   await sql`
     insert into private.calendar_oauth_states (
-      state_hash, code_verifier, household_id, member_id, expires_at
+      state_hash, code_verifier, household_id, member_id, return_target, expires_at
     ) values (
       ${stateHash}, ${verifier}, ${member.household_id}::uuid,
-      ${member.id}::uuid, now() + interval '10 minutes'
+      ${member.id}::uuid, ${return_target}, now() + interval '10 minutes'
     )
   `;
 
@@ -327,21 +334,22 @@ async function completeOAuth(reqUrl: URL) {
     code_verifier: string;
     household_id: string;
     member_id: string;
+    return_target: string;
   }[]>`
     update private.calendar_oauth_states
     set consumed_at = now()
     where state_hash = ${stateHash}
       and consumed_at is null
       and expires_at > now()
-    returning code_verifier, household_id, member_id
+    returning code_verifier, household_id, member_id, return_target
   `;
   const oauthState = stateRows[0];
   if (!oauthState) return redirectToApp('error', 'invalid_state');
 
   const oauthError = reqUrl.searchParams.get('error');
-  if (oauthError) return redirectToApp('error', oauthError);
+  if (oauthError) return redirectToApp('error', oauthError, oauthState.return_target);
   const code = reqUrl.searchParams.get('code');
-  if (!code || !oauthConfigured()) return redirectToApp('error', 'oauth_not_configured');
+  if (!code || !oauthConfigured()) return redirectToApp('error', 'oauth_not_configured', oauthState.return_target);
 
   try {
     const token = await exchangeCode(code, oauthState.code_verifier);
@@ -446,9 +454,9 @@ async function completeOAuth(reqUrl: URL) {
     } catch {
       // Authorization succeeded. The UI will show the stored scan error and can retry.
     }
-    return redirectToApp('connected');
+    return redirectToApp('connected', undefined, oauthState.return_target);
   } catch (error) {
-    return redirectToApp('error', error instanceof HttpError ? error.code : 'oauth_failed');
+    return redirectToApp('error', error instanceof HttpError ? error.code : 'oauth_failed', oauthState.return_target);
   }
 }
 
@@ -844,7 +852,7 @@ Deno.serve(async (req: Request) => {
       });
     }
     if (body?.action === 'start') {
-      const authorizationUrl = await beginOAuth(member);
+      const authorizationUrl = await beginOAuth(member, body?.return_target);
       return json(req, { ok: true, authorization_url: authorizationUrl });
     }
     if (body?.action === 'sync') {

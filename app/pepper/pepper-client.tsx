@@ -57,14 +57,6 @@ const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mZ3llb2x2ZnRoeGFjcnF3d3RjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgxNDMyMDAsImV4cCI6MjEwMzcxOTIwMH0.uW9_dqKw8txaJxb7ysxMS0b0-nMmxg6XCk41Bhc4e9o";
 const TZ = "America/Los_Angeles";
 
-const FAMILY_CHOICES: Member[] = [
-  { slug: "elle", display_name: "Danielle", role: "adult_admin" },
-  { slug: "matt", display_name: "Matt", role: "adult" },
-  { slug: "chloe", display_name: "Chloe", role: "teen" },
-  { slug: "lyra", display_name: "Lyra", role: "teen" },
-  { slug: "posey", display_name: "Posey", role: "child" },
-];
-
 type Member = {
   id?: string;
   slug: string;
@@ -824,8 +816,7 @@ function routineSchoolTripKind(event: FamilyEvent) {
 }
 
 export function PepperClient() {
-  const [members, setMembers] = useState<Member[]>(FAMILY_CHOICES);
-  const [selected, setSelected] = useState("elle");
+  const [profileName, setProfileName] = useState("");
   const [pin, setPin] = useState("");
   const [token, setToken] = useState("");
   const [state, setState] = useState<PepperState | null>(null);
@@ -853,6 +844,8 @@ export function PepperClient() {
   const [insightOpen, setInsightOpen] = useState(false);
   const [insightRefs, setInsightRefs] = useState<ReflectionEvidence[]>([]);
   const [frontSeatOpen, setFrontSeatOpen] = useState(false);
+  const isPepperIOS =
+    typeof navigator !== "undefined" && navigator.userAgent.includes("Pepper-iOS");
 
   useEffect(() => {
     if (!message) return;
@@ -895,7 +888,6 @@ export function PepperClient() {
     try {
       const result = await call({ action: "state" }, session);
       setState(result.state);
-      setMembers(result.state?.members || FAMILY_CHOICES);
     } catch (error) {
       const text =
         error instanceof Error ? error.message : "Pepper could not load.";
@@ -1318,7 +1310,9 @@ export function PepperClient() {
       }
       if (connection === "gmail_connected") {
         setView("connections");
-        setCalendarConfirmation("Google email connected for action-needed signals.");
+        setCalendarConfirmation(
+          "Google email connected. Message scanning is not enabled in this beta.",
+        );
       } else if (connection === "gmail_error") {
         setView("connections");
         setCalendarConfirmation("Google email did not connect. Try again.");
@@ -1361,16 +1355,6 @@ export function PepperClient() {
         void load(saved);
         return;
       }
-      void call({ action: "login_members" }, "")
-        .then((result) => {
-          if (Array.isArray(result.members) && result.members.length) {
-            setMembers(result.members);
-            if (!result.members.some((member: Member) => member.slug === selected)) {
-              setSelected(result.members[0].slug);
-            }
-          }
-        })
-        .catch(() => undefined);
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1472,14 +1456,15 @@ export function PepperClient() {
   } as CSSProperties;
 
   async function login() {
-    if (!selected || !pin) return;
+    const identity = profileName.trim();
+    if (!identity || !pin) return;
     setBusy(true);
     setMessage("");
     try {
       const result = await call(
         {
           action: "login",
-          member_slug: selected,
+          member_slug: identity.toLowerCase(),
           pin,
           device_label: "Pepper family web",
         },
@@ -1506,6 +1491,27 @@ export function PepperClient() {
     setToken("");
     setState(null);
     setPin("");
+  }
+
+  async function deleteAccount(confirmation: string) {
+    setActionBusy(true);
+    try {
+      await call({ action: "account_delete", confirmation });
+      localStorage.removeItem("pepper_family_session");
+      setToken("");
+      setState(null);
+      setProfileName("");
+      setPin("");
+      setMessage("Your Pepper account was deleted.");
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Pepper could not delete this account.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   async function sendTell(text = tell) {
@@ -1614,7 +1620,10 @@ export function PepperClient() {
 
   async function connectCalendar() {
     try {
-      const result = await call({ action: "calendar_start" });
+      const result = await call({
+        action: "calendar_start",
+        return_target: isPepperIOS ? "pepper_ios" : "web",
+      });
       if (result.authorization_url) {
         window.location.assign(result.authorization_url);
       }
@@ -1642,7 +1651,10 @@ export function PepperClient() {
 
   async function connectEmail() {
     try {
-      const result = await call({ action: "email_start" });
+      const result = await call({
+        action: "email_start",
+        return_target: isPepperIOS ? "pepper_ios" : "web",
+      });
       if (result.authorization_url) window.location.assign(result.authorization_url);
     } catch (error) {
       setMessage(
@@ -1655,7 +1667,7 @@ export function PepperClient() {
     try {
       const result = await call({ action: "health_pair" });
       setHealthSetup(result);
-      setMessage("HealthKit pairing is ready for this iPhone.");
+      setMessage("The Apple Health Shortcut pairing is ready for this iPhone.");
       await load();
     } catch (error) {
       setMessage(
@@ -1694,31 +1706,26 @@ export function PepperClient() {
           <div className={styles.wordmark}>Pepper</div>
           <h1>Your family, handled.</h1>
           <p>
-            Choose who you are, enter your family PIN, and Pepper will open your
-            shared plan.
+            Enter your profile name and family PIN to open your shared plan.
           </p>
 
-          <div className={styles.memberGrid}>
-            {members.map((member) => (
-              <button
-                key={member.slug}
-                type="button"
-                className={`${styles.memberChoice} ${
-                  selected === member.slug ? styles.memberChoiceActive : ""
-                }`}
-                onClick={() => setSelected(member.slug)}
-              >
-                <span>{displayName(member)}</span>
-                <small>{member.role.replace("_", " ")}</small>
-              </button>
-            ))}
-          </div>
+          <label className={styles.pinLabel}>
+            Profile name
+            <input
+              autoCapitalize="words"
+              autoComplete="username"
+              value={profileName}
+              onChange={(event) => setProfileName(event.target.value.slice(0, 100))}
+              placeholder="Your name"
+            />
+          </label>
 
           <label className={styles.pinLabel}>
             Family PIN
             <input
+              type="password"
               inputMode="numeric"
-              autoComplete="one-time-code"
+              autoComplete="current-password"
               value={pin}
               onChange={(event) =>
                 setPin(event.target.value.replace(/\D/g, "").slice(0, 12))
@@ -1732,7 +1739,7 @@ export function PepperClient() {
           <button
             type="button"
             className={styles.primaryButton}
-            disabled={busy || !pin}
+            disabled={busy || !profileName.trim() || !pin}
             onClick={() => void login()}
           >
             {busy ? "Opening Pepper…" : "Open Pepper"}
@@ -2494,6 +2501,8 @@ export function PepperClient() {
             onEmail={() => void connectEmail()}
             onHealth={() => void pairHealth()}
             onFamily={() => setView("family")}
+            onDeleteAccount={deleteAccount}
+            deletingAccount={actionBusy}
           />
         ) : null}
       </div>
@@ -3597,8 +3606,8 @@ function HealthSummary({
             {latest?.step_goal
               ? `Goal ${latest.step_goal.toLocaleString()} · ${latest.active_minutes || 0} active minutes`
               : health?.status === "pending"
-                ? "Finish the HealthKit Shortcut on your iPhone."
-                : "Connect HealthKit to bring steps and goals into Pepper."}
+                ? "Finish the Apple Health Shortcut on your iPhone."
+                : "Set up the Apple Health Shortcut for steps and goals."}
           </small>
         </span>
         <ChevronRight size={18} />
@@ -3618,6 +3627,8 @@ function ConnectionsPage({
   onEmail,
   onHealth,
   onFamily,
+  onDeleteAccount,
+  deletingAccount,
 }: {
   calendar?: CalendarStatus;
   gmail?: NonNullable<PepperState["integrations"]>["gmail"];
@@ -3629,8 +3640,12 @@ function ConnectionsPage({
   onEmail: () => void;
   onHealth: () => void;
   onFamily: () => void;
+  onDeleteAccount: (confirmation: string) => Promise<boolean>;
+  deletingAccount: boolean;
 }) {
   const [openProvider, setOpenProvider] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const calendarConnection = calendar?.connection;
   const canConnectEmail = ["adult_admin", "adult", "teen"].includes(member.role);
   const calendarOwner = displayName(
@@ -3701,7 +3716,7 @@ function ConnectionsPage({
       title: "Google email",
       identifier: gmail?.metadata?.email || "Gmail or Google Workspace",
       summary: gmail?.connected
-        ? "The account is linked for permission-safe, action-needed signals."
+        ? "Account linked. Email message scanning is not enabled in this beta."
         : canConnectEmail
           ? "Connect the personal, school, or work Google account you use most."
           : "Email connections are available from adult and teen profiles.",
@@ -3723,7 +3738,7 @@ function ConnectionsPage({
       lastActivity: gmail?.connected ? "Account linked" : "No verified activity yet",
       reads: [
         "Google account identity for the connected member",
-        "Message ingestion remains off in this preview",
+        "No inbox messages are read in this beta",
       ],
       automatic: [
         "Nothing is marked handled without a canonical One Brain change",
@@ -3734,7 +3749,7 @@ function ConnectionsPage({
       ],
       sharing:
         "Private by default. Only permission-safe family actions may leave the member's private context.",
-      feeds: ["Private intake", "Future action-needed signals"],
+      feeds: ["Connection status only"],
       action: gmail?.connected
         ? undefined
         : gmail?.configured && canConnectEmail
@@ -3789,7 +3804,7 @@ function ConnectionsPage({
       identifier: health?.connected
         ? `Last received ${health.latest?.metric_date || "recently"}`
         : health?.status === "pending"
-          ? "HealthKit Shortcut waiting"
+          ? "Apple Health Shortcut waiting"
           : "This iPhone",
       summary: health?.connected
         ? "Approved daily steps, goals, and active minutes are reaching Pepper."
@@ -3823,7 +3838,7 @@ function ConnectionsPage({
       sharing:
         "Private to this member. Health details do not appear on other family pages.",
       feeds: ["Private Home health"],
-      action: health?.connected ? "Reconnect" : "Connect on iPhone",
+      action: health?.connected ? "Pair again" : "Set up Shortcut",
       actionIcon: <Plus size={15} />,
       onAction: onHealth,
     },
@@ -3901,10 +3916,69 @@ function ConnectionsPage({
         </div>
       </section>
 
+      <section className={styles.accountControls} aria-labelledby="pepper-account-heading">
+        <div>
+          <div className={styles.sectionLabel}>Account</div>
+          <h2 id="pepper-account-heading">Your Pepper profile</h2>
+          <p>
+            Delete this profile and its private Pepper data. Shared family plans remain
+            available to the rest of the household.
+          </p>
+        </div>
+        {!deleteOpen ? (
+          <button
+            type="button"
+            className={styles.deleteAccountButton}
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 size={16} aria-hidden="true" />
+            Delete my Pepper account
+          </button>
+        ) : (
+          <div className={styles.deleteAccountConfirm}>
+            <label>
+              Type <strong>DELETE MY ACCOUNT</strong> to confirm
+              <input
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <div>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={deletingAccount}
+                onClick={() => {
+                  setDeleteOpen(false);
+                  setDeleteConfirmation("");
+                }}
+              >
+                Keep account
+              </button>
+              <button
+                type="button"
+                className={styles.deleteAccountButton}
+                disabled={
+                  deletingAccount || deleteConfirmation !== "DELETE MY ACCOUNT"
+                }
+                onClick={async () => {
+                  const deleted = await onDeleteAccount(deleteConfirmation);
+                  if (deleted) setDeleteConfirmation("");
+                }}
+              >
+                <Trash2 size={16} aria-hidden="true" />
+                {deletingAccount ? "Deleting…" : "Delete account"}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
       {healthSetup ? (
         <section className={styles.healthSetup}>
           <div>
-            <div className={styles.sectionLabel}>One-time HealthKit setup</div>
+            <div className={styles.sectionLabel}>One-time Shortcut setup</div>
             <h2>Use these in the Pepper Health Shortcut.</h2>
             <p>
               The pairing token is shown once. The Shortcut sends only the

@@ -1757,7 +1757,7 @@ button.morningBriefOutcome {
   color: var(--ink);
   font: inherit;
   font-size: 18px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0;
   outline: none;
 }
 
@@ -2345,6 +2345,96 @@ button.morningBriefOutcome {
 .connectionEmpty strong,
 .connectionEmpty small {
   display: block;
+}
+
+.accountControls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 30px;
+  padding: 18px 20px;
+  border-top: 1px solid var(--line);
+}
+
+.accountControls h2 {
+  margin: 5px 0 4px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.accountControls p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.deleteAccountButton {
+  min-height: 42px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  border: 1px solid rgba(130, 79, 89, 0.24);
+  border-radius: 11px;
+  background: rgba(201, 137, 125, 0.1);
+  color: var(--pepper-bordeaux);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.deleteAccountButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.deleteAccountConfirm {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 10px;
+}
+
+.deleteAccountConfirm label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.deleteAccountConfirm input {
+  min-height: 42px;
+  width: 100%;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+
+.deleteAccountConfirm input:focus {
+  border-color: var(--pepper-riviera);
+  box-shadow: 0 0 0 3px rgba(110, 157, 183, 0.14);
+}
+
+.deleteAccountConfirm > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.deleteAccountConfirm .secondaryButton {
+  min-height: 42px;
+  margin: 0;
 }
 
 .connectionEmpty strong {
@@ -4394,6 +4484,11 @@ button.morningBriefOutcome {
   .connectionCapabilities {
     grid-template-columns: 1fr;
     gap: 18px;
+  }
+
+  .accountControls {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

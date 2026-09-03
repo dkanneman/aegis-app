@@ -11,13 +11,13 @@ const GMAIL_SCOPE='openid email https://www.googleapis.com/auth/gmail.readonly'
 if(!SUPABASE_URL||!DATABASE_URL)throw new Error('Supabase runtime is not configured.')
 const sql=postgres(DATABASE_URL,{ssl:'require',prepare:false,max:1,idle_timeout:20,connect_timeout:10})
 async function digest(value:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return Array.from(new Uint8Array(bytes)).map(x=>x.toString(16).padStart(2,'0')).join('')}
-function redirect(state:'gmail_connected'|'gmail_error'){const target=new URL(APP_URL);target.searchParams.set('connection',state);return Response.redirect(target.toString(),303)}
+function redirect(state:'gmail_connected'|'gmail_error',returnTarget:unknown='web'){if(returnTarget==='pepper_ios')return Response.redirect(`pepper://oauth?connection=${state}`,303);const target=new URL(APP_URL);target.searchParams.set('connection',state);return Response.redirect(target.toString(),303)}
 async function googleJson(url:string,init:RequestInit){const response=await fetch(url,{...init,signal:AbortSignal.timeout(20000)});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(String(body?.error_description||body?.error?.message||body?.error||`Google returned ${response.status}`));return body}
 
 Deno.serve(async(req:Request)=>{
   if(req.method!=='GET')return new Response('Method not allowed.',{status:405,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}})
   const url=new URL(req.url),state=url.searchParams.get('state')||'',code=url.searchParams.get('code')||''
-  const rows=await sql<any[]>`update private.integration_oauth_states set consumed_at=now() where provider='gmail' and state_hash=${await digest(state)} and consumed_at is null and expires_at>now() returning code_verifier,household_id,member_id`
+  const rows=await sql<any[]>`update private.integration_oauth_states set consumed_at=now() where provider='gmail' and state_hash=${await digest(state)} and consumed_at is null and expires_at>now() returning code_verifier,household_id,member_id,return_target`
   const oauth=rows[0]
   if(!oauth||!code||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET)return redirect('gmail_error')
   try{
@@ -37,9 +37,9 @@ Deno.serve(async(req:Request)=>{
         await tx`insert into private.integration_tokens(connection_id,vault_secret_id) values(${connection.id}::uuid,${secret[0].id}::uuid)`
       }
     })
-    return redirect('gmail_connected')
+    return redirect('gmail_connected',oauth.return_target)
   }catch(error){
     await sql`insert into public.integration_connections(household_id,member_id,provider,status,last_attempt_at,last_error) values(${oauth.household_id}::uuid,${oauth.member_id}::uuid,'gmail','error',now(),${error instanceof Error?error.message.slice(0,300):'Gmail connection failed.'}) on conflict(household_id,member_id,provider) do update set status='error',last_attempt_at=now(),last_error=excluded.last_error,updated_at=now()`
-    return redirect('gmail_error')
+    return redirect('gmail_error',oauth.return_target)
   }
 })

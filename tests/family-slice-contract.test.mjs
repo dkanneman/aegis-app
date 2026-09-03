@@ -54,6 +54,15 @@ const testFlightReviewMigrationPath = new URL(
   import.meta.url,
 )
 const privacyPagePath = new URL('../app/privacy/page.tsx', import.meta.url)
+const iosWebViewPath = new URL('../ios/Pepper/Pepper/PepperWebView.swift', import.meta.url)
+const iosBrowserModelPath = new URL('../ios/Pepper/Pepper/PepperBrowserModel.swift', import.meta.url)
+const iosInfoPath = new URL('../ios/Pepper/Pepper/Info.plist', import.meta.url)
+const iosPrivacyManifestPath = new URL('../ios/Pepper/Pepper/PrivacyInfo.xcprivacy', import.meta.url)
+const gmailCallbackPath = new URL('../supabase/functions/pepper-gmail-callback/index.ts', import.meta.url)
+const nativeOAuthMigrationPath = new URL(
+  '../supabase/preview/20260903152000_harden_testflight_auth_and_oauth_return.sql',
+  import.meta.url,
+)
 
 test('family API targets its own Supabase environment instead of production', async () => {
   const api = await readFile(apiPath, 'utf8')
@@ -74,6 +83,66 @@ test('TestFlight reviewer access is isolated from the real family household', as
   assert.match(migration, /reviewer PIN is provisioned out of band/i)
   assert.doesNotMatch(migration, /Danielle|Matt|Chloe|Lyra|Posey|La Mariposa|Las Colinas|Rancho Campana/)
   assert.doesNotMatch(migration, /pin_hash\s*=\s*crypt\('[0-9]+/)
+})
+
+test('pre-authentication UI keeps household identities private and masks the PIN', async () => {
+  const [client, api, migration] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(apiPath, 'utf8'),
+    readFile(nativeOAuthMigrationPath, 'utf8'),
+  ])
+
+  assert.doesNotMatch(client, /const FAMILY_CHOICES/)
+  assert.doesNotMatch(client, /action: "login_members"/)
+  assert.match(client, /Profile name/)
+  assert.match(client, /type="password"/)
+  assert.doesNotMatch(api, /action==='login_members'/)
+  assert.match(migration, /lower\(m\.display_name\)/)
+  assert.match(migration, /'danielle'/)
+})
+
+test('native Google authorization returns to Pepper instead of remaining in Safari', async () => {
+  const [client, api, integrations, calendar, gmailCallback, webView, browserModel, info, migration] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(apiPath, 'utf8'),
+    readFile(integrationsPath, 'utf8'),
+    readFile(calendarPath, 'utf8'),
+    readFile(gmailCallbackPath, 'utf8'),
+    readFile(iosWebViewPath, 'utf8'),
+    readFile(iosBrowserModelPath, 'utf8'),
+    readFile(iosInfoPath, 'utf8'),
+    readFile(nativeOAuthMigrationPath, 'utf8'),
+  ])
+
+  assert.match(client, /isPepperIOS/)
+  assert.match(client, /return_target: isPepperIOS \? "pepper_ios" : "web"/)
+  assert.match(api, /return_target:b\.return_target/)
+  assert.match(integrations, /return_target/)
+  assert.match(calendar, /return_target/)
+  assert.match(gmailCallback, /pepper:\/\/oauth/)
+  assert.match(webView, /startAuthentication/)
+  assert.match(browserModel, /ASWebAuthenticationSession/)
+  assert.match(info, /CFBundleURLSchemes[\s\S]*pepper/)
+  assert.match(migration, /return_target text/)
+})
+
+test('account deletion is available in-app and privacy disclosures match collection', async () => {
+  const [client, api, privacy, manifest] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(apiPath, 'utf8'),
+    readFile(privacyPagePath, 'utf8'),
+    readFile(iosPrivacyManifestPath, 'utf8'),
+  ])
+
+  assert.match(client, /Delete my Pepper account/)
+  assert.match(client, /action: "account_delete"/)
+  assert.match(client, /DELETE MY ACCOUNT/)
+  assert.match(api, /action==='account_delete'/)
+  assert.match(api, /delete from public\.household_members/)
+  assert.doesNotMatch(privacy, /request account or household deletion through TestFlight feedback/)
+  assert.match(manifest, /NSPrivacyCollectedDataTypeName/)
+  assert.match(manifest, /NSPrivacyCollectedDataTypeHealthFitness/)
+  assert.match(manifest, /NSPrivacyCollectedDataTypeOtherUserContent/)
 })
 
 test('member pages remain household and privacy scoped', async () => {

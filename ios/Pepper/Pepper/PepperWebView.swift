@@ -82,6 +82,12 @@ struct PepperWebView: UIViewRepresentable {
                 return
             }
 
+            if url.scheme == "https", url.host == "accounts.google.com" {
+                browser.startAuthentication(at: url)
+                decisionHandler(.cancel)
+                return
+            }
+
             if url.scheme == "https" || url.scheme == "mailto" || url.scheme == "tel" {
                 UIApplication.shared.open(url)
             }

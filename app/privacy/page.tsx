@@ -33,7 +33,7 @@ const sections = [
     title: "Security and retention",
     body: [
       "Pepper uses access controls, scoped household sessions, and encrypted network connections. No online service can guarantee absolute security.",
-      "Beta information is retained while the household account is active or as needed to operate and protect the service. Household members can edit or remove supported items in Pepper and can request account or household deletion through TestFlight feedback.",
+      "Beta information is retained while the household account is active or as needed to operate and protect the service. Household members can edit or remove supported items and delete their Pepper account from the Connections screen.",
     ],
   },
   {
@@ -46,7 +46,7 @@ const sections = [
     title: "Your choices",
     body: [
       "Households may choose whether to connect calendars, email, or health information. Connected services can be disconnected, and device access can be removed by signing out or deleting Pepper from the device.",
-      "For privacy questions, correction requests, or deletion requests during the beta, contact the Pepper team through the Feedback option in TestFlight.",
+      "For privacy questions, correction requests, or help with household-wide deletion during the beta, contact the Pepper team through the Feedback option in TestFlight.",
     ],
   },
 ];

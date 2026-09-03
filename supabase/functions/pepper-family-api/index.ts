@@ -350,6 +350,30 @@ async function saveMemberSetup(member:any,body:any){
     return {ok:true,member_id:target.id,slug:target.slug,profile:profiles[0]}
   })
 }
+async function deleteAccount(member:any,body:any){
+  if(String(body.confirmation||'')!=='DELETE MY ACCOUNT')throw Object.assign(new Error('Type DELETE MY ACCOUNT to confirm account deletion.'),{status:400})
+  return sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    const members=await tx<any[]>`select id,role from public.household_members where household_id=${member.household_id}::uuid and id<>${member.id}::uuid for update`
+    const nextAdult=members.find((candidate:any)=>candidate.role==='adult_admin'||candidate.role==='adult')
+    if(member.role==='adult_admin'&&!nextAdult){
+      await tx`delete from public.households where id=${member.household_id}::uuid`
+      return {ok:true,household_deleted:true}
+    }
+    if(member.role==='adult_admin'&&nextAdult){
+      await tx`update public.household_members set role='adult_admin' where id=${nextAdult.id}::uuid`
+    }
+    await tx`update private.family_routines set transport_owner_member_id=null,updated_at=now() where transport_owner_member_id=${member.id}::uuid`
+    await tx`update private.future_watch_items set owner_member_id=null,updated_at=now() where owner_member_id=${member.id}::uuid`
+    await tx`delete from public.tasks where household_id=${member.household_id}::uuid and visibility='private' and (owner_member_id=${member.id}::uuid or creator_member_id=${member.id}::uuid)`
+    await tx`delete from public.events where household_id=${member.household_id}::uuid and visibility='private' and (owner_member_id=${member.id}::uuid or person_slug=${member.slug})`
+    await tx`delete from private.family_rotations where ${member.id}::uuid=any(participant_member_ids) and cardinality(participant_member_ids)<=2`
+    await tx`update private.family_rotations set participant_member_ids=array_remove(participant_member_ids,${member.id}::uuid),updated_at=now() where ${member.id}::uuid=any(participant_member_ids)`
+    await tx`delete from public.calendar_connections where connected_by_member_id=${member.id}::uuid`
+    await tx`delete from public.household_members where id=${member.id}::uuid and household_id=${member.household_id}::uuid`
+    return {ok:true,household_deleted:false}
+  })
+}
 async function createPersonalTask(member:any,body:any){
   const title=String(body.title||'').trim().slice(0,240)
   const dueDate=String(body.due_date||'').trim()
@@ -532,11 +556,11 @@ async function updateFamilyItem(member:any,body:any){
     return {ok:true,item_type:itemType,id:itemId,operation}
   })
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.7',backend:'supabase',frontend:'vercel',capabilities:['chore_create','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','grocery_create','grocery_update','member_setup_save','personal_task_create']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
-if(action==='login_members'){const rows=await sql<any[]>`select m.slug,m.display_name,m.role from public.household_members m join public.households h on h.id=m.household_id where h.slug='eriksen' order by m.created_at`;return json(req,{members:rows})}
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.8',backend:'supabase',frontend:'vercel',capabilities:['chore_create','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','grocery_create','grocery_update','member_setup_save','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 const token=req.headers.get('x-pepper-session')||'';const member=await validSession(token);if(!member)return json(req,{error:'Unlock Pepper again to continue.',code:'session_required'},401);await sql`update public.member_sessions set last_seen_at=now() where token=${token}::uuid`;
 if(action==='logout'){await sql`update public.member_sessions set revoked_at=now() where token=${token}::uuid`;return json(req,{ok:true})}
+if(action==='account_delete'){return json(req,await deleteAccount(member,b))}
 const headers:any={'content-type':'application/json','x-pepper-session':token,apikey:SUPABASE_ANON_KEY,authorization:`Bearer ${SUPABASE_ANON_KEY}`}
 if(action==='state'){
   const core=await proxy(TARGET,headers,{action:'state'});if(!core.ok)return json(req,core.data,core.status)
@@ -578,9 +602,9 @@ if(action==='rituals'){const r=await proxy(RITUALS,headers,{action:'get'});retur
 if(action==='ritual_preferences'){const r=await proxy(RITUALS,headers,{action:'set_preferences',...b});return json(req,r.data,r.status)}
 if(action==='horizon'){await proxy(PREPARATION,headers,{action:'list'});const r=await proxy(HORIZON,headers,{});return json(req,r.data,r.status)}
 if(action==='calendar_status'){const r=await proxy(CALENDAR,headers,{action:'status',session_token:token});return json(req,r.data,r.status)}
-if(action==='calendar_start'){const r=await proxy(CALENDAR,headers,{action:'start',session_token:token});return json(req,r.data,r.status)}
+if(action==='calendar_start'){const r=await proxy(CALENDAR,headers,{action:'start',session_token:token,return_target:b.return_target});return json(req,r.data,r.status)}
 if(action==='calendar_sync'){const r=await proxy(CALENDAR,headers,{action:'sync',session_token:token,force:true});return json(req,r.data,r.status)}
-if(action==='email_start'){const r=await proxy(INTEGRATIONS,headers,{action:'gmail_start'});return json(req,r.data,r.status)}
+if(action==='email_start'){const r=await proxy(INTEGRATIONS,headers,{action:'gmail_start',return_target:b.return_target});return json(req,r.data,r.status)}
 if(action==='health_pair'){const r=await proxy(INTEGRATIONS,headers,{action:'health_pair'});return json(req,r.data,r.status)}
 if(action==='integration_status'){const r=await proxy(INTEGRATIONS,headers,{action:'status'});return json(req,r.data,r.status)}
 return json(req,{error:'Unknown Pepper action.',code:'unknown_action'},400)
