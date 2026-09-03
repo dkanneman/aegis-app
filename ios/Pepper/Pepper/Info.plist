@@ -37,6 +37,8 @@
     <string>public.app-category.lifestyle</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>PepperBaseHost</key>
     <string>$(PEPPER_BASE_HOST)</string>
     <key>UIApplicationSceneManifest</key>
