@@ -3922,7 +3922,8 @@ function ConnectionsPage({
           <h2 id="pepper-account-heading">Your Pepper profile</h2>
           <p>
             Delete this profile and its private Pepper data. Shared family plans remain
-            available to the rest of the household.
+            available to the rest of the household. If this is the household&apos;s only
+            adult profile, Pepper removes the household instead.
           </p>
         </div>
         {!deleteOpen ? (
