@@ -1761,6 +1761,23 @@ button.morningBriefOutcome {
   outline: none;
 }
 
+.loginSecondary {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--navy);
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.loginSecondary:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .loginMessage {
   margin-top: 12px;
   color: var(--warn);

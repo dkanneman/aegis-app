@@ -320,8 +320,8 @@ async function saveMemberSetup(member:any,body:any){
   if(!displayName)throw Object.assign(new Error('Add the family member’s name.'),{status:400})
   if(!['adult_admin','adult','teen','child'].includes(role))throw Object.assign(new Error('Choose a valid family role.'),{status:400})
   if(requestedId&&!UUID.test(requestedId))throw Object.assign(new Error('Family member not found.'),{status:400})
-  if(!requestedId&&!/^\d{4,12}$/.test(pin))throw Object.assign(new Error('New family members need a 4–12 digit PIN.'),{status:400})
-  if(pin&&!/^\d{4,12}$/.test(pin))throw Object.assign(new Error('PINs must contain 4–12 digits.'),{status:400})
+  if(!requestedId&&!/^\d{4,12}$/.test(pin))throw Object.assign(new Error('New family members need a 4–12 digit invitation code.'),{status:400})
+  if(pin&&!/^\d{4,12}$/.test(pin))throw Object.assign(new Error('Invitation codes must contain 4–12 digits.'),{status:400})
   return sql.begin(async(tx:any)=>{
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     let target:any
@@ -329,7 +329,10 @@ async function saveMemberSetup(member:any,body:any){
       const rows=await tx<any[]>`select id,slug from public.household_members where id=${requestedId}::uuid and household_id=${member.household_id}::uuid for update`
       target=rows[0]
       if(!target)throw Object.assign(new Error('Family member not found.'),{status:404})
-      if(pin)await tx`update public.household_members set display_name=${displayName},role=${role},pin_hash=extensions.crypt(${pin},extensions.gen_salt('bf')) where id=${target.id}::uuid`
+      if(pin){
+        await tx`update public.household_members set display_name=${displayName},role=${role},pin_hash=extensions.crypt(${pin},extensions.gen_salt('bf')),pin_setup_completed_at=null where id=${target.id}::uuid`
+        await tx`update public.member_sessions set revoked_at=now(),last_seen_at=now() where member_id=${target.id}::uuid and revoked_at is null`
+      }
       else await tx`update public.household_members set display_name=${displayName},role=${role} where id=${target.id}::uuid`
     }else{
       const base=displayName.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60)||'member'
@@ -338,7 +341,7 @@ async function saveMemberSetup(member:any,body:any){
       let slug=base
       let suffix=2
       while(used.has(slug)){slug=`${base}-${suffix++}`}
-      const rows=await tx<any[]>`insert into public.household_members(household_id,slug,display_name,role,pin_hash) values(${member.household_id}::uuid,${slug},${displayName},${role},extensions.crypt(${pin},extensions.gen_salt('bf'))) returning id,slug`
+      const rows=await tx<any[]>`insert into public.household_members(household_id,slug,display_name,role,pin_hash,pin_setup_completed_at) values(${member.household_id}::uuid,${slug},${displayName},${role},extensions.crypt(${pin},extensions.gen_salt('bf')),null) returning id,slug`
       target=rows[0]
     }
     const profiles=await tx<any[]>`insert into private.member_setup_profiles(member_id,household_id,activities,school_name,grade_label,dietary_preferences,medications,goals,updated_by_member_id,updated_at) values(${target.id}::uuid,${member.household_id}::uuid,${activities}::text[],${schoolName},${gradeLabel},${dietaryPreferences}::text[],${medications}::text[],${goals}::text[],${member.id}::uuid,now()) on conflict(member_id) do update set activities=excluded.activities,school_name=excluded.school_name,grade_label=excluded.grade_label,dietary_preferences=excluded.dietary_preferences,medications=excluded.medications,goals=excluded.goals,updated_by_member_id=excluded.updated_by_member_id,updated_at=now() returning member_id,activities,school_name,grade_label,dietary_preferences,medications,goals,updated_at`
@@ -556,8 +559,17 @@ async function updateFamilyItem(member:any,body:any){
     return {ok:true,item_type:itemType,id:itemId,operation}
   })
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.8',backend:'supabase',frontend:'vercel',capabilities:['chore_create','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','grocery_create','grocery_update','member_setup_save','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.9',backend:'supabase',frontend:'vercel',capabilities:['chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','grocery_create','grocery_update','member_setup_save','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
+if(action==='pin_setup'){
+  const setupToken=String(b.setup_token||'').trim()
+  const newPin=String(b.new_pin||'').trim()
+  const device=String(b.device_label||'Pepper web').slice(0,120)
+  if(!UUID.test(setupToken))return json(req,{error:'Start PIN setup again with your invitation code.'},400)
+  const rows=await sql<any[]>`select private.pepper_complete_pin_setup(${setupToken}::uuid,${newPin},${device}) as result`
+  const result=rows[0]?.result||{ok:false,error:'Pepper could not finish PIN setup.'}
+  return json(req,result,result.ok?200:400)
+}
 const token=req.headers.get('x-pepper-session')||'';const member=await validSession(token);if(!member)return json(req,{error:'Unlock Pepper again to continue.',code:'session_required'},401);await sql`update public.member_sessions set last_seen_at=now() where token=${token}::uuid`;
 if(action==='logout'){await sql`update public.member_sessions set revoked_at=now() where token=${token}::uuid`;return json(req,{ok:true})}
 if(action==='account_delete'){return json(req,await deleteAccount(member,b))}

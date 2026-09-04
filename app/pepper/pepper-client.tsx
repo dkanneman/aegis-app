@@ -532,6 +532,11 @@ type HealthSetup = {
   requires: string;
 };
 
+type PinSetupState = {
+  token: string;
+  displayName: string;
+};
+
 function displayName(member?: Pick<Member, "slug" | "display_name"> | null) {
   if (!member) return "";
   return member.slug === "elle" ? "Danielle" : member.display_name;
@@ -818,6 +823,9 @@ function routineSchoolTripKind(event: FamilyEvent) {
 export function PepperClient() {
   const [profileName, setProfileName] = useState("");
   const [pin, setPin] = useState("");
+  const [pinSetup, setPinSetup] = useState<PinSetupState | null>(null);
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
   const [token, setToken] = useState("");
   const [state, setState] = useState<PepperState | null>(null);
   const [view, setView] = useState<View>("today");
@@ -1470,6 +1478,17 @@ export function PepperClient() {
         },
         "",
       );
+      if (result.setup_required) {
+        setPinSetup({
+          token: String(result.setup_token || ""),
+          displayName: String(result.member?.display_name || identity),
+        });
+        setPin("");
+        setNewPin("");
+        setConfirmPin("");
+        return;
+      }
+      if (!result.token) throw new Error("Pepper could not start this session.");
       localStorage.setItem("pepper_family_session", result.token);
       setToken(result.token);
       setPin("");
@@ -1479,6 +1498,42 @@ export function PepperClient() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function completePinSetup() {
+    if (!pinSetup || newPin.length < 4 || newPin !== confirmPin) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await call(
+        {
+          action: "pin_setup",
+          setup_token: pinSetup.token,
+          new_pin: newPin,
+          device_label: "Pepper family web",
+        },
+        "",
+      );
+      if (!result.token) throw new Error("Pepper could not start this session.");
+      localStorage.setItem("pepper_family_session", result.token);
+      setToken(result.token);
+      setPinSetup(null);
+      setNewPin("");
+      setConfirmPin("");
+      await load(result.token);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "PIN setup failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function restartLogin() {
+    setPinSetup(null);
+    setPin("");
+    setNewPin("");
+    setConfirmPin("");
+    setMessage("");
   }
 
   async function logout() {
@@ -1491,6 +1546,9 @@ export function PepperClient() {
     setToken("");
     setState(null);
     setPin("");
+    setPinSetup(null);
+    setNewPin("");
+    setConfirmPin("");
   }
 
   async function deleteAccount(confirmation: string) {
@@ -1704,46 +1762,106 @@ export function PepperClient() {
         <section className={styles.loginCard}>
           <div className={styles.eyebrow}>Private family access</div>
           <div className={styles.wordmark}>Pepper</div>
-          <h1>Your family, handled.</h1>
-          <p>
-            Enter your profile name and family PIN to open your shared plan.
-          </p>
-
-          <label className={styles.pinLabel}>
-            Profile name
-            <input
-              autoCapitalize="words"
-              autoComplete="username"
-              value={profileName}
-              onChange={(event) => setProfileName(event.target.value.slice(0, 100))}
-              placeholder="Your name"
-            />
-          </label>
-
-          <label className={styles.pinLabel}>
-            Family PIN
-            <input
-              type="password"
-              inputMode="numeric"
-              autoComplete="current-password"
-              value={pin}
-              onChange={(event) =>
-                setPin(event.target.value.replace(/\D/g, "").slice(0, 12))
-              }
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void login();
-              }}
-              placeholder="••••"
-            />
-          </label>
-          <button
-            type="button"
-            className={styles.primaryButton}
-            disabled={busy || !profileName.trim() || !pin}
-            onClick={() => void login()}
-          >
-            {busy ? "Opening Pepper…" : "Open Pepper"}
-          </button>
+          {pinSetup ? (
+            <>
+              <h1>Create your PIN.</h1>
+              <p>
+                {pinSetup.displayName}, choose a personal PIN for future visits.
+                Pepper never displays or sends it back to you.
+              </p>
+              <label className={styles.pinLabel}>
+                New PIN
+                <input
+                  autoFocus
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  value={newPin}
+                  onChange={(event) =>
+                    setNewPin(event.target.value.replace(/\D/g, "").slice(0, 12))
+                  }
+                  placeholder="4–12 digits"
+                />
+              </label>
+              <label className={styles.pinLabel}>
+                Confirm PIN
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  value={confirmPin}
+                  onChange={(event) =>
+                    setConfirmPin(event.target.value.replace(/\D/g, "").slice(0, 12))
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void completePinSetup();
+                  }}
+                  placeholder="Enter it again"
+                />
+              </label>
+              {confirmPin && newPin !== confirmPin ? (
+                <div className={styles.loginMessage}>Those PINs do not match.</div>
+              ) : null}
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={busy || newPin.length < 4 || newPin !== confirmPin}
+                onClick={() => void completePinSetup()}
+              >
+                {busy ? "Creating your PIN…" : "Create PIN and open Pepper"}
+              </button>
+              <button
+                type="button"
+                className={styles.loginSecondary}
+                disabled={busy}
+                onClick={restartLogin}
+              >
+                Use a different profile
+              </button>
+            </>
+          ) : (
+            <>
+              <h1>Your family, handled.</h1>
+              <p>
+                Enter your profile name and PIN. On your first visit, use the
+                one-time invitation code from your family organizer.
+              </p>
+              <label className={styles.pinLabel}>
+                Profile name
+                <input
+                  autoCapitalize="words"
+                  autoComplete="username"
+                  value={profileName}
+                  onChange={(event) => setProfileName(event.target.value.slice(0, 100))}
+                  placeholder="Your name"
+                />
+              </label>
+              <label className={styles.pinLabel}>
+                PIN or invitation code
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="current-password"
+                  value={pin}
+                  onChange={(event) =>
+                    setPin(event.target.value.replace(/\D/g, "").slice(0, 12))
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void login();
+                  }}
+                  placeholder="4–12 digits"
+                />
+              </label>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={busy || !profileName.trim() || pin.length < 4}
+                onClick={() => void login()}
+              >
+                {busy ? "Opening Pepper…" : "Continue"}
+              </button>
+            </>
+          )}
           {message ? <div className={styles.loginMessage}>{message}</div> : null}
         </section>
       </main>
@@ -5329,12 +5447,12 @@ function FamilySetupPage({
               </select>
             </label>
             <label className={styles.choreField}>
-              {draft.memberId ? "New PIN (optional)" : "PIN"}
+              {draft.memberId ? "New invitation code (optional)" : "Invitation code"}
               <input
                 inputMode="numeric"
                 type="password"
                 value={draft.pin}
-                placeholder={draft.memberId ? "Leave unchanged" : "4–12 digits"}
+                placeholder={draft.memberId ? "Reset first-time access" : "4–12 digits"}
                 onChange={(event) =>
                   setDraft({ ...draft, pin: event.target.value.replace(/\D/g, "").slice(0, 12) })
                 }
