@@ -3,7 +3,9 @@ const sql=postgres(Deno.env.get('SUPABASE_DB_URL')!,{ssl:'require',prepare:false
 const SUPABASE_URL=Deno.env.get('SUPABASE_URL')||''
 if(!SUPABASE_URL)throw new Error('SUPABASE_URL is not configured.')
 const BASE=SUPABASE_URL+'/functions/v1'
-const APP_ORIGIN=Deno.env.get('PEPPER_APP_ORIGIN')||'https://pepper-v6-private-preview.vercel.app'
+const PRODUCTION_ORIGIN='https://pepper-family-beta.vercel.app'
+const LEGACY_PREVIEW_ORIGIN='https://pepper-v6-private-preview.vercel.app'
+const APP_ORIGIN=Deno.env.get('PEPPER_APP_ORIGIN')||PRODUCTION_ORIGIN
 const SUPABASE_ANON_KEY=Deno.env.get('SUPABASE_ANON_KEY')||''
 const TARGET=BASE+'/pepper-family-beta-01'
 const TELL=BASE+'/pepper-tell-v2'
@@ -17,7 +19,7 @@ const CALENDAR=BASE+'/pepper-calendar'
 const TZ='America/Los_Angeles'
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function previewOrigin(origin:string){try{const host=new URL(origin).hostname;return /^pepper-family-beta-[a-z0-9-]+-dkanneman-8936s-projects\.vercel\.app$/.test(host)}catch{return false}}
-function cors(req:Request){const o=req.headers.get('origin')||'';const allowed=!o||o===APP_ORIGIN||previewOrigin(o)||o.startsWith('http://localhost:')||o.startsWith('http://127.0.0.1:');return {'Access-Control-Allow-Origin':allowed&&o?o:APP_ORIGIN,'Access-Control-Allow-Headers':'apikey,authorization,content-type,x-pepper-session','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Max-Age':'86400','Cache-Control':'no-store','Content-Type':'application/json; charset=utf-8','Vary':'Origin','X-Content-Type-Options':'nosniff'}}
+function cors(req:Request){const o=req.headers.get('origin')||'';const allowed=!o||o===APP_ORIGIN||o===PRODUCTION_ORIGIN||o===LEGACY_PREVIEW_ORIGIN||previewOrigin(o)||o.startsWith('http://localhost:')||o.startsWith('http://127.0.0.1:');return {'Access-Control-Allow-Origin':allowed&&o?o:APP_ORIGIN,'Access-Control-Allow-Headers':'apikey,authorization,content-type,x-pepper-session','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Max-Age':'86400','Cache-Control':'no-store','Content-Type':'application/json; charset=utf-8','Vary':'Origin','X-Content-Type-Options':'nosniff'}}
 function json(req:Request,body:any,status=200){return new Response(JSON.stringify(body),{status,headers:cors(req)})}
 async function validSession(token:string){if(!UUID.test(token))return null;const rows=await sql<any[]>`select m.id,m.household_id,m.slug,m.display_name,m.role,s.expires_at from public.member_sessions s join public.household_members m on m.id=s.member_id where s.token=${token}::uuid and s.revoked_at is null and s.expires_at>now() limit 1`;return rows[0]||null}
 async function proxy(url:string,headers:any,body:any){const r=await fetch(url,{method:'POST',headers,body:JSON.stringify(body)});const text=await r.text();let data:any;try{data=JSON.parse(text)}catch{data={error:text||'Pepper service error.'}}return {ok:r.ok,status:r.status,data}}

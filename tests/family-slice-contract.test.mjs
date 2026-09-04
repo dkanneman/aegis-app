@@ -394,8 +394,9 @@ test('the approved Pepper visual language wraps the real connection pathways', a
   assert.ok(botanical.byteLength > 10_000)
 })
 
-test('the isolated API accepts only the scoped Vercel preview host family', async () => {
+test('the isolated API accepts the production beta and scoped preview host family', async () => {
   const api = await readFile(apiPath, 'utf8')
+  assert.match(api, /https:\/\/pepper-family-beta\.vercel\.app/)
   assert.match(api, /pepper-family-beta-\[a-z0-9-\]\+-dkanneman-8936s-projects/)
   assert.doesNotMatch(api, /Access-Control-Allow-Origin['"]\s*:\s*['"]\*['"]/)
 })
