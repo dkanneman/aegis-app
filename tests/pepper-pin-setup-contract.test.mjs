@@ -14,6 +14,10 @@ const rpcMigrationPath = new URL(
   "../supabase/migrations/20260904191323_restrict_family_session_rpc.sql",
   import.meta.url,
 );
+const danielleAliasMigrationPath = new URL(
+  "../supabase/migrations/20260904193500_accept_danielle_family_login.sql",
+  import.meta.url,
+);
 const apiPath = new URL(
   "../supabase/functions/pepper-family-api/index.ts",
   import.meta.url,
@@ -98,6 +102,19 @@ test("the API completes PIN setup before requiring a member session", async () =
 test("family login cannot be called directly through the public Data API", async () => {
   const migration = await readFile(rpcMigrationPath, "utf8");
 
+  assert.match(migration, /security invoker/);
+  assert.match(migration, /from public, anon, authenticated/);
+  assert.match(migration, /to service_role/);
+});
+
+test("Danielle can claim the existing Elle profile without a duplicate member", async () => {
+  const migration = await readFile(danielleAliasMigrationPath, "utf8");
+
+  assert.match(
+    migration,
+    /if requested_identity = 'danielle' then\s+requested_identity := 'elle'/,
+  );
+  assert.doesNotMatch(migration, /insert into public\.household_members/i);
   assert.match(migration, /security invoker/);
   assert.match(migration, /from public, anon, authenticated/);
   assert.match(migration, /to service_role/);
