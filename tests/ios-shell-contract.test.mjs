@@ -6,6 +6,8 @@ const project = new URL("../ios/Pepper/Pepper.xcodeproj/project.pbxproj", import
 const infoPlist = new URL("../ios/Pepper/Pepper/Info.plist", import.meta.url);
 const configuration = new URL("../ios/Pepper/Pepper/PepperConfiguration.swift", import.meta.url);
 const privacyManifest = new URL("../ios/Pepper/Pepper/PrivacyInfo.xcprivacy", import.meta.url);
+const webView = new URL("../ios/Pepper/Pepper/PepperWebView.swift", import.meta.url);
+const entitlements = new URL("../ios/Pepper/Pepper/Pepper.entitlements", import.meta.url);
 const appIcon = new URL(
   "../ios/Pepper/Pepper/Assets.xcassets/AppIcon.appiconset/Pepper-AppIcon-1024.png",
   import.meta.url,
@@ -21,6 +23,7 @@ test("the iOS shell targets the stable private beta without embedded credentials
 
   assert.match(projectText, /PRODUCT_BUNDLE_IDENTIFIER = com\.dkanneman\.pepper;/);
   assert.match(projectText, /PEPPER_BASE_HOST = "?pepper-family-beta\.vercel\.app"?;/);
+  assert.match(projectText, /PEPPER_HEALTH_HOST = "?mfgyeolvfthxacrqwwtc\.supabase\.co"?;/);
   assert.match(plistText, /<key>PepperBaseHost<\/key>/);
   assert.doesNotMatch(releaseInputs, /_vercel_share|Family PIN|101315/i);
   assert.match(configurationText, /#if DEBUG[\s\S]*PEPPER_BASE_URL[\s\S]*#endif/);
@@ -31,7 +34,37 @@ test("the iOS privacy manifest does not claim tracking", async () => {
   const manifest = await readFile(privacyManifest, "utf8");
 
   assert.match(manifest, /<key>NSPrivacyTracking<\/key>\s*<false\/>/);
-  assert.match(manifest, /<key>NSPrivacyCollectedDataTypes<\/key>\s*<array\/>/);
+  assert.match(manifest, /NSPrivacyCollectedDataTypeName/);
+  assert.match(manifest, /NSPrivacyCollectedDataTypeEmailAddress/);
+  assert.match(manifest, /NSPrivacyCollectedDataTypeHealthFitness/);
+  assert.match(manifest, /NSPrivacyCollectedDataTypeOtherUserContent/);
+  assert.doesNotMatch(
+    manifest,
+    /<key>NSPrivacyCollectedDataTypeTracking<\/key>\s*<true\/>/,
+  );
+  assert.match(manifest, /<key>NSPrivacyTrackingDomains<\/key>\s*<array\/>/);
+});
+
+test("the iOS shell connects read-only Apple Health to the member-scoped ingest", async () => {
+  const [projectText, plistText, webViewText, entitlementText] = await Promise.all([
+    readFile(project, "utf8"),
+    readFile(infoPlist, "utf8"),
+    readFile(webView, "utf8"),
+    readFile(entitlements, "utf8"),
+  ]);
+
+  assert.match(projectText, /CODE_SIGN_ENTITLEMENTS = Pepper\/Pepper\.entitlements;/);
+  assert.match(plistText, /<key>NSHealthShareUsageDescription<\/key>/);
+  assert.match(plistText, /<key>NSHealthUpdateUsageDescription<\/key>/);
+  assert.match(entitlementText, /<key>com\.apple\.developer\.healthkit<\/key>\s*<true\/>/);
+  assert.match(webViewText, /import HealthKit/);
+  assert.match(webViewText, /requestAuthorization\(toShare: \[\], read: types\)/);
+  assert.match(webViewText, /\.stepCount/);
+  assert.match(webViewText, /\.appleExerciseTime/);
+  assert.match(webViewText, /x-pepper-health-token/);
+  assert.match(webViewText, /pepper-health-ingest/);
+  assert.match(webViewText, /host == PepperConfiguration\.healthHost/);
+  assert.doesNotMatch(webViewText, /save\(|HKSampleQuery/);
 });
 
 test("the App Store icon is a 1024px PNG", async () => {

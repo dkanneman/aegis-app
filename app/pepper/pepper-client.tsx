@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   Briefcase,
   Cable,
+  Camera,
   CalendarDays,
   CalendarRange,
   Check,
@@ -155,6 +156,10 @@ type ItemUpdate = {
   location?: string;
 };
 
+type ItemUpdateResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
 type Ritual = "morning" | "evening";
 
 type PreparationItem = {
@@ -213,6 +218,8 @@ type MemberSetupProfile = {
   dietary_preferences: string[];
   medications: string[];
   goals: string[];
+  avatar_url?: string | null;
+  avatar_updated_at?: string | null;
   updated_at?: string | null;
 };
 
@@ -424,6 +431,7 @@ type PepperState = {
   member: { id: string; slug: string; display_name: string; role: string };
   members: Array<{ id: string; slug: string; display_name: string; role: string }>;
   events: FamilyEvent[];
+  monthEvents?: FamilyEvent[];
   familyTasks: FamilyTask[];
   privateTasks: FamilyTask[];
   chores?: FamilyTask[];
@@ -532,6 +540,61 @@ type HealthSetup = {
   requires: string;
 };
 
+type NativeHealthResult = {
+  ok: boolean;
+  step_count?: number;
+  active_minutes?: number;
+  error?: string;
+};
+
+type NativeHealthMessageHandler = {
+  postMessage: (payload: {
+    ingest_url: string;
+    pairing_token: string;
+  }) => void;
+};
+
+function nativeHealthMessageHandler() {
+  if (typeof window === "undefined") return null;
+  const nativeWindow = window as Window & {
+    webkit?: {
+      messageHandlers?: { pepperHealth?: NativeHealthMessageHandler };
+    };
+  };
+  return nativeWindow.webkit?.messageHandlers?.pepperHealth || null;
+}
+
+function syncNativeHealth(setup: HealthSetup) {
+  return new Promise<NativeHealthResult>((resolve, reject) => {
+    const handler = nativeHealthMessageHandler();
+    if (!handler) {
+      reject(new Error("Native Apple Health access is not available in this build."));
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("pepper:health-result", onResult);
+      reject(new Error("Apple Health did not finish. Please try again."));
+    }, 45_000);
+    function onResult(event: Event) {
+      window.clearTimeout(timeout);
+      window.removeEventListener("pepper:health-result", onResult);
+      const result = (event as CustomEvent<NativeHealthResult>).detail;
+      if (!result?.ok) {
+        reject(new Error(result?.error || "Apple Health could not connect."));
+        return;
+      }
+      resolve(result);
+    }
+
+    window.addEventListener("pepper:health-result", onResult, { once: true });
+    handler.postMessage({
+      ingest_url: setup.ingest_url,
+      pairing_token: setup.pairing_token,
+    });
+  });
+}
+
 type PinSetupState = {
   token: string;
   displayName: string;
@@ -540,6 +603,50 @@ type PinSetupState = {
 function displayName(member?: Pick<Member, "slug" | "display_name"> | null) {
   if (!member) return "";
   return member.slug === "elle" ? "Danielle" : member.display_name;
+}
+
+function profileForMember(state: PepperState, memberId?: string) {
+  return state.memberProfiles?.find((profile) => profile.member_id === memberId);
+}
+
+async function prepareProfilePhoto(file: File) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Choose a photo from your library.");
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    throw new Error("Choose a photo smaller than 15 MB.");
+  }
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("Pepper could not read that photo."));
+      image.src = objectUrl;
+    });
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    if (!side) throw new Error("Pepper could not read that photo.");
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 512;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Pepper could not prepare that photo.");
+    context.drawImage(
+      image,
+      (image.naturalWidth - side) / 2,
+      (image.naturalHeight - side) / 2,
+      side,
+      side,
+      0,
+      0,
+      512,
+      512,
+    );
+    return canvas.toDataURL("image/jpeg", 0.86);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 function productNameText(value?: string | null) {
@@ -829,6 +936,7 @@ export function PepperClient() {
   const [token, setToken] = useState("");
   const [state, setState] = useState<PepperState | null>(null);
   const [view, setView] = useState<View>("today");
+  const [scheduleRange, setScheduleRange] = useState<"week" | "month">("week");
   const [memberState, setMemberState] = useState<MemberState | null>(null);
   const [memberBusy, setMemberBusy] = useState(false);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
@@ -936,16 +1044,35 @@ export function PepperClient() {
     item: SelectedItem,
     operation: ItemOperation,
     changes: ItemUpdate = {},
-  ) {
+  ): Promise<ItemUpdateResult> {
     setActionBusy(true);
     try {
-      await call({
+      const result = await call({
         action: "item_update",
         item_type: item.type,
         id: item.item.id,
         operation,
         ...changes,
       });
+      const expectedStatus =
+        operation === "complete"
+          ? "completed"
+          : operation === "cancel" || operation === "delete"
+            ? "canceled"
+            : operation === "reopen"
+              ? item.type === "event"
+                ? "confirmed"
+                : "open"
+              : null;
+      if (
+        !result.item ||
+        result.item.id !== item.item.id ||
+        (expectedStatus && result.item.status !== expectedStatus)
+      ) {
+        throw new Error(
+          "Pepper could not verify that this change was saved. Nothing was marked handled.",
+        );
+      }
       setMessage(
         operation === "assign"
           ? "Assigned. Pepper updated the family plan."
@@ -960,10 +1087,12 @@ export function PepperClient() {
       setSelectedItem(null);
       await load();
       if (memberState?.member.slug) await loadMember(memberState.member.slug);
+      return { ok: true };
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Pepper could not update that.",
-      );
+      const text =
+        error instanceof Error ? error.message : "Pepper could not update that.";
+      setMessage(text);
+      return { ok: false, error: text };
     } finally {
       setActionBusy(false);
     }
@@ -1214,9 +1343,11 @@ export function PepperClient() {
       const result = await call({
         action: "meal_plan_generate",
         start_date: localDate(),
+        refresh: true,
+        instruction: "Refresh the seven-day family meal plan.",
       });
       setMessage(
-        `Week planned from ${result.needs_considered || 0} saved family meal ${result.needs_considered === 1 ? "need" : "needs"}. Review meals and assign cooking or shopping.`,
+        `Week refreshed from ${result.needs_considered || 0} saved family meal ${result.needs_considered === 1 ? "need" : "needs"}, with ${result.grocery_count || 0} unique groceries. Review meals and assign cooking or shopping.`,
       );
       await load();
       return true;
@@ -1283,6 +1414,51 @@ export function PepperClient() {
         error instanceof Error
           ? error.message
           : "Pepper could not save that family member.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function saveProfilePhoto(memberId: string, file: File) {
+    setActionBusy(true);
+    try {
+      const imageDataUrl = await prepareProfilePhoto(file);
+      await call({
+        action: "member_photo_save",
+        member_id: memberId,
+        image_data_url: imageDataUrl,
+      });
+      setMessage("Profile photo updated for the family.");
+      await load();
+      if (memberState?.member.slug) await loadMember(memberState.member.slug);
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not update that profile photo.",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function removeProfilePhoto(memberId: string) {
+    setActionBusy(true);
+    try {
+      await call({ action: "member_photo_remove", member_id: memberId });
+      setMessage("Profile photo removed.");
+      await load();
+      if (memberState?.member.slug) await loadMember(memberState.member.slug);
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not remove that profile photo.",
       );
       return false;
     } finally {
@@ -1445,6 +1621,27 @@ export function PepperClient() {
   const activeGroceries = (state?.groceries || []).filter(
     (item) => item.status !== "completed",
   );
+  const monthEvents = useMemo(
+    () =>
+      [...(state?.monthEvents || [])]
+        .filter((event) => event.status !== "canceled")
+        .sort(
+          (left, right) =>
+            new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
+        ),
+    [state],
+  );
+  const monthEventGroups = useMemo(() => {
+    const groups = new Map<string, FamilyEvent[]>();
+    for (const event of monthEvents) {
+      const date = localDateFor(event.starts_at);
+      if (!date) continue;
+      const group = groups.get(date) || [];
+      group.push(event);
+      groups.set(date, group);
+    }
+    return [...groups.entries()];
+  }, [monthEvents]);
   const recentCaptures = [...(state?.captures || [])]
     .sort((a, b) => {
       const aTime = new Date(
@@ -1723,9 +1920,22 @@ export function PepperClient() {
 
   async function pairHealth() {
     try {
-      const result = await call({ action: "health_pair" });
-      setHealthSetup(result);
-      setMessage("The Apple Health Shortcut pairing is ready for this iPhone.");
+      const nativeHealth = nativeHealthMessageHandler();
+      const result = await call({
+        action: "health_pair",
+        client: nativeHealth ? "native_ios" : "shortcut",
+      });
+      if (nativeHealth) {
+        setHealthSetup(null);
+        setMessage("Choose the Apple Health data Pepper may read…");
+        const health = await syncNativeHealth(result);
+        setMessage(
+          `Apple Health connected · ${(health.step_count || 0).toLocaleString()} steps today.`,
+        );
+      } else {
+        setHealthSetup(result);
+        setMessage("The Apple Health Shortcut pairing is ready for this iPhone.");
+      }
       await load();
     } catch (error) {
       setMessage(
@@ -2314,9 +2524,11 @@ export function PepperClient() {
                     key={member.id}
                     onClick={() => void openMember(member.slug)}
                   >
-                    <span className={styles.avatar} aria-hidden="true">
-                      {displayName(member).slice(0, 1)}
-                    </span>
+                    <MemberAvatar
+                      name={displayName(member)}
+                      photoUrl={profileForMember(state, member.id)?.avatar_url}
+                      className={styles.avatar}
+                    />
                     <span>{displayName(member)}</span>
                   </button>
                 ))}
@@ -2409,53 +2621,145 @@ export function PepperClient() {
           <>
             <section className={styles.hero}>
               <div className={styles.eyebrow}>Planning horizon</div>
-              <h1>Your next seven days.</h1>
+              <h1>
+                {scheduleRange === "week"
+                  ? "Your next seven days."
+                  : "Your next 30 days."}
+              </h1>
               <p>
-                {coverage ? weekCoverageHeadline :
-                  "Pepper is building the family plan it currently knows about."}
+                {scheduleRange === "week"
+                  ? coverage
+                    ? weekCoverageHeadline
+                    : "Pepper is building the family plan it currently knows about."
+                  : "Family events and connected calendar evidence, kept in one editable view."}
               </p>
             </section>
 
-            <button
-              type="button"
-              className={`${styles.confidenceCard} ${styles.confidenceAction} ${
-                weekIssueCount ? styles.confidenceNeedsWork : ""
-              }`}
-              disabled={!weekIssueCount}
-              onClick={revealWeekDecisions}
-            >
-              <div className={styles.confidenceIcon}>
-                {weekIssueCount ? "!" : "✓"}
-              </div>
-              <div>
-                <strong>
-                  {weekIssueCount
-                    ? `${weekIssueCount} ${
-                        weekIssueCount === 1 ? "thing needs" : "things need"
-                      } a decision.`
-                    : "The known plan looks covered."}
-                </strong>
-                <p>
-                  {calendarConnected
-                    ? "Pepper is checking this against your connected calendar and family state."
-                    : "This is based on Pepper's current family state. Connect Google Calendar to improve coverage."}
-                </p>
-              </div>
-              {weekIssueCount ? (
-                <span className={styles.confidenceActionLabel}>
-                  Resolve next <ChevronRight size={19} aria-hidden="true" />
-                </span>
-              ) : null}
-            </button>
-
-            <section className={styles.section}>
-              <div className={styles.sectionLabel}>The week</div>
-              <div className={styles.weekStack}>
-                {(horizon?.days || []).map((day) => (
-                  <HorizonDayCard day={day} key={day.date} />
+            <div className={styles.scheduleRangeToolbar}>
+              <div
+                className={styles.scheduleRangeTabs}
+                role="tablist"
+                aria-label="Schedule range"
+              >
+                {([
+                  ["week", "Next 7"],
+                  ["month", "Month"],
+                ] as const).map(([range, label]) => (
+                  <button
+                    key={range}
+                    type="button"
+                    role="tab"
+                    aria-selected={scheduleRange === range}
+                    className={
+                      scheduleRange === range
+                        ? styles.scheduleRangeActive
+                        : styles.scheduleRangeTab
+                    }
+                    onClick={() => setScheduleRange(range)}
+                  >
+                    {label}
+                  </button>
                 ))}
               </div>
-            </section>
+            </div>
+
+            {scheduleRange === "week" ? (
+              <>
+                <button
+                  type="button"
+                  className={`${styles.confidenceCard} ${styles.confidenceAction} ${
+                    weekIssueCount ? styles.confidenceNeedsWork : ""
+                  }`}
+                  disabled={!weekIssueCount}
+                  onClick={revealWeekDecisions}
+                >
+                  <div className={styles.confidenceIcon}>
+                    {weekIssueCount ? "!" : "✓"}
+                  </div>
+                  <div>
+                    <strong>
+                      {weekIssueCount
+                        ? `${weekIssueCount} ${
+                            weekIssueCount === 1 ? "thing needs" : "things need"
+                          } a decision.`
+                        : "The known plan looks covered."}
+                    </strong>
+                    <p>
+                      {calendarConnected
+                        ? "Pepper is checking this against your connected calendar and family state."
+                        : "This is based on Pepper's current family state. Connect Google Calendar to improve coverage."}
+                    </p>
+                  </div>
+                  {weekIssueCount ? (
+                    <span className={styles.confidenceActionLabel}>
+                      Resolve next <ChevronRight size={19} aria-hidden="true" />
+                    </span>
+                  ) : null}
+                </button>
+
+                <section className={styles.section}>
+                  <div className={styles.sectionLabel}>The week</div>
+                  <div className={styles.weekStack}>
+                    {(horizon?.days || []).map((day) => (
+                      <HorizonDayCard
+                        day={day}
+                        key={day.date}
+                        onOpenEvent={(item) => {
+                          const event = state.events.find(
+                            (candidate) => candidate.id === item.id,
+                          );
+                          if (!event) {
+                            setMessage(
+                              "This schedule rule is managed from Family setup.",
+                            );
+                            return;
+                          }
+                          setSelectedItem({ type: "event", item: event });
+                        }}
+                      />
+                    ))}
+                  </div>
+                </section>
+              </>
+            ) : (
+              <section className={styles.section}>
+                <div className={styles.sectionHeading}>
+                  <div className={styles.sectionLabel}>Month view</div>
+                  <span className={styles.monthRangeLabel}>
+                    {dateLabel(localDate())} to {dateLabel(addDateDays(localDate(), 29))}
+                  </span>
+                </div>
+                {monthEventGroups.length ? (
+                  <div className={styles.monthAgenda}>
+                    {monthEventGroups.map(([date, events]) => (
+                      <section className={styles.monthDay} key={date}>
+                        <header className={styles.monthDayHeader}>
+                          <h2>{dateLabel(date)}</h2>
+                          <span>{countLabel(events.length, "plan")}</span>
+                        </header>
+                        <div className={styles.monthDayEvents}>
+                          {events.map((event) => (
+                            <EventRow
+                              key={event.id}
+                              event={event}
+                              state={state}
+                              onOpen={() =>
+                                setSelectedItem({ type: "event", item: event })
+                              }
+                            />
+                          ))}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <div className={styles.quietEmpty}>
+                    <strong>No family plans are visible for the next 30 days.</strong>
+                    <p>Connect or refresh Google Calendar to improve coverage.</p>
+                  </div>
+                )}
+              </section>
+            )}
 
             <CalendarCard
               configured={calendarConfigured}
@@ -2577,6 +2881,7 @@ export function PepperClient() {
         {view === "family" ? (
           <FamilyDirectory
             members={state.members}
+            profiles={state.memberProfiles || []}
             onOpen={(slug) => void openMember(slug)}
             canManage={actorIsAdult}
             onSetup={() => setView("setup")}
@@ -2589,6 +2894,8 @@ export function PepperClient() {
             busy={actionBusy}
             onBack={() => setView("family")}
             onSave={saveMemberSetup}
+            onPhotoUpload={saveProfilePhoto}
+            onPhotoRemove={removeProfilePhoto}
           />
         ) : null}
 
@@ -2602,6 +2909,8 @@ export function PepperClient() {
             onOpen={setSelectedItem}
             onCreateChore={createChore}
             onCreatePersonalTask={createPersonalTask}
+            onPhotoUpload={saveProfilePhoto}
+            onPhotoRemove={removeProfilePhoto}
           />
         ) : null}
 
@@ -2611,6 +2920,7 @@ export function PepperClient() {
             gmail={state.integrations?.gmail}
             health={state.integrations?.apple_health}
             healthSetup={healthSetup}
+            nativeHealthAvailable={Boolean(nativeHealthMessageHandler())}
             member={state.member}
             members={state.members}
             onCalendar={() =>
@@ -2632,7 +2942,7 @@ export function PepperClient() {
           busy={actionBusy}
           onClose={() => setSelectedItem(null)}
           onUpdate={(operation, changes) =>
-            void updateItem(selectedItem, operation, changes)
+            updateItem(selectedItem, operation, changes)
           }
         />
       ) : null}
@@ -3723,9 +4033,9 @@ function HealthSummary({
           <small>
             {latest?.step_goal
               ? `Goal ${latest.step_goal.toLocaleString()} · ${latest.active_minutes || 0} active minutes`
-              : health?.status === "pending"
-                ? "Finish the Apple Health Shortcut on your iPhone."
-                : "Set up the Apple Health Shortcut for steps and goals."}
+              : health?.connected
+                ? `${latest?.active_minutes || 0} active minutes today`
+                : "Connect Apple Health from your iPhone."}
           </small>
         </span>
         <ChevronRight size={18} />
@@ -3739,6 +4049,7 @@ function ConnectionsPage({
   gmail,
   health,
   healthSetup,
+  nativeHealthAvailable,
   member,
   members,
   onCalendar,
@@ -3752,6 +4063,7 @@ function ConnectionsPage({
   gmail?: NonNullable<PepperState["integrations"]>["gmail"];
   health?: NonNullable<PepperState["integrations"]>["apple_health"];
   healthSetup: HealthSetup | null;
+  nativeHealthAvailable: boolean;
   member: PepperState["member"];
   members: PepperState["members"];
   onCalendar: () => void;
@@ -3816,7 +4128,7 @@ function ConnectionsPage({
       ],
       sharing:
         "Calendar evidence keeps the household or private visibility of the family item it supports.",
-      feeds: ["Today", "Next 7", "Family schedules"],
+      feeds: ["Today", "Next 7", "Month", "Family schedules"],
       action: calendar?.connected
         ? "Refresh"
         : calendar?.configured
@@ -3921,12 +4233,16 @@ function ConnectionsPage({
       title: "Apple Health",
       identifier: health?.connected
         ? `Last received ${health.latest?.metric_date || "recently"}`
+        : nativeHealthAvailable
+          ? "This iPhone · HealthKit"
         : health?.status === "pending"
           ? "Apple Health Shortcut waiting"
           : "This iPhone",
       summary: health?.connected
         ? "Approved daily steps, goals, and active minutes are reaching Pepper."
-        : "A private iPhone pathway for steps, goals, and active minutes.",
+        : nativeHealthAvailable
+          ? "Read your approved daily steps and exercise minutes directly from Apple Health."
+          : "A private iPhone pathway for steps, goals, and active minutes.",
       state: health?.connected
         ? "connected"
         : health?.status === "pending"
@@ -3944,20 +4260,28 @@ function ConnectionsPage({
         ? dateLabel(health.latest.metric_date)
         : "No verified activity yet",
       reads: [
-        "Only daily steps, step goal, and active minutes approved in the iPhone Shortcut",
+        nativeHealthAvailable
+          ? "Only today's steps and exercise minutes after you approve Health access"
+          : "Only daily steps, step goal, and active minutes approved in the iPhone Shortcut",
       ],
       automatic: [
         "Update this member's private Home health summary when the paired device reports",
       ],
       approval: [
-        "Every HealthKit category is selected on the iPhone",
+        nativeHealthAvailable
+          ? "Apple shows the Health permission sheet before Pepper can read anything"
+          : "Every HealthKit category is selected on the iPhone",
         "Pepper never writes data back to HealthKit",
       ],
       sharing:
         "Private to this member. Health details do not appear on other family pages.",
       feeds: ["Private Home health"],
-      action: health?.connected ? "Pair again" : "Set up Shortcut",
-      actionIcon: <Plus size={15} />,
+      action: health?.connected
+        ? "Refresh"
+        : nativeHealthAvailable
+          ? "Connect"
+          : "Set up Shortcut",
+      actionIcon: health?.connected ? <RefreshCw size={15} /> : <Plus size={15} />,
       onAction: onHealth,
     },
   ];
@@ -4923,6 +5247,7 @@ function MealsPage({
   const displayedGroceries = showAllGroceries
     ? weekGroceries
     : weekGroceries.slice(0, 8);
+  const hasPlannedWeek = weekMeals.some(({ meal }) => Boolean(meal));
 
   return (
     <>
@@ -4948,7 +5273,7 @@ function MealsPage({
               onClick={() => void onGenerate()}
             >
               <Sparkles size={16} aria-hidden="true" />
-              {busy ? "Planning…" : "Plan my week"}
+              {busy ? "Planning…" : hasPlannedWeek ? "Refresh week" : "Plan my week"}
             </button>
           ) : null}
         </div>
@@ -5320,6 +5645,80 @@ function GroceryComposer({ meals, members, actor, busy, onClose, onSave }: {
   );
 }
 
+function MemberAvatar({ name, photoUrl, className }: {
+  name: string;
+  photoUrl?: string | null;
+  className: string;
+}) {
+  return (
+    <span className={className} aria-hidden="true">
+      {photoUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element -- Private photo URLs expire and are already resized before upload.
+        <img src={photoUrl} alt="" loading="lazy" decoding="async" />
+      ) : (
+        name.slice(0, 1)
+      )}
+    </span>
+  );
+}
+
+function ProfilePhotoPicker({
+  name,
+  photoUrl,
+  busy,
+  compact = false,
+  onSelect,
+  onRemove,
+}: {
+  name: string;
+  photoUrl?: string | null;
+  busy: boolean;
+  compact?: boolean;
+  onSelect: (file: File) => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <div className={`${styles.profilePhotoControl} ${compact ? styles.profilePhotoPickerCompact : ""}`}>
+      <label
+        className={styles.profilePhotoPicker}
+        aria-label={`${photoUrl ? "Replace" : "Add"} ${name}'s profile photo`}
+      >
+        <input
+          type="file"
+          accept="image/*"
+          disabled={busy}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) onSelect(file);
+          }}
+        />
+        <span className={styles.profilePhotoVisual}>
+          <MemberAvatar
+            name={name}
+            photoUrl={photoUrl}
+            className={styles.memberHeroAvatar}
+          />
+          <span className={styles.profilePhotoBadge} aria-hidden="true">
+            {busy ? <RefreshCw size={15} /> : <Camera size={15} />}
+          </span>
+        </span>
+        {!compact ? (
+          <span className={styles.profilePhotoCopy}>
+            <strong>Profile photo</strong>
+            <small>{photoUrl ? "Choose a new photo" : "Add from this device"}</small>
+          </span>
+        ) : null}
+      </label>
+      {photoUrl && onRemove ? (
+        <button type="button" className={styles.profilePhotoRemove} disabled={busy} onClick={onRemove}>
+          Remove
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function setupDraft(
   member?: PepperState["members"][number],
   profile?: MemberSetupProfile,
@@ -5343,11 +5742,15 @@ function FamilySetupPage({
   busy,
   onBack,
   onSave,
+  onPhotoUpload,
+  onPhotoRemove,
 }: {
   state: PepperState;
   busy: boolean;
   onBack: () => void;
   onSave: (draft: MemberSetupDraft) => Promise<boolean>;
+  onPhotoUpload: (memberId: string, file: File) => Promise<boolean>;
+  onPhotoRemove: (memberId: string) => Promise<boolean>;
 }) {
   const [selectedMemberId, setSelectedMemberId] = useState(
     state.members[0]?.id || "new",
@@ -5423,6 +5826,18 @@ function FamilySetupPage({
             );
           }}
         >
+          {selectedMember ? (
+            <div className={styles.setupPhotoRow}>
+              <ProfilePhotoPicker
+                name={displayName(selectedMember)}
+                photoUrl={selectedProfile?.avatar_url}
+                busy={busy}
+                onSelect={(file) => void onPhotoUpload(selectedMember.id, file)}
+                onRemove={() => void onPhotoRemove(selectedMember.id)}
+              />
+              <p>Shown only to signed-in members of this family.</p>
+            </div>
+          ) : null}
           <div className={styles.setupIdentityGrid}>
             <label className={styles.choreField}>
               Name
@@ -5515,11 +5930,13 @@ function SetupListField({ label, value, placeholder, privateField, onChange }: {
 
 function FamilyDirectory({
   members,
+  profiles,
   onOpen,
   canManage,
   onSetup,
 }: {
   members: PepperState["members"];
+  profiles: MemberSetupProfile[];
   onOpen: (slug: string) => void;
   canManage: boolean;
   onSetup: () => void;
@@ -5551,9 +5968,11 @@ function FamilyDirectory({
             key={member.id}
             onClick={() => onOpen(member.slug)}
           >
-            <span className={styles.avatar} aria-hidden="true">
-              {displayName(member).slice(0, 1)}
-            </span>
+            <MemberAvatar
+              name={displayName(member)}
+              photoUrl={profiles.find((profile) => profile.member_id === member.id)?.avatar_url}
+              className={styles.avatar}
+            />
             <span className={styles.memberDirectoryText}>
               <strong>{displayName(member)}</strong>
               <small>{member.role.replace("_", " ")}</small>
@@ -5593,6 +6012,8 @@ function MemberPage({
   onOpen,
   onCreateChore,
   onCreatePersonalTask,
+  onPhotoUpload,
+  onPhotoRemove,
 }: {
   state: MemberState | null;
   busy: boolean;
@@ -5602,6 +6023,8 @@ function MemberPage({
   onOpen: (item: SelectedItem) => void;
   onCreateChore: (draft: ChoreDraft) => Promise<boolean>;
   onCreatePersonalTask: (draft: PersonalTaskDraft) => Promise<boolean>;
+  onPhotoUpload: (memberId: string, file: File) => Promise<boolean>;
+  onPhotoRemove: (memberId: string) => Promise<boolean>;
 }) {
   const [choreComposerOpen, setChoreComposerOpen] = useState(false);
   const [todoComposerOpen, setTodoComposerOpen] = useState(false);
@@ -5631,9 +6054,22 @@ function MemberPage({
         <ArrowLeft size={17} /> Family
       </button>
       <section className={styles.memberHero}>
-        <span className={styles.memberHeroAvatar} aria-hidden="true">
-          {displayName(state.member).slice(0, 1)}
-        </span>
+        {actorIsAdult || state.member.id === household.member.id ? (
+          <ProfilePhotoPicker
+            name={displayName(state.member)}
+            photoUrl={state.setup?.avatar_url}
+            busy={actionBusy}
+            compact
+            onSelect={(file) => void onPhotoUpload(state.member.id, file)}
+            onRemove={() => void onPhotoRemove(state.member.id)}
+          />
+        ) : (
+          <MemberAvatar
+            name={displayName(state.member)}
+            photoUrl={state.setup?.avatar_url}
+            className={styles.memberHeroAvatar}
+          />
+        )}
         <div>
           <div className={styles.eyebrow}>{state.member.role.replace("_", " ")}</div>
           <h1>{displayName(state.member)}</h1>
@@ -5920,13 +6356,15 @@ function ItemActionSheet({
   onUpdate: (
     operation: ItemOperation,
     changes?: ItemUpdate,
-  ) => void;
+  ) => Promise<ItemUpdateResult>;
 }) {
   const item = selected.item;
   const eventItem = selected.type === "event" ? selected.item : null;
   const taskItem = selected.type === "task" ? selected.item : null;
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<ItemOperation | null>(null);
+  const [actionError, setActionError] = useState("");
   const [title, setTitle] = useState(item.title);
   const [taskStatus, setTaskStatus] = useState<"open" | "in_progress" | "on_hold">(
     taskItem?.status === "in_progress" || taskItem?.status === "on_hold"
@@ -5965,10 +6403,21 @@ function ItemActionSheet({
     ? "Edit appointment"
     : "Edit event";
 
-  function saveEdit(event: FormEvent<HTMLFormElement>) {
+  async function runUpdate(operation: ItemOperation, changes?: ItemUpdate) {
+    setActionError("");
+    setPendingOperation(operation);
+    const result = await onUpdate(operation, changes);
+    if (!result.ok) {
+      setActionError(result.error);
+      setPendingOperation(null);
+    }
+    return result.ok;
+  }
+
+  async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (taskItem) {
-      onUpdate("edit", {
+      await runUpdate("edit", {
         title,
         status: taskStatus,
         due_date: dueDate,
@@ -5979,7 +6428,7 @@ function ItemActionSheet({
       });
       return;
     }
-    onUpdate("edit", {
+    await runUpdate("edit", {
       title,
       starts_local: startsLocal,
       ends_local: endsLocal,
@@ -6022,6 +6471,9 @@ function ItemActionSheet({
         {!editing && eventItem?.notes ? <p className={styles.itemNotes}>{eventItem.notes}</p> : null}
         {!editing && item.source && item.source !== "pepper" ? (
           <p className={styles.sourceNote}>Calendar supplied the evidence. Pepper owns this family plan.</p>
+        ) : null}
+        {actionError ? (
+          <p className={styles.actionError} role="alert">{actionError}</p>
         ) : null}
 
         {editing ? (
@@ -6148,7 +6600,7 @@ function ItemActionSheet({
                 Cancel
               </button>
               <button type="submit" disabled={busy}>
-                <Check size={18} /> Save changes
+                <Check size={18} /> {pendingOperation === "edit" ? "Saving…" : "Save changes"}
               </button>
             </div>
           </form>
@@ -6161,7 +6613,7 @@ function ItemActionSheet({
               value={currentOwner}
               disabled={busy}
               onChange={(event) =>
-                onUpdate("assign", { owner_member_id: event.target.value || null })
+                void runUpdate("assign", { owner_member_id: event.target.value || null })
               }
             >
               <option value="">{eventItem ? "Needs a driver" : "Needs an owner"}</option>
@@ -6180,17 +6632,17 @@ function ItemActionSheet({
               <Pencil size={17} /> {taskItem ? "Edit task" : eventEditorLabel}
             </button>
             {handled ? (
-              <button type="button" disabled={busy} onClick={() => onUpdate("reopen")}>
-                <RotateCcw size={17} /> Restore
+              <button type="button" disabled={busy} onClick={() => void runUpdate("reopen")}>
+                <RotateCcw size={17} /> {pendingOperation === "reopen" ? "Restoring…" : "Restore"}
               </button>
             ) : (
               <>
-                <button type="button" disabled={busy} onClick={() => onUpdate("complete")}>
-                  <Check size={18} /> Complete
+                <button type="button" disabled={busy} onClick={() => void runUpdate("complete")}>
+                  <Check size={18} /> {pendingOperation === "complete" ? "Completing…" : "Complete"}
                 </button>
                 {eventItem ? (
-                  <button type="button" className={styles.cancelAction} disabled={busy} onClick={() => onUpdate("cancel")}>
-                    <CircleX size={18} /> Cancel event
+                  <button type="button" className={styles.cancelAction} disabled={busy} onClick={() => void runUpdate("cancel")}>
+                    <CircleX size={18} /> {pendingOperation === "cancel" ? "Canceling…" : "Cancel event"}
                   </button>
                 ) : null}
               </>
@@ -6211,8 +6663,8 @@ function ItemActionSheet({
                 <button type="button" disabled={busy} onClick={() => setConfirmDelete(false)}>
                   Keep it
                 </button>
-                <button type="button" disabled={busy} onClick={() => onUpdate("delete")}>
-                  <Trash2 size={17} /> Delete item
+                <button type="button" disabled={busy} onClick={() => void runUpdate("delete")}>
+                  <Trash2 size={17} /> {pendingOperation === "delete" ? "Deleting…" : "Delete item"}
                 </button>
               </div>
             </div>
@@ -6366,7 +6818,13 @@ function ConflictResolutionSheet({
   );
 }
 
-function HorizonRow({ item }: { item: HorizonRowItem }) {
+function HorizonRow({
+  item,
+  onOpen,
+}: {
+  item: HorizonRowItem;
+  onOpen?: (item: HorizonRowItem) => void;
+}) {
   const driver = productNameText(item.transport_owner_name);
   const label =
     item.item_type === "task"
@@ -6382,12 +6840,11 @@ function HorizonRow({ item }: { item: HorizonRowItem }) {
         : item.source === "routine"
           ? "Routine"
           : "Plan";
-  return (
-    <div
-      className={`${styles.horizonRow} ${
-        item.resolution_level === "dated_exception" ? styles.horizonRowAlert : ""
-      }`}
-    >
+  const className = `${styles.horizonRow} ${
+    item.resolution_level === "dated_exception" ? styles.horizonRowAlert : ""
+  } ${onOpen ? styles.horizonRowAction : ""}`;
+  const content = (
+    <>
       <div className={styles.horizonTime}>
         {item.item_type === "watch"
           ? "—"
@@ -6404,7 +6861,15 @@ function HorizonRow({ item }: { item: HorizonRowItem }) {
           {driver ? <span>{driver} owns it</span> : null}
         </div>
       </div>
-    </div>
+      {onOpen ? <ChevronRight className={styles.rowChevron} size={18} /> : null}
+    </>
+  );
+  return onOpen ? (
+    <button type="button" className={className} onClick={() => onOpen(item)}>
+      {content}
+    </button>
+  ) : (
+    <div className={className}>{content}</div>
   );
 }
 
@@ -6417,7 +6882,13 @@ function isFamilyWeekItem(item: HorizonRowItem) {
   return true;
 }
 
-function HorizonDayCard({ day }: { day: HorizonDay }) {
+function HorizonDayCard({
+  day,
+  onOpenEvent,
+}: {
+  day: HorizonDay;
+  onOpenEvent: (item: HorizonRowItem) => void;
+}) {
   const items = uniqueHorizonItems((day.items || []).filter(isFamilyWeekItem));
   const groupedDropoffs = items.filter(
     (item) =>
@@ -6456,7 +6927,15 @@ function HorizonDayCard({ day }: { day: HorizonDay }) {
         />
       ) : null}
       {visibleItems.map((item) => (
-        <HorizonRow key={item.id} item={item} />
+        <HorizonRow
+          key={item.id}
+          item={item}
+          onOpen={
+            item.item_type === "event" || item.item_type === "school_schedule"
+              ? onOpenEvent
+              : undefined
+          }
+        />
       ))}
       {day.watch?.map((item) => (
         <HorizonRow

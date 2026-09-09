@@ -10,8 +10,8 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/pepper",
     scope: "/",
     display: "standalone",
-    background_color: "#F7F4EE",
-    theme_color: "#F7F4EE",
+    background_color: "#F6F5FB",
+    theme_color: "#D9DEF2",
     categories: ["lifestyle", "productivity"],
     icons: [
       {

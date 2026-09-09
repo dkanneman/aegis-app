@@ -19,4 +19,10 @@ Before archiving, the stable `pepper-family-beta.vercel.app` host must point at 
 5. Run on an iPhone simulator, then a registered iPhone.
 6. Archive with the Release configuration and upload through Organizer.
 
-Do not add HealthKit entitlements or permission text until the native Health connection is implemented and ready to explain to testers.
+## Apple Health
+
+The native shell requests read-only access to today's step count and exercise
+minutes when the member taps Connect or Refresh in Pepper. The shell sends those
+two approved totals to the existing member-scoped One Brain health ingest endpoint.
+Pepper does not request write access and does not expose health totals to other
+household profiles.

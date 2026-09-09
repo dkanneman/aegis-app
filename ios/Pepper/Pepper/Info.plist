@@ -37,10 +37,16 @@
     <string>public.app-category.lifestyle</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>NSHealthShareUsageDescription</key>
+    <string>Pepper reads your daily steps and exercise minutes to create your private health summary. Pepper never writes to Apple Health.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>Pepper never adds or changes Apple Health data. Apple requires this notice because Pepper uses HealthKit to read your steps and exercise minutes.</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>PepperBaseHost</key>
     <string>$(PEPPER_BASE_HOST)</string>
+    <key>PepperHealthHost</key>
+    <string>$(PEPPER_HEALTH_HOST)</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

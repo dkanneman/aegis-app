@@ -17,6 +17,14 @@ const migrationPath = new URL(
 const tellPath = new URL('../supabase/functions/pepper-tell-v2/index.ts', import.meta.url)
 const apiPath = new URL('../supabase/functions/pepper-family-api/index.ts', import.meta.url)
 const legacyApiPath = new URL('../supabase/functions/pepper-family-beta-01/index.ts', import.meta.url)
+const previewCaptureGuardPath = new URL(
+  '../supabase/preview/20260908223000_require_capture_pipeline.sql',
+  import.meta.url,
+)
+const previewCaptureDenyPath = new URL(
+  '../supabase/preview/20260909033633_restore_capture_direct_access_deny.sql',
+  import.meta.url,
+)
 
 test('migration defines the explicit capture state and removes pending from the final constraint', async () => {
   const sql = await readFile(migrationPath, 'utf8')
@@ -84,9 +92,35 @@ test('current API routes tell and member review actions through the transactiona
   assert.match(tell, /private\.list_capture_reviews/)
   assert.match(tell, /private\.resolve_capture_review/)
   assert.match(tell, /body\.resolution !== 'no_change_required'/)
+  assert.match(tell, /\$\{sql\.json\(plan\)\}::jsonb/)
+  assert.match(tell, /\$\{sql\.json\(reviewPlan\)\}::jsonb/)
+  assert.doesNotMatch(tell, /JSON\.stringify\((plan|reviewPlan)\)/)
   assert.doesNotMatch(tell, /JSON\.stringify\(body\.plan\)/)
   assert.doesNotMatch(tell, /pepper-family-beta-01/)
   assert.match(api, /action==='capture_reviews'/)
   assert.match(api, /action==='capture_review_resolve'/)
   assert.match(legacyApi, /from\('captures'\)[\s\S]*?\.eq\('member_id',m\.id\)/)
+})
+
+test('private preview fails closed when canonical capture migrations are skipped', async () => {
+  const [guard, tell] = await Promise.all([
+    readFile(previewCaptureGuardPath, 'utf8'),
+    readFile(tellPath, 'utf8'),
+  ])
+  assert.match(guard, /20260816203301_complete_aegis_capture_pipeline\.sql/)
+  assert.match(guard, /20260824204510_add_one_brain_capture_reconciliation\.sql/)
+  assert.match(guard, /to_regprocedure\('private\.apply_capture_plan\(uuid,uuid,text,jsonb\)'\)/)
+  assert.match(tell, /function publicFailureMessage/)
+  assert.match(tell, /No changes were made\./)
+  assert.doesNotMatch(
+    tell.match(/return json\(\{ error: publicFailureMessage\(error\) \}, 500\)/)?.[0] || '',
+    /error\.message/,
+  )
+})
+
+test('private preview restores its no-direct-capture-access boundary', async () => {
+  const sql = await readFile(previewCaptureDenyPath, 'utf8')
+  assert.match(sql, /drop policy if exists captures_member_insert on public\.captures/)
+  assert.match(sql, /revoke all on table public\.captures from anon, authenticated/)
+  assert.match(sql, /notify pgrst, 'reload schema'/)
 })

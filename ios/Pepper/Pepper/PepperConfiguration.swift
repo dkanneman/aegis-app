@@ -1,6 +1,16 @@
 import Foundation
 
 enum PepperConfiguration {
+    static var healthHost: String {
+        guard
+            let host = Bundle.main.object(forInfoDictionaryKey: "PepperHealthHost") as? String,
+            !host.isEmpty
+        else {
+            preconditionFailure("PepperHealthHost must be configured in the target build settings.")
+        }
+        return host
+    }
+
     static var appURL: URL {
 #if DEBUG
         if

@@ -1,4 +1,5 @@
 import postgres from 'npm:postgres@3.4.7'
+import {chooseMealWeek,uniqueGroceriesForWeek,wantsMealPlanRefresh} from './meal-planning.ts'
 const sql=postgres(Deno.env.get('SUPABASE_DB_URL')!,{ssl:'require',prepare:false,max:1,idle_timeout:20,connect_timeout:10})
 const SUPABASE_URL=Deno.env.get('SUPABASE_URL')||''
 if(!SUPABASE_URL)throw new Error('SUPABASE_URL is not configured.')
@@ -7,6 +8,8 @@ const PRODUCTION_ORIGIN='https://pepper-family-beta.vercel.app'
 const LEGACY_PREVIEW_ORIGIN='https://pepper-v6-private-preview.vercel.app'
 const APP_ORIGIN=Deno.env.get('PEPPER_APP_ORIGIN')||PRODUCTION_ORIGIN
 const SUPABASE_ANON_KEY=Deno.env.get('SUPABASE_ANON_KEY')||''
+const SUPABASE_SERVICE_ROLE_KEY=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||''
+const PROFILE_PHOTO_BUCKET='pepper-profile-photos'
 const TARGET=BASE+'/pepper-family-beta-01'
 const TELL=BASE+'/pepper-tell-v2'
 const CONSEQUENCES=BASE+'/pepper-consequences'
@@ -28,19 +31,65 @@ function dateLA(d=new Date()){return new Intl.DateTimeFormat('en-CA',{timeZone:T
 function addDays(date:string,n:number){const [y,m,d]=date.split('-').map(Number);return new Date(Date.UTC(y,m-1,d+n)).toISOString().slice(0,10)}
 function dayDistance(from:string,to:string){return Math.round((Date.parse(`${to}T00:00:00Z`)-Date.parse(`${from}T00:00:00Z`))/86400000)}
 function cleanList(value:any,limit=20){const values=Array.isArray(value)?value:String(value||'').split(/[\n,]/);return [...new Set(values.map((item:any)=>String(item).trim().slice(0,160)).filter(Boolean))].slice(0,limit)}
-const MEAL_LIBRARY=[
-  {name:'Chicken rice bowls',flags:['meat'],groceries:['Chicken','Rice','Bell peppers','Cucumber','Avocado']},
-  {name:'Build-your-own taco bowls',flags:['meat'],groceries:['Ground turkey','Black beans','Rice','Lettuce','Tomatoes','Avocado']},
-  {name:'Sheet-pan chicken and vegetables',flags:['meat'],groceries:['Chicken','Potatoes','Broccoli','Carrots']},
-  {name:'Salmon, rice, and green beans',flags:['fish'],groceries:['Salmon','Rice','Green beans','Lemons']},
-  {name:'Vegetable stir-fry with rice',flags:['soy'],groceries:['Rice','Broccoli','Bell peppers','Snap peas','Stir-fry sauce']},
-  {name:'Pasta marinara and salad',flags:['gluten'],groceries:['Pasta','Marinara sauce','Salad greens','Tomatoes']},
-  {name:'Turkey burgers and salad',flags:['meat','gluten'],groceries:['Turkey burger patties','Burger buns','Salad greens','Tomatoes']},
-  {name:'Black bean taco bowls',flags:[],groceries:['Black beans','Rice','Corn','Lettuce','Tomatoes','Avocado']},
-  {name:'Baked potato bar',flags:[],groceries:['Potatoes','Broccoli','Green onions','Black beans']},
-  {name:'Vegetable soup and salad',flags:[],groceries:['Vegetable broth','Carrots','Celery','Potatoes','Salad greens']},
-]
-function allowedMeals(needs:any[]){const text=needs.map((need:any)=>`${need.label||''} ${need.details||''}`).join(' ').toLowerCase();const blocked=new Set<string>();if(/vegetarian|vegan|no meat/.test(text))blocked.add('meat');if(/fish allergy|no fish|avoid fish|seafood allergy/.test(text))blocked.add('fish');if(/gluten[ -]?free|celiac|no gluten/.test(text))blocked.add('gluten');if(/soy allergy|no soy/.test(text))blocked.add('soy');const allowed=MEAL_LIBRARY.filter((meal)=>meal.flags.every((flag)=>!blocked.has(flag)));return allowed.length?allowed:MEAL_LIBRARY.filter((meal)=>meal.flags.length===0)}
+function encodedStoragePath(path:string){return path.split('/').map(encodeURIComponent).join('/')}
+function storageObjectUrl(path:string){return `${SUPABASE_URL}/storage/v1/object/${PROFILE_PHOTO_BUCKET}/${encodedStoragePath(path)}`}
+function storageSignUrl(path:string){return `${SUPABASE_URL}/storage/v1/object/sign/${PROFILE_PHOTO_BUCKET}/${encodedStoragePath(path)}`}
+function profilePhotoBytes(value:any){
+  const match=String(value||'').match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/)
+  if(!match)throw Object.assign(new Error('Choose a JPEG profile photo.'),{status:400})
+  let binary=''
+  try{binary=atob(match[1])}catch{throw Object.assign(new Error('That profile photo could not be read.'),{status:400})}
+  if(!binary.length||binary.length>1048576)throw Object.assign(new Error('Profile photos must be smaller than 1 MB.'),{status:400})
+  const bytes=Uint8Array.from(binary,(character)=>character.charCodeAt(0))
+  if(bytes.length<4||bytes[0]!==0xff||bytes[1]!==0xd8||bytes[2]!==0xff)throw Object.assign(new Error('That file is not a valid JPEG profile photo.'),{status:400})
+  return bytes
+}
+async function signedProfilePhoto(path:any){
+  if(!path||!SUPABASE_SERVICE_ROLE_KEY)return null
+  const response=await fetch(storageSignUrl(String(path)),{
+    method:'POST',
+    headers:{apikey:SUPABASE_SERVICE_ROLE_KEY,authorization:`Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,'content-type':'application/json'},
+    body:JSON.stringify({expiresIn:3600}),
+  })
+  if(!response.ok)return null
+  const data=await response.json()
+  const signed=data.signedURL||data.signedUrl
+  if(!signed)return null
+  if(/^https?:\/\//i.test(signed))return signed
+  const normalized=String(signed).startsWith('/storage/v1/')
+    ?String(signed)
+    :String(signed).startsWith('/object/')
+      ?`/storage/v1${signed}`
+      :`/storage/v1/${String(signed).replace(/^\/+/, '')}`
+  return new URL(normalized,SUPABASE_URL).toString()
+}
+async function profileWithSignedPhoto(profile:any){
+  const {avatar_path,...safe}=profile
+  return {...safe,avatar_url:await signedProfilePhoto(avatar_path)}
+}
+async function uploadProfilePhoto(path:string,bytes:Uint8Array){
+  if(!SUPABASE_SERVICE_ROLE_KEY)throw new Error('Profile photo storage is not configured.')
+  const response=await fetch(storageObjectUrl(path),{
+    method:'POST',
+    headers:{apikey:SUPABASE_SERVICE_ROLE_KEY,authorization:`Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,'content-type':'image/jpeg','cache-control':'60','x-upsert':'true'},
+    body:bytes,
+  })
+  if(response.ok)return
+  const detail=await response.text()
+  console.error('Profile photo upload failed',response.status,detail.slice(0,500))
+  throw Object.assign(new Error('Pepper could not store that profile photo.'),{status:502})
+}
+async function deleteProfilePhoto(path:string){
+  if(!SUPABASE_SERVICE_ROLE_KEY)throw new Error('Profile photo storage is not configured.')
+  const response=await fetch(storageObjectUrl(path),{
+    method:'DELETE',
+    headers:{apikey:SUPABASE_SERVICE_ROLE_KEY,authorization:`Bearer ${SUPABASE_SERVICE_ROLE_KEY}`},
+  })
+  if(response.ok||response.status===404)return
+  const detail=await response.text()
+  console.error('Profile photo delete failed',response.status,detail.slice(0,500))
+  throw Object.assign(new Error('Pepper could not remove that profile photo.'),{status:502})
+}
 async function calendarState(member:any){const rows=await sql<any[]>`select id,connected_by_member_id,provider_calendar_id,calendar_name,calendar_time_zone,status,sync_status,last_attempt_at,last_synced_at,last_error from public.calendar_connections where household_id=${member.household_id}::uuid order by updated_at desc limit 1`;const connection=rows[0]||null;return {configured:false,connected:connection?.status==='connected',connection}}
 async function setupProfiles(member:any){
   const profiles=await sql<any[]>`
@@ -53,6 +102,8 @@ async function setupProfiles(member:any){
       coalesce(p.dietary_preferences,'{}'::text[]) as dietary_preferences,
       coalesce(p.medications,'{}'::text[]) as medications,
       coalesce(p.goals,'{}'::text[]) as goals,
+      p.avatar_path,
+      p.avatar_updated_at,
       p.updated_at
     from public.household_members m
     left join private.member_setup_profiles p on p.member_id=m.id
@@ -66,7 +117,29 @@ async function setupProfiles(member:any){
     where m.household_id=${member.household_id}::uuid
     order by m.created_at
   `
-  return profiles.map((profile:any)=>adult(member)||profile.member_id===member.id?profile:{...profile,medications:[]})
+  return Promise.all(profiles.map(async(profile:any)=>profileWithSignedPhoto(adult(member)||profile.member_id===member.id?profile:{...profile,medications:[]})))
+}
+async function monthState(member:any){
+  const start=dateLA(),end=addDays(start,30)
+  return sql<any[]>`
+    select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,
+      e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,
+      e.transport_status,e.source,e.external_url,e.external_organizer_email,
+      e.external_organizer_name
+    from public.events e
+    where e.household_id=${member.household_id}::uuid
+      and e.deleted_at is null
+      and e.status<>'canceled'
+      and e.starts_at>=(${start}::date at time zone 'America/Los_Angeles')
+      and e.starts_at<(${end}::date at time zone 'America/Los_Angeles')
+      and (
+        e.visibility='household'
+        or e.owner_member_id=${member.id}::uuid
+        or e.person_slug=${member.slug}
+      )
+    order by e.starts_at
+    limit 320
+  `
 }
 async function memberState(member:any,targetSlug:string){
   const targets=await sql<any[]>`select id,slug,display_name,role from public.household_members where household_id=${member.household_id}::uuid and slug=${targetSlug} limit 1`
@@ -78,7 +151,7 @@ async function memberState(member:any,targetSlug:string){
     sql<any[]>`select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,t.due_at,t.source,t.updated_at,t.created_at,t.area,t.project,t.priority,t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action from public.tasks t where t.household_id=${member.household_id}::uuid and t.deleted_at is null and (t.owner_member_id=${target.id}::uuid or ((lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.display_name).toLowerCase()}%`} or lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.slug).toLowerCase()}%`}) and lower(coalesce(t.area,'')) in ('health','kids') and lower(concat_ws(' ',t.title,t.project,t.notes,t.classification,array_to_string(t.tags,' '))) ~ '(^|[^a-z])(dr|doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)')) and (t.visibility='household' or t.owner_member_id=${member.id}::uuid or t.creator_member_id=${member.id}::uuid) order by case t.status when 'open' then 0 when 'in_progress' then 1 when 'on_hold' then 2 when 'completed' then 3 else 4 end,t.due_at nulls last,t.updated_at desc limit 160`,
     sql<any[]>`select p.id,p.academic_year,p.school_name,p.district_name,p.grade_label,p.timezone,p.family_arrival_target_local::text,p.first_bell_local::text,p.normal_dismissal_local::text,p.first_day::text,p.last_day::text,p.source_label,p.source_url,p.source_checked_on::text from private.school_profiles p where p.household_id=${member.household_id}::uuid and p.student_member_id=${target.id}::uuid order by p.last_day desc limit 1`,
     sql<any[]>`select schedule_date::text,schedule_kind,schedule_title,day_starts_at,dismissal_at,precedence,resolution_level,source_label,source_url from private.resolve_school_schedule(${member.household_id}::uuid,(now() at time zone 'America/Los_Angeles')::date,((now() at time zone 'America/Los_Angeles')::date+interval '31 days')::date) where person_slug=${target.slug} and resolution_level='dated_exception' and transportation_impact=true order by schedule_date limit 6`,
-    sql<any[]>`select member_id,activities,school_name,grade_label,dietary_preferences,medications,goals,updated_at from private.member_setup_profiles where household_id=${member.household_id}::uuid and member_id=${target.id}::uuid limit 1`,
+    sql<any[]>`select member_id,activities,school_name,grade_label,dietary_preferences,medications,goals,avatar_path,avatar_updated_at,updated_at from private.member_setup_profiles where household_id=${member.household_id}::uuid and member_id=${target.id}::uuid limit 1`,
   ])
   const memberEvents=[...new Map([...events,...appointments].map((event:any)=>[event.id,event])).values()]
     .sort((left:any,right:any)=>+new Date(left.starts_at)-+new Date(right.starts_at))
@@ -90,10 +163,12 @@ async function memberState(member:any,targetSlug:string){
     dietary_preferences:[],
     medications:[],
     goals:[],
+    avatar_path:null,
+    avatar_updated_at:null,
     updated_at:null,
   }:null)
   if(memberProfile&&!adult(member)&&target.id!==member.id)memberProfile.medications=[]
-  return {member:target,events:memberEvents,tasks,school:profiles[0]?{profile:profiles[0],upcoming_changes:schoolChanges}:null,setup:memberProfile}
+  return {member:target,events:memberEvents,tasks,school:profiles[0]?{profile:profiles[0],upcoming_changes:schoolChanges}:null,setup:memberProfile?await profileWithSignedPhoto(memberProfile):null}
 }
 async function choreState(member:any){
   return sql<any[]>`
@@ -125,7 +200,7 @@ async function choreState(member:any){
 async function mealState(member:any){
   const [meals,groceries,mealNeeds]=await Promise.all([
     sql<any[]>`select mp.id,mp.meal_date::text,mp.meal_name,mp.prep_at,mp.eat_at,mp.owner_member_id,mp.shopping_owner_member_id,mp.updated_at from public.meal_plan mp where mp.household_id=${member.household_id}::uuid and mp.meal_date>=(now() at time zone 'America/Los_Angeles')::date and mp.meal_date<((now() at time zone 'America/Los_Angeles')::date+interval '14 days') order by mp.meal_date`,
-    sql<any[]>`select g.id,g.item,g.status,g.added_by_member_id,g.completed_by_member_id,g.owner_member_id,g.meal_plan_id,g.updated_at,g.created_at from public.groceries g where g.household_id=${member.household_id}::uuid order by case g.status when 'open' then 0 else 1 end,g.created_at desc`,
+    sql<any[]>`select g.id,g.item,g.status,g.added_by_member_id,g.completed_by_member_id,g.owner_member_id,g.meal_plan_id,g.origin,g.updated_at,g.created_at from public.groceries g where g.household_id=${member.household_id}::uuid order by case g.status when 'open' then 0 else 1 end,g.created_at desc`,
     sql<any[]>`select n.id,n.member_id,n.need_type,n.label,n.details,n.active,n.updated_at from public.family_meal_needs n where n.household_id=${member.household_id}::uuid and n.active=true order by n.member_id,n.need_type,n.label`,
   ])
   return {meals,groceries,mealNeeds}
@@ -273,7 +348,7 @@ async function createGrocery(member:any,body:any){
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     await householdMember(tx,member,ownerId)
     await validateMeal(tx,member,mealPlanId)
-    const rows=await tx<any[]>`insert into public.groceries(household_id,item,status,added_by_member_id,owner_member_id,meal_plan_id) values(${member.household_id}::uuid,${item},'open',${member.id}::uuid,${ownerId||null}::uuid,${mealPlanId||null}::uuid) returning id,item,status,added_by_member_id,completed_by_member_id,owner_member_id,meal_plan_id,updated_at,created_at`
+    const rows=await tx<any[]>`insert into public.groceries(household_id,item,status,added_by_member_id,owner_member_id,meal_plan_id,origin) values(${member.household_id}::uuid,${item},'open',${member.id}::uuid,${ownerId||null}::uuid,${mealPlanId||null}::uuid,'manual') on conflict(household_id,(lower(btrim(item)))) where status='open' do update set owner_member_id=coalesce(excluded.owner_member_id,groceries.owner_member_id),meal_plan_id=coalesce(excluded.meal_plan_id,groceries.meal_plan_id),origin='manual',updated_at=now() returning id,item,status,added_by_member_id,completed_by_member_id,owner_member_id,meal_plan_id,origin,updated_at,created_at`
     const grocery=rows[0]
     await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'grocery_created','grocery',${grocery.id}::uuid,${`${item} added to the weekly grocery plan.`})`
     return {ok:true,grocery}
@@ -289,6 +364,7 @@ async function updateGrocery(member:any,body:any){
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     const rows=await tx<any[]>`select id,item,status,owner_member_id,meal_plan_id from public.groceries where id=${id}::uuid and household_id=${member.household_id}::uuid for update`
     const grocery=rows[0]
+    let resultId=id
     if(!grocery)throw Object.assign(new Error('Grocery item not found.'),{status:404})
     if(operation==='assign'){
       if(!adult(member))throw Object.assign(new Error('Only an adult can assign groceries.'),{status:403})
@@ -300,11 +376,16 @@ async function updateGrocery(member:any,body:any){
       await tx`update public.groceries set meal_plan_id=${mealPlanId||null}::uuid,updated_at=now() where id=${id}::uuid`
     }else{
       if(!adult(member)&&grocery.owner_member_id&&grocery.owner_member_id!==member.id)throw Object.assign(new Error('That grocery is assigned to someone else.'),{status:403})
-      const status=operation==='complete'?'completed':'open'
-      await tx`update public.groceries set status=${status},completed_by_member_id=case when ${operation}='complete' then ${member.id}::uuid else null end,updated_at=now() where id=${id}::uuid`
+      if(operation==='reopen'){
+        const duplicates=await tx<any[]>`select id from public.groceries where household_id=${member.household_id}::uuid and status='open' and lower(btrim(item))=lower(btrim(${grocery.item})) and id<>${id}::uuid limit 1 for update`
+        if(duplicates[0])resultId=duplicates[0].id
+        else await tx`update public.groceries set status='open',completed_by_member_id=null,updated_at=now() where id=${id}::uuid`
+      }else{
+        await tx`update public.groceries set status='completed',completed_by_member_id=${member.id}::uuid,updated_at=now() where id=${id}::uuid`
+      }
     }
-    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${`grocery_${operation}`},'grocery',${id}::uuid,${`${grocery.item} grocery ${operation} saved.`})`
-    return {ok:true,id,operation}
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${`grocery_${operation}`},'grocery',${resultId}::uuid,${resultId===id?`${grocery.item} grocery ${operation} saved.`:`${grocery.item} was already open, so the existing grocery was kept.`})`
+    return {ok:true,id:resultId,operation,merged:resultId!==id}
   })
 }
 async function saveMemberSetup(member:any,body:any){
@@ -355,6 +436,38 @@ async function saveMemberSetup(member:any,body:any){
     return {ok:true,member_id:target.id,slug:target.slug,profile:profiles[0]}
   })
 }
+async function saveMemberPhoto(member:any,body:any){
+  const targetId=String(body.member_id||'')
+  if(!UUID.test(targetId))throw Object.assign(new Error('Family member not found.'),{status:400})
+  const targets=await sql<any[]>`select id,display_name from public.household_members where id=${targetId}::uuid and household_id=${member.household_id}::uuid limit 1`
+  const target=targets[0]
+  if(!target)throw Object.assign(new Error('Family member not found.'),{status:404})
+  if(target.id!==member.id&&!adult(member))throw Object.assign(new Error('You can only change your own profile photo.'),{status:403})
+  const bytes=profilePhotoBytes(body.image_data_url)
+  const path=`${member.household_id}/${target.id}/profile.jpg`
+  await uploadProfilePhoto(path,bytes)
+  await sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    await tx`insert into private.member_setup_profiles(member_id,household_id,updated_by_member_id,avatar_path,avatar_updated_at,updated_at) values(${target.id}::uuid,${member.household_id}::uuid,${member.id}::uuid,${path},now(),now()) on conflict(member_id) do update set avatar_path=excluded.avatar_path,avatar_updated_at=excluded.avatar_updated_at,updated_by_member_id=excluded.updated_by_member_id,updated_at=now()`
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'member_photo_updated','member',${target.id}::uuid,${`${target.display_name} profile photo updated.`})`
+  })
+  return {ok:true,member_id:target.id,avatar_url:await signedProfilePhoto(path)}
+}
+async function removeMemberPhoto(member:any,body:any){
+  const targetId=String(body.member_id||'')
+  if(!UUID.test(targetId))throw Object.assign(new Error('Family member not found.'),{status:400})
+  const targets=await sql<any[]>`select m.id,m.display_name,p.avatar_path from public.household_members m left join private.member_setup_profiles p on p.member_id=m.id where m.id=${targetId}::uuid and m.household_id=${member.household_id}::uuid limit 1`
+  const target=targets[0]
+  if(!target)throw Object.assign(new Error('Family member not found.'),{status:404})
+  if(target.id!==member.id&&!adult(member))throw Object.assign(new Error('You can only change your own profile photo.'),{status:403})
+  if(target.avatar_path)await deleteProfilePhoto(String(target.avatar_path))
+  await sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    await tx`update private.member_setup_profiles set avatar_path=null,avatar_updated_at=null,updated_by_member_id=${member.id}::uuid,updated_at=now() where member_id=${target.id}::uuid and household_id=${member.household_id}::uuid`
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'member_photo_removed','member',${target.id}::uuid,${`${target.display_name} profile photo removed.`})`
+  })
+  return {ok:true,member_id:target.id,avatar_url:null}
+}
 async function deleteAccount(member:any,body:any){
   if(String(body.confirmation||'')!=='DELETE MY ACCOUNT')throw Object.assign(new Error('Type DELETE MY ACCOUNT to confirm account deletion.'),{status:400})
   return sql.begin(async(tx:any)=>{
@@ -397,8 +510,13 @@ async function generateMealPlan(member:any,body:any){
   if(!adult(member))throw Object.assign(new Error('Only an adult can generate the family meal plan.'),{status:403})
   const startDate=String(body.start_date||'').trim()
   if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate))throw Object.assign(new Error('Choose a valid week.'),{status:400})
-  const needs=await sql<any[]>`select label,details from public.family_meal_needs where household_id=${member.household_id}::uuid and active=true order by created_at`
-  const choices=allowedMeals(needs)
+  const refresh=body.refresh===true
+  const instruction=String(body.instruction||'').trim().slice(0,1000)
+  const [needs,currentMeals]=await Promise.all([
+    sql<any[]>`select label,details from public.family_meal_needs where household_id=${member.household_id}::uuid and active=true order by created_at`,
+    sql<any[]>`select meal_name from public.meal_plan where household_id=${member.household_id}::uuid and meal_date>=${startDate}::date and meal_date<${startDate}::date+7 order by meal_date`,
+  ])
+  const recipes=chooseMealWeek(needs,currentMeals.map((meal:any)=>meal.meal_name),instruction)
   return sql.begin(async(tx:any)=>{
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     const generated:any[]=[]
@@ -406,19 +524,25 @@ async function generateMealPlan(member:any,body:any){
       const date=new Date(`${startDate}T12:00:00Z`)
       date.setUTCDate(date.getUTCDate()+index)
       const mealDate=date.toISOString().slice(0,10)
-      const recipe=choices[index%choices.length]
-      const meals=await tx<any[]>`insert into public.meal_plan(household_id,meal_date,meal_name,owner_member_id,shopping_owner_member_id,updated_at) values(${member.household_id}::uuid,${mealDate}::date,${recipe.name},null,null,now()) on conflict(household_id,meal_date) do update set meal_name=case when public.meal_plan.meal_name='' then excluded.meal_name else public.meal_plan.meal_name end,updated_at=now() returning id,meal_date::text,meal_name,owner_member_id,shopping_owner_member_id`
+      const recipe=recipes[index]
+      const meals=await tx<any[]>`insert into public.meal_plan(household_id,meal_date,meal_name,owner_member_id,shopping_owner_member_id,updated_at) values(${member.household_id}::uuid,${mealDate}::date,${recipe.name},null,null,now()) on conflict(household_id,meal_date) do update set meal_name=case when ${refresh} then excluded.meal_name when public.meal_plan.meal_name='' then excluded.meal_name else public.meal_plan.meal_name end,updated_at=now() returning id,meal_date::text,meal_name,owner_member_id,shopping_owner_member_id`
       const meal=meals[0]
-      if(meal.meal_name===recipe.name){
-        for(const item of recipe.groceries){
-          const existing=await tx<any[]>`select id from public.groceries where household_id=${member.household_id}::uuid and meal_plan_id=${meal.id}::uuid and lower(item)=lower(${item}) and status='open' limit 1`
-          if(!existing[0])await tx`insert into public.groceries(household_id,item,status,added_by_member_id,owner_member_id,meal_plan_id) values(${member.household_id}::uuid,${item},'open',${member.id}::uuid,null,${meal.id}::uuid)`
-        }
-      }
       generated.push(meal)
     }
-    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,summary) values(${member.household_id}::uuid,${member.id}::uuid,'meal_week_generated','meal_plan',${`Seven-day meal plan generated from ${needs.length} active family meal need${needs.length===1?'':'s'}.`})`
-    return {ok:true,meals:generated,needs_considered:needs.length}
+    const plannedRecipes=generated.map((meal:any,index:number)=>meal.meal_name===recipes[index].name?recipes[index]:{name:meal.meal_name,flags:[],groceries:[]})
+    const groceryPlan=uniqueGroceriesForWeek(plannedRecipes)
+    const mealIds=generated.map((meal:any)=>meal.id)
+    const desiredItems=groceryPlan.map((grocery)=>grocery.normalizedItem)
+    if(refresh&&desiredItems.length){
+      await tx`delete from public.groceries where household_id=${member.household_id}::uuid and status='open' and origin='meal_plan' and meal_plan_id=any(${mealIds}::uuid[]) and lower(btrim(item))<>all(${desiredItems}::text[])`
+    }
+    for(const grocery of groceryPlan){
+      const meal=generated[grocery.mealIndex]
+      await tx`insert into public.groceries(household_id,item,status,added_by_member_id,owner_member_id,meal_plan_id,origin) values(${member.household_id}::uuid,${grocery.item},'open',${member.id}::uuid,null,${meal.id}::uuid,'meal_plan') on conflict(household_id,(lower(btrim(item)))) where status='open' do update set meal_plan_id=case when groceries.origin='meal_plan' then excluded.meal_plan_id else groceries.meal_plan_id end,updated_at=now()`
+    }
+    const eventType=refresh?'meal_week_refreshed':'meal_week_generated'
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,summary) values(${member.household_id}::uuid,${member.id}::uuid,${eventType},'meal_plan',${`Seven-day meal plan ${refresh?'refreshed':'generated'} from ${needs.length} active family meal need${needs.length===1?'':'s'} with ${groceryPlan.length} unique groceries.`})`
+    return {ok:true,meals:generated,needs_considered:needs.length,grocery_count:groceryPlan.length,refreshed:refresh}
   })
 }
 async function createChore(member:any,body:any){
@@ -520,7 +644,8 @@ async function updateFamilyItem(member:any,body:any){
       const summary=operation==='assign'?`${item.title} was assigned.`:operation==='edit'?`${item.title} details were updated.`:operation==='delete'?`${item.title} was deleted from Pepper.`:`${item.title} was ${operation==='reopen'?'reopened':operation+'ed'}.`
       const auditType=operation==='edit'?'task_edit':operation==='delete'?'task_delete':`task_${operation}`
       await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${auditType},'task',${itemId}::uuid,${summary})`
-      return {ok:true,item_type:itemType,id:itemId,operation}
+      const updatedRows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,area,project,priority,classification,tags,notes,waiting_on,recurrence,completed_at,next_action,deleted_at,updated_at from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0]}
     }
     const rows=await tx<any[]>`select id,title,owner_member_id,visibility,status,transport_owner_member_id from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid and deleted_at is null for update`
     const item=rows[0]
@@ -558,10 +683,11 @@ async function updateFamilyItem(member:any,body:any){
     const auditType=operation==='edit'?'event_edit':operation==='delete'?'event_delete':`event_${operation}`
     await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${auditType},'event',${itemId}::uuid,${summary})`
     await tx`select public.recompute_household_consequences(${member.household_id}::uuid)`
-    return {ok:true,item_type:itemType,id:itemId,operation}
+    const updatedRows=await tx<any[]>`select id,title,person_slug,starts_at,ends_at,location,status,visibility,owner_member_id,kind,transport_owner_member_id,transport_status,source,notes,canonical_status_override,canonical_content_override,deleted_at,updated_at from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+    return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0]}
   })
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'1.9',backend:'supabase',frontend:'vercel',capabilities:['chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','grocery_create','grocery_update','member_setup_save','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.1',backend:'supabase',frontend:'vercel',capabilities:['chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 if(action==='pin_setup'){
   const setupToken=String(b.setup_token||'').trim()
@@ -579,9 +705,9 @@ const headers:any={'content-type':'application/json','x-pepper-session':token,ap
 if(action==='state'){
   const core=await proxy(TARGET,headers,{action:'state'});if(!core.ok)return json(req,core.data,core.status)
   const prep=await proxy(PREPARATION,headers,{action:'list'})
-  const [cr,ir,hr,calendarResult,rr,xr,chores,mealPlan,memberProfiles,frontSeat]=await Promise.all([proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'}),choreState(member),mealState(member),setupProfiles(member),frontSeatState(member)])
+  const [cr,ir,hr,calendarResult,rr,xr,chores,mealPlan,memberProfiles,frontSeat,monthEvents]=await Promise.all([proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'}),choreState(member),mealState(member),setupProfiles(member),frontSeatState(member),monthState(member)])
   const csr=calendarResult.ok?calendarResult.data:{...await calendarState(member),configured:false,last_error:calendarResult.data?.error||'Calendar service is unavailable.'}
-  const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;state.meals=mealPlan.meals;state.groceries=mealPlan.groceries;state.mealNeeds=mealPlan.mealNeeds;state.memberProfiles=memberProfiles;state.frontSeat=frontSeat;
+  const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;state.meals=mealPlan.meals;state.groceries=mealPlan.groceries;state.mealNeeds=mealPlan.mealNeeds;state.memberProfiles=memberProfiles;state.frontSeat=frontSeat;state.monthEvents=monthEvents;
   if(state.horizon&&prep.ok&&Array.isArray(prep.data?.now)){
     const existing=Array.isArray(state.horizon.readiness)?state.horizon.readiness:[]
     const fingerprints=new Set(existing.map((x:any)=>`${x.type}|${x.title}|${x.summary}`))
@@ -589,11 +715,13 @@ if(action==='state'){
     state.horizon.readiness=[...additions,...existing]
     if(state.horizon.coverage)state.horizon.coverage.preparation_now=additions.length
   }
-  state.apiVersion='1.6';return json(req,{state})
+  state.apiVersion='2.1';return json(req,{state})
 }
 if(action==='member_state'){return json(req,{state:await memberState(member,String(b.member_slug||''))})}
 if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}
 if(action==='member_setup_save'){return json(req,await saveMemberSetup(member,b))}
+if(action==='member_photo_save'){return json(req,await saveMemberPhoto(member,b))}
+if(action==='member_photo_remove'){return json(req,await removeMemberPhoto(member,b))}
 if(action==='personal_task_create'){return json(req,await createPersonalTask(member,b))}
 if(action==='chore_create'){return json(req,await createChore(member,b))}
 if(action==='front_seat_update'){return json(req,await updateFrontSeat(member,b))}
@@ -603,6 +731,7 @@ if(action==='meal_plan_generate'){return json(req,await generateMealPlan(member,
 if(action==='grocery_create'){return json(req,await createGrocery(member,b))}
 if(action==='grocery_update'){return json(req,await updateGrocery(member,b))}
 if(action==='conflict_resolve'){return json(req,await resolveConflict(member,b))}
+if(action==='tell'&&wantsMealPlanRefresh(String(b.text||''))){const result=await generateMealPlan(member,{start_date:dateLA(),refresh:true,instruction:b.text});return json(req,{...result,reply:`I refreshed the next seven dinners and rebuilt the shopping list as ${result.grocery_count} unique items.`})}
 if(action==='tell'){const r=await proxy(TELL,headers,{action:'tell',text:b.text,source:b.source,idempotency_key:b.idempotency_key});return json(req,r.data,r.status)}
 if(action==='capture_reviews'){const r=await proxy(TELL,headers,{action:'review_list',limit:b.limit});return json(req,r.data,r.status)}
 if(action==='capture_review_resolve'){const r=await proxy(TELL,headers,{action:'review_resolve',capture_id:b.capture_id,idempotency_key:b.idempotency_key,resolution:b.resolution});return json(req,r.data,r.status)}
@@ -619,7 +748,7 @@ if(action==='calendar_status'){const r=await proxy(CALENDAR,headers,{action:'sta
 if(action==='calendar_start'){const r=await proxy(CALENDAR,headers,{action:'start',session_token:token,return_target:b.return_target});return json(req,r.data,r.status)}
 if(action==='calendar_sync'){const r=await proxy(CALENDAR,headers,{action:'sync',session_token:token,force:true});return json(req,r.data,r.status)}
 if(action==='email_start'){const r=await proxy(INTEGRATIONS,headers,{action:'gmail_start',return_target:b.return_target});return json(req,r.data,r.status)}
-if(action==='health_pair'){const r=await proxy(INTEGRATIONS,headers,{action:'health_pair'});return json(req,r.data,r.status)}
+if(action==='health_pair'){const r=await proxy(INTEGRATIONS,headers,{action:'health_pair',client:b.client});return json(req,r.data,r.status)}
 if(action==='integration_status'){const r=await proxy(INTEGRATIONS,headers,{action:'status'});return json(req,r.data,r.status)}
 return json(req,{error:'Unknown Pepper action.',code:'unknown_action'},400)
 }catch(e){console.error(e);const status=typeof (e as any)?.status==='number'?(e as any).status:500;return json(req,{error:e instanceof Error?e.message:'Pepper hit an unexpected error.'},status)}})

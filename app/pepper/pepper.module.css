@@ -1,26 +1,28 @@
 .page,
 .loginPage {
-  --pepper-porcelain: #f8fafb;
-  --pepper-dove: #f1f4f5;
-  --pepper-linen: #d9e0e3;
-  --pepper-ink: #172432;
-  --pepper-soft-ink: #5d6872;
-  --pepper-ciel: #c8dce8;
-  --pepper-bleu-gris: #9eb7c6;
-  --pepper-riviera: #6e9db7;
-  --pepper-mediterranean: #3f718d;
-  --pepper-midnight-sea: #1f3b50;
-  --pepper-nuit: #132333;
-  --pepper-lavande: #afa9c4;
-  --pepper-sea-glass: #b9d5d1;
-  --pepper-champagne: #d8c7a6;
-  --pepper-soft-coral: #c9897d;
-  --pepper-bordeaux: #824f59;
-  --pepper-moon-ivory: #f3f0ea;
-  --pepper-night-secondary: #bcc6cc;
-  --surface-primary: rgba(250, 252, 252, 0.92);
-  --surface-raised: rgba(255, 255, 255, 0.9);
-  --surface-soft: rgba(241, 246, 248, 0.82);
+  --pepper-porcelain: #f6f5fb;
+  --pepper-dove: #e8ebf3;
+  --pepper-linen: #d2d9df;
+  --pepper-ink: #1b293b;
+  --pepper-soft-ink: #596577;
+  --pepper-ciel: #d9def2;
+  --pepper-bleu-gris: #adb6d7;
+  --pepper-riviera: #828dbd;
+  --pepper-mediterranean: #5f6fa2;
+  --pepper-midnight-sea: #33436b;
+  --pepper-nuit: #1e2a46;
+  --pepper-lavande: #bdb7da;
+  --pepper-sea-glass: #bfd7c7;
+  --pepper-sage: #8fa993;
+  --pepper-sage-deep: #4f725f;
+  --pepper-champagne: #d6c49f;
+  --pepper-soft-coral: #cb8d86;
+  --pepper-bordeaux: #7c5064;
+  --pepper-moon-ivory: #f7f5ef;
+  --pepper-night-secondary: #cbd2df;
+  --surface-primary: rgba(249, 249, 253, 0.94);
+  --surface-raised: rgba(253, 253, 255, 0.94);
+  --surface-soft: rgba(235, 238, 248, 0.86);
   --font-display: "Iowan Old Style", "Palatino Linotype", Georgia, "Times New Roman", serif;
   --atmosphere-top: var(--pepper-porcelain);
   --atmosphere-middle: var(--pepper-ciel);
@@ -29,19 +31,19 @@
   --ink: var(--pepper-ink);
   --navy: var(--pepper-mediterranean);
   --blue: var(--pepper-ciel);
-  --blue-soft: rgba(200, 220, 232, 0.32);
-  --paper: #f6f8f8;
+  --blue-soft: rgba(217, 222, 242, 0.5);
+  --paper: #f7f8fb;
   --white: #ffffff;
   --muted: var(--pepper-soft-ink);
-  --line: rgba(23, 36, 50, 0.1);
+  --line: rgba(51, 67, 107, 0.12);
   --warn: #754b28;
   --warn-bg: #f7ecda;
-  --good: #35665d;
-  --shadow: 0 12px 30px rgba(31, 59, 80, 0.055);
+  --good: var(--pepper-sage-deep);
+  --shadow: 0 16px 38px rgba(51, 67, 107, 0.09);
   min-height: 100vh;
   color: var(--ink);
   background:
-    radial-gradient(circle at 76% 8%, color-mix(in srgb, var(--atmosphere-glow) 38%, transparent), transparent 34rem),
+    radial-gradient(circle at 76% 8%, color-mix(in srgb, var(--atmosphere-glow) 30%, transparent), transparent 34rem),
     linear-gradient(180deg, var(--atmosphere-top), var(--atmosphere-middle) 52%, var(--atmosphere-bottom));
   background-attachment: fixed;
   font-family:
@@ -63,11 +65,11 @@
   border-left: 1px solid rgba(255, 255, 255, 0.55);
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--atmosphere-top) 10%, rgba(252, 253, 253, 0.96)),
-    color-mix(in srgb, var(--atmosphere-middle) 8%, rgba(249, 252, 252, 0.94)) 54%,
-    color-mix(in srgb, var(--atmosphere-bottom) 8%, rgba(247, 250, 251, 0.92))
+    color-mix(in srgb, var(--atmosphere-top) 15%, rgba(253, 253, 255, 0.96)),
+    color-mix(in srgb, var(--atmosphere-middle) 12%, rgba(248, 250, 253, 0.95)) 54%,
+    color-mix(in srgb, var(--atmosphere-bottom) 12%, rgba(246, 249, 248, 0.94))
   );
-  backdrop-filter: blur(28px) saturate(105%);
+  backdrop-filter: blur(28px) saturate(118%);
   transition: background 90s linear;
 }
 
@@ -93,7 +95,8 @@
   flex: 0 0 40px;
   border: 0;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(95, 111, 162, 0.11);
+  background: rgba(250, 251, 255, 0.84);
   color: var(--navy);
   cursor: pointer;
 }
@@ -125,7 +128,8 @@
 .quietButton {
   padding: 10px 12px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(95, 111, 162, 0.1);
+  background: rgba(249, 250, 255, 0.78);
 }
 
 .tabs {
@@ -134,9 +138,9 @@
   gap: 4px;
   padding: 4px;
   margin-bottom: 38px;
-  border: 1px solid rgba(23, 59, 86, 0.08);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 14px;
-  background: rgba(239, 244, 246, 0.76);
+  background: rgba(226, 231, 241, 0.84);
 }
 
 .tab,
@@ -158,17 +162,17 @@
 }
 
 .tabActive {
-  background: var(--white);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 241, 250, 0.96));
   color: var(--ink);
-  box-shadow: 0 3px 12px rgba(23, 51, 62, 0.07);
+  box-shadow: 0 4px 14px rgba(51, 67, 107, 0.11);
 }
 
 .calendarConfirmation {
   margin: -18px 0 28px;
   padding: 11px 14px;
-  border: 1px solid rgba(70, 103, 95, 0.12);
+  border: 1px solid rgba(79, 114, 95, 0.16);
   border-radius: 16px;
-  background: rgba(185, 213, 209, 0.28);
+  background: rgba(191, 215, 199, 0.38);
   color: var(--good);
   font-size: 13px;
   line-height: 1.45;
@@ -188,11 +192,11 @@
   bottom: 8px;
   width: min(185px, 22vw);
   aspect-ratio: 3 / 1;
-  background: url("/pepper-eucalyptus.png") center 58% / cover no-repeat;
+  background: url("/pepper-eucalyptus.png") center / contain no-repeat;
   content: "";
-  filter: saturate(0.72);
+  filter: saturate(0.92) hue-rotate(-5deg);
   mix-blend-mode: multiply;
-  opacity: 0.38;
+  opacity: 0.5;
   pointer-events: none;
 }
 
@@ -248,16 +252,16 @@
 .insight,
 .quietEmpty {
   overflow: hidden;
-  border: 1px solid rgba(23, 59, 86, 0.09);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 16px;
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.045);
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.07);
 }
 
 .nowCard {
   padding: 0 20px;
-  border-color: rgba(63, 113, 141, 0.13);
-  background: rgba(231, 241, 247, 0.78);
+  border-color: rgba(95, 111, 162, 0.18);
+  background: rgba(226, 230, 246, 0.76);
 }
 
 .timeline {
@@ -266,10 +270,10 @@
 
 .schoolTransportGroups {
   overflow: hidden;
-  border: 1px solid rgba(23, 59, 86, 0.09);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 16px;
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.04);
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.065);
 }
 
 .schoolTransportGroup + .schoolTransportGroup {
@@ -293,7 +297,7 @@
 }
 
 .schoolTransportGroup summary:hover {
-  background: rgba(200, 220, 232, 0.13);
+  background: rgba(217, 222, 242, 0.28);
 }
 
 .schoolTransportGroup summary:focus-visible {
@@ -307,7 +311,7 @@
   height: 36px;
   place-items: center;
   border-radius: 50%;
-  background: rgba(200, 220, 232, 0.42);
+  background: rgba(217, 222, 242, 0.72);
   color: var(--pepper-mediterranean);
 }
 
@@ -344,7 +348,7 @@
 .schoolTransportDetails {
   padding: 0 18px;
   border-top: 1px solid var(--line);
-  background: rgba(247, 250, 251, 0.62);
+  background: rgba(241, 244, 250, 0.72);
 }
 
 .eventRow {
@@ -450,13 +454,93 @@
   gap: 10px;
 }
 
+.scheduleRangeToolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: -12px 0 22px;
+}
+
+.scheduleRangeTabs {
+  display: grid;
+  width: min(320px, 100%);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(95, 111, 162, 0.13);
+  border-radius: 14px;
+  background: rgba(226, 231, 241, 0.82);
+}
+
+.scheduleRangeTab,
+.scheduleRangeActive {
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--pepper-midnight-sea);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.scheduleRangeActive {
+  background: rgba(250, 250, 255, 0.97);
+  box-shadow: 0 4px 14px rgba(51, 67, 107, 0.1);
+  font-weight: 750;
+}
+
+.monthRangeLabel {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.monthAgenda {
+  display: grid;
+  gap: 10px;
+}
+
+.monthDay {
+  overflow: hidden;
+  border: 1px solid rgba(95, 111, 162, 0.14);
+  border-radius: 16px;
+  background: var(--surface-raised);
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.065);
+}
+
+.monthDayHeader {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.monthDayHeader h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.monthDayHeader span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.monthDayEvents {
+  padding: 0 18px;
+}
+
 .notice,
 .prepareCard {
   padding: 16px 17px;
   border: 1px solid rgba(130, 79, 89, 0.14);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 7px 20px rgba(31, 59, 80, 0.035);
+  background: rgba(253, 253, 255, 0.94);
+  box-shadow: 0 9px 24px rgba(51, 67, 107, 0.055);
 }
 
 .notice p,
@@ -539,8 +623,8 @@
 }
 
 .prepareCard {
-  border-color: rgba(63, 113, 141, 0.11);
-  background: rgba(229, 240, 246, 0.66);
+  border-color: rgba(79, 114, 95, 0.14);
+  background: rgba(226, 238, 229, 0.7);
 }
 
 .preparationAction {
@@ -658,14 +742,14 @@
 
 .morningBriefOutcomes {
   overflow: hidden;
-  border: 1px solid rgba(63, 113, 141, 0.12);
+  border: 1px solid rgba(95, 111, 162, 0.16);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.84);
+  background: rgba(253, 253, 255, 0.9);
 }
 
 .morningBriefBandTitle {
   padding: 9px 14px;
-  background: rgba(200, 220, 232, 0.46);
+  background: rgba(217, 222, 242, 0.64);
   color: var(--pepper-midnight-sea);
   font-size: 10px;
   font-weight: 850;
@@ -753,14 +837,14 @@ button.morningBriefOutcome {
 
 .morningBriefSection {
   overflow: hidden;
-  border: 1px solid rgba(23, 59, 86, 0.1);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-top: 3px solid var(--pepper-mediterranean);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.84);
+  background: rgba(253, 253, 255, 0.9);
 }
 
 .morningBriefSection[data-tone="green"] {
-  border-top-color: #5d8877;
+  border-top-color: var(--pepper-sage-deep);
 }
 
 .morningBriefSection[data-tone="coral"] {
@@ -778,7 +862,7 @@ button.morningBriefOutcome {
 .morningBriefSection h3 {
   margin: 0;
   padding: 9px 13px;
-  background: rgba(241, 246, 248, 0.72);
+  background: rgba(236, 239, 248, 0.78);
   color: var(--pepper-midnight-sea);
   font-size: 10px;
   font-weight: 850;
@@ -879,7 +963,7 @@ button.morningBriefOutcome {
   align-items: center;
   justify-content: space-between;
   padding: 8px 13px;
-  background: rgba(247, 249, 250, 0.7);
+  background: rgba(241, 243, 249, 0.78);
   color: var(--pepper-soft-ink);
   font-size: 9px;
 }
@@ -1053,7 +1137,7 @@ button.morningBriefOutcome {
   margin: 0;
   padding: 14px 16px;
   border-left: 3px solid var(--pepper-ciel);
-  background: rgba(200, 220, 232, 0.17);
+  background: rgba(217, 222, 242, 0.3);
 }
 
 .eveningInputQuote strong {
@@ -1089,7 +1173,7 @@ button.morningBriefOutcome {
 .enoughnessGate {
   padding: 14px 16px;
   border-left: 3px solid var(--pepper-sea-glass);
-  background: rgba(185, 213, 209, 0.16);
+  background: rgba(191, 215, 199, 0.28);
 }
 
 .eveningFreshness {
@@ -1119,10 +1203,10 @@ button.morningBriefOutcome {
   justify-content: space-between;
   gap: 18px;
   padding: 20px;
-  border: 1px solid rgba(63, 113, 141, 0.11);
+  border: 1px solid rgba(95, 111, 162, 0.16);
   border-radius: 16px;
-  background: rgba(235, 244, 248, 0.84);
-  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.045);
+  background: linear-gradient(135deg, rgba(232, 235, 248, 0.9), rgba(229, 239, 231, 0.82));
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.065);
   color: inherit;
   text-align: left;
   cursor: pointer;
@@ -1151,9 +1235,9 @@ button.morningBriefOutcome {
 
 .stat {
   padding: 15px 13px;
-  border: 1px solid rgba(23, 59, 86, 0.08);
+  border: 1px solid rgba(95, 111, 162, 0.13);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.76);
+  background: rgba(250, 250, 255, 0.84);
 }
 
 .stat strong {
@@ -1172,7 +1256,7 @@ button.morningBriefOutcome {
 
 .insight {
   padding: 21px;
-  background: rgba(255, 255, 255, 0.88);
+  background: linear-gradient(150deg, rgba(253, 253, 255, 0.96), rgba(236, 243, 238, 0.9));
 }
 
 .insight h2 {
@@ -1424,6 +1508,34 @@ button.morningBriefOutcome {
   border-top: 1px solid var(--line);
 }
 
+.horizonRowAction {
+  width: 100%;
+  grid-template-columns: 68px minmax(0, 1fr) auto;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.horizonRowAction:hover,
+.horizonRowAction:focus-visible {
+  background: rgba(200, 220, 232, 0.14);
+}
+
+.horizonRowAction:focus-visible {
+  outline: 3px solid rgba(110, 157, 183, 0.24);
+  outline-offset: -3px;
+}
+
+.horizonRowAction .rowChevron {
+  align-self: center;
+  color: var(--pepper-bleu-gris);
+}
+
 .horizonRowAlert {
   margin: 0 -18px;
   padding-right: 18px;
@@ -1568,7 +1680,8 @@ button.morningBriefOutcome {
   bottom: 0;
   left: 0;
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
-  background: rgba(240, 245, 247, 0.8);
+  border-top: 1px solid rgba(95, 111, 162, 0.1);
+  background: rgba(232, 236, 246, 0.82);
   backdrop-filter: blur(18px);
 }
 
@@ -1583,10 +1696,10 @@ button.morningBriefOutcome {
   gap: 8px;
   align-items: center;
   padding: 8px;
-  border: 1px solid rgba(23, 51, 62, 0.08);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 13px 42px rgba(23, 51, 62, 0.14);
+  background: rgba(253, 253, 255, 0.97);
+  box-shadow: 0 14px 42px rgba(51, 67, 107, 0.16);
 }
 
 .composeInner input {
@@ -1684,12 +1797,33 @@ button.morningBriefOutcome {
 }
 
 .loginCard {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   width: min(470px, 100%);
-  padding: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.9);
+  padding: 34px 30px 30px;
+  border: 1px solid rgba(95, 111, 162, 0.22);
   border-radius: 18px;
-  background: rgba(252, 253, 253, 0.94);
-  box-shadow: var(--shadow);
+  background: linear-gradient(145deg, rgba(253, 253, 255, 0.97), rgba(239, 245, 240, 0.95));
+  box-shadow: 0 24px 64px rgba(51, 67, 107, 0.16);
+}
+
+.loginCard::after {
+  position: absolute;
+  z-index: -1;
+  top: 4px;
+  right: -34px;
+  width: 190px;
+  height: 96px;
+  background: url("/pepper-eucalyptus.png") center / contain no-repeat;
+  content: "";
+  filter: saturate(0.95) hue-rotate(-5deg);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.loginCard .eyebrow {
+  color: var(--pepper-mediterranean);
 }
 
 .loginCard .wordmark {
@@ -1712,7 +1846,7 @@ button.morningBriefOutcome {
   padding: 13px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.65);
+  background: rgba(250, 250, 255, 0.78);
   color: var(--ink);
   text-align: left;
   cursor: pointer;
@@ -1735,7 +1869,7 @@ button.morningBriefOutcome {
 }
 
 .memberChoiceActive {
-  border-color: rgba(36, 76, 92, 0.35);
+  border-color: rgba(95, 111, 162, 0.4);
   background: var(--blue-soft);
 }
 
@@ -1753,7 +1887,7 @@ button.morningBriefOutcome {
   padding: 13px 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.88);
   color: var(--ink);
   font: inherit;
   font-size: 18px;
@@ -2058,9 +2192,9 @@ button.morningBriefOutcome {
   justify-content: space-between;
   gap: 28px;
   padding: 17px 19px;
-  border: 1px solid rgba(63, 113, 141, 0.11);
+  border: 1px solid rgba(95, 111, 162, 0.15);
   border-radius: 16px;
-  background: rgba(232, 242, 247, 0.68);
+  background: linear-gradient(135deg, rgba(229, 233, 248, 0.82), rgba(226, 239, 229, 0.78));
 }
 
 .connectionsOverviewLead {
@@ -2176,10 +2310,10 @@ button.morningBriefOutcome {
   padding: 17px;
   display: grid;
   gap: 14px;
-  border: 1px solid rgba(23, 59, 86, 0.1);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 16px;
   background: var(--surface-raised);
-  box-shadow: 0 8px 22px rgba(31, 59, 80, 0.04);
+  box-shadow: 0 10px 26px rgba(51, 67, 107, 0.065);
 }
 
 .connectionProvider > header {
@@ -2196,7 +2330,7 @@ button.morningBriefOutcome {
   height: 42px;
   place-items: center;
   border-radius: 12px;
-  background: rgba(223, 237, 245, 0.75);
+  background: rgba(217, 222, 242, 0.74);
   color: var(--pepper-mediterranean);
 }
 
@@ -2251,12 +2385,12 @@ button.morningBriefOutcome {
 
 .connectionStateConnected,
 .connectionStateBuiltin {
-  background: rgba(185, 213, 209, 0.42);
-  color: #285f58;
+  background: rgba(191, 215, 199, 0.52);
+  color: var(--pepper-sage-deep);
 }
 
 .connectionStateAvailable {
-  background: rgba(200, 220, 232, 0.54);
+  background: rgba(217, 222, 242, 0.68);
   color: var(--pepper-mediterranean);
 }
 
@@ -2338,8 +2472,8 @@ button.morningBriefOutcome {
 }
 
 .connectionAction {
-  border: 1px solid rgba(63, 113, 141, 0.14);
-  background: rgba(226, 238, 245, 0.68);
+  border: 1px solid rgba(95, 111, 162, 0.18);
+  background: rgba(226, 230, 246, 0.72);
 }
 
 .connectionAction:disabled {
@@ -2540,8 +2674,8 @@ button.morningBriefOutcome {
   align-self: stretch;
   border: 1px solid rgba(255, 255, 255, 0.82);
   border-radius: 18px;
-  background: rgba(250, 252, 252, 0.98);
-  box-shadow: 0 24px 70px rgba(19, 35, 51, 0.2);
+  background: rgba(249, 250, 253, 0.98);
+  box-shadow: 0 24px 70px rgba(30, 42, 70, 0.22);
 }
 
 .connectionDrawerHeader {
@@ -2554,7 +2688,7 @@ button.morningBriefOutcome {
   gap: 18px;
   padding: 18px 20px;
   border-bottom: 1px solid var(--line);
-  background: rgba(250, 252, 252, 0.94);
+  background: rgba(246, 247, 252, 0.95);
   backdrop-filter: blur(18px);
 }
 
@@ -2675,7 +2809,7 @@ button.morningBriefOutcome {
   margin: 0;
   padding: 13px 14px;
   border-radius: 12px;
-  background: rgba(185, 213, 209, 0.24);
+  background: rgba(191, 215, 199, 0.34);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
@@ -2704,7 +2838,7 @@ button.morningBriefOutcome {
 .connectionFeeds em {
   padding: 5px 8px;
   border-radius: 8px;
-  background: rgba(226, 238, 245, 0.72);
+  background: rgba(226, 230, 246, 0.76);
   color: var(--pepper-midnight-sea);
   font-size: 10px;
   font-style: normal;
@@ -2797,10 +2931,10 @@ button.morningBriefOutcome {
 .workTaskList {
   overflow: hidden;
   padding: 0 18px;
-  border: 1px solid rgba(23, 59, 86, 0.09);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 16px;
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.04);
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.065);
 }
 
 .workTaskRow {
@@ -2825,7 +2959,7 @@ button.morningBriefOutcome {
 }
 
 .workTaskRow:hover {
-  background: rgba(200, 220, 232, 0.12);
+  background: rgba(217, 222, 242, 0.24);
 }
 
 .workPriorityMark {
@@ -2944,9 +3078,9 @@ button.morningBriefOutcome {
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   padding: 4px;
-  border: 1px solid rgba(23, 59, 86, 0.07);
+  border: 1px solid rgba(95, 111, 162, 0.13);
   border-radius: 14px;
-  background: rgba(233, 238, 240, 0.68);
+  background: rgba(226, 231, 241, 0.82);
 }
 
 .choreFilter,
@@ -2962,18 +3096,18 @@ button.morningBriefOutcome {
 }
 
 .choreFilterActive {
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 3px 12px rgba(23, 51, 62, 0.07);
+  background: rgba(250, 250, 255, 0.97);
+  box-shadow: 0 4px 14px rgba(51, 67, 107, 0.1);
   font-weight: 750;
 }
 
 .choreList {
   overflow: hidden;
   padding: 0 20px;
-  border: 1px solid rgba(23, 59, 86, 0.09);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 18px;
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.045);
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.065);
 }
 
 .choreRow {
@@ -3055,9 +3189,9 @@ button.morningBriefOutcome {
   align-items: center;
   justify-content: center;
   padding: 8px 13px;
-  border: 1px solid rgba(63, 113, 141, 0.14);
+  border: 1px solid rgba(95, 111, 162, 0.18);
   border-radius: 20px;
-  background: rgba(200, 220, 232, 0.45);
+  background: rgba(217, 222, 242, 0.56);
   color: var(--pepper-midnight-sea);
   font: inherit;
   font-size: 12px;
@@ -3067,7 +3201,7 @@ button.morningBriefOutcome {
 
 .choreOwner[data-member="chloe"] {
   border-color: rgba(53, 102, 93, 0.14);
-  background: rgba(185, 213, 209, 0.38);
+  background: rgba(191, 215, 199, 0.48);
   color: #2f6254;
 }
 
@@ -3079,14 +3213,14 @@ button.morningBriefOutcome {
 
 .choreOwner[data-member="matt"] {
   border-color: rgba(130, 79, 89, 0.15);
-  background: rgba(175, 169, 196, 0.2);
+  background: rgba(189, 183, 218, 0.32);
   color: var(--pepper-bordeaux);
 }
 
 .choreOwner[data-member="danielle"],
 .choreOwner[data-member="elle"] {
-  border-color: rgba(63, 113, 141, 0.18);
-  background: rgba(158, 183, 198, 0.28);
+  border-color: rgba(95, 111, 162, 0.2);
+  background: rgba(217, 222, 242, 0.48);
   color: var(--pepper-mediterranean);
 }
 
@@ -3550,7 +3684,7 @@ button.morningBriefOutcome {
   margin-top: 15px;
   padding: 11px 13px;
   border-left: 3px solid var(--pepper-sea-glass);
-  background: rgba(185, 213, 209, 0.16);
+  background: rgba(191, 215, 199, 0.28);
   font-size: 11px;
   line-height: 1.5;
 }
@@ -3571,9 +3705,9 @@ button.morningBriefOutcome {
   gap: 8px;
   justify-items: center;
   padding: 13px 6px;
-  border: 1px solid rgba(23, 59, 86, 0.07);
+  border: 1px solid rgba(95, 111, 162, 0.13);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.68);
+  background: linear-gradient(155deg, rgba(253, 253, 255, 0.9), rgba(235, 242, 237, 0.84));
   color: var(--ink);
   font: inherit;
   font-size: 12px;
@@ -3589,12 +3723,20 @@ button.morningBriefOutcome {
 .avatar,
 .memberHeroAvatar {
   display: grid;
+  overflow: hidden;
   place-items: center;
-  border: 1px solid rgba(63, 113, 141, 0.14);
+  border: 1px solid rgba(95, 111, 162, 0.18);
   border-radius: 50%;
-  background: rgba(200, 220, 232, 0.62);
+  background: linear-gradient(145deg, rgba(217, 222, 242, 0.88), rgba(191, 215, 199, 0.66));
   color: var(--pepper-midnight-sea);
   font-family: var(--font-display);
+}
+
+.avatar img,
+.memberHeroAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .avatar {
@@ -3605,10 +3747,10 @@ button.morningBriefOutcome {
 
 .memberDirectory {
   overflow: hidden;
-  border: 1px solid rgba(23, 59, 86, 0.09);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.045);
+  background: rgba(253, 253, 255, 0.9);
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.065);
 }
 
 .memberDirectoryRow {
@@ -3670,6 +3812,96 @@ button.morningBriefOutcome {
   font-size: 34px;
 }
 
+.profilePhotoControl {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 13px;
+}
+
+.profilePhotoPicker {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.profilePhotoPicker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.profilePhotoPicker:focus-within .memberHeroAvatar {
+  outline: 3px solid rgba(110, 157, 183, 0.24);
+  outline-offset: 3px;
+}
+
+.profilePhotoPicker:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.profilePhotoPickerCompact {
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.profilePhotoVisual {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+}
+
+.profilePhotoBadge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 3px solid rgba(253, 253, 255, 0.96);
+  border-radius: 50%;
+  background: var(--pepper-riviera);
+  color: #fff;
+  box-shadow: 0 5px 14px rgba(51, 67, 107, 0.18);
+}
+
+.profilePhotoCopy strong,
+.profilePhotoCopy small {
+  display: block;
+}
+
+.profilePhotoRemove {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.profilePhotoRemove:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.profilePhotoCopy small {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
 .memberHero h1 {
   margin: 3px 0 5px;
   font-family: var(--font-display);
@@ -3687,10 +3919,10 @@ button.morningBriefOutcome {
 .schoolProfile {
   margin: -8px 0 34px;
   padding: 18px;
-  border: 1px solid rgba(63, 113, 141, 0.1);
+  border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 16px;
-  background: rgba(247, 251, 252, 0.82);
-  box-shadow: 0 8px 24px rgba(31, 59, 80, 0.04);
+  background: linear-gradient(145deg, rgba(242, 243, 251, 0.9), rgba(232, 241, 234, 0.86));
+  box-shadow: 0 10px 28px rgba(51, 67, 107, 0.06);
 }
 
 .schoolProfileHeader {
@@ -3901,6 +4133,18 @@ button.morningBriefOutcome {
   padding: 11px 12px;
   border-left: 3px solid var(--pepper-ciel);
   background: rgba(200, 220, 232, 0.2);
+}
+
+.actionError {
+  margin: 14px 0 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(130, 79, 89, 0.22);
+  border-radius: 8px;
+  background: rgba(201, 137, 125, 0.12);
+  color: var(--pepper-bordeaux);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .ownerSelect {
@@ -4342,6 +4586,24 @@ button.morningBriefOutcome {
   padding: 8px 24px 24px;
 }
 
+.setupPhotoRow {
+  display: flex;
+  min-height: 96px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.setupPhotoRow p {
+  max-width: 310px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: right;
+}
+
 .setupIdentityGrid,
 .setupDetailsGrid {
   display: grid;
@@ -4549,6 +4811,22 @@ button.morningBriefOutcome {
     justify-self: start;
   }
 
+  .scheduleRangeToolbar {
+    margin-top: -16px;
+  }
+
+  .scheduleRangeTabs {
+    width: 100%;
+  }
+
+  .monthDayHeader {
+    padding: 0 15px;
+  }
+
+  .monthDayEvents {
+    padding: 0 15px;
+  }
+
   .sheetBackdrop {
     padding: 12px;
   }
@@ -4611,8 +4889,8 @@ button.morningBriefOutcome {
     margin: 0;
     border-width: 1px 0 0;
     border-radius: 0;
-    background: rgba(250, 252, 252, 0.94);
-    box-shadow: 0 -8px 28px rgba(19, 35, 51, 0.08);
+    background: rgba(241, 243, 250, 0.95);
+    box-shadow: 0 -8px 28px rgba(51, 67, 107, 0.11);
     backdrop-filter: blur(20px);
   }
 
@@ -4635,7 +4913,7 @@ button.morningBriefOutcome {
   .composer {
     bottom: calc(68px + env(safe-area-inset-bottom));
     padding: 9px 12px;
-    background: rgba(240, 245, 247, 0.7);
+    background: rgba(231, 235, 245, 0.78);
   }
 
   .composeInner {
@@ -4720,39 +4998,101 @@ button.morningBriefOutcome {
   }
 
   .connectionProvider > header {
-    grid-template-columns: 42px minmax(0, 1fr);
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    gap: 10px;
   }
 
   .connectionProvider > header .connectionState {
-    grid-column: 2;
-    justify-self: start;
+    grid-column: auto;
+    justify-self: end;
   }
 
-  .connectionMetadata {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .connectionHero {
+    min-height: 94px;
+    margin-bottom: 12px;
+    padding: 2px 74px 14px 2px;
   }
 
-  .connectionMetadata > div:last-child {
-    grid-column: 1 / -1;
+  .connectionHero::after {
+    bottom: 12px;
+    width: 68px;
+  }
+
+  .connectionHero h1 {
+    margin: 5px 0;
+    font-size: 31px;
+  }
+
+  .connectionHero p {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .connectionsOverview {
+    min-height: 58px;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .connectionsOverviewLead > span {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+    border-radius: 10px;
+  }
+
+  .connectionsOverviewLead small,
+  .connectionsOverviewLead em,
+  .connectionsOverview dl {
+    display: none;
+  }
+
+  .connectionsOverviewLead strong {
+    margin: 0;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 750;
+  }
+
+  .connectionGroup {
+    margin-top: 17px;
+  }
+
+  .connectionProvider {
+    gap: 9px;
+    padding: 11px 12px;
+    border-radius: 12px;
+  }
+
+  .providerMark {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+  }
+
+  .connectionProvider > header strong {
+    font-size: 13px;
+  }
+
+  .connectionSummary,
+  .connectionMetadata,
+  .connectionProvider > footer > span {
+    display: none;
   }
 
   .connectionProvider > footer {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .connectionProvider > footer > span {
-    max-width: 100%;
+    padding-top: 8px;
   }
 
   .connectionProvider > footer > div {
     width: 100%;
+    justify-content: flex-end;
   }
 
   .connectionManage,
   .connectionAction {
-    min-height: 42px;
-    flex: 1;
+    min-height: 36px;
+    flex: 0 1 auto;
   }
 
   .connectionDrawer {
@@ -4775,7 +5115,7 @@ button.morningBriefOutcome {
     position: sticky;
     bottom: 0;
     padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
-    background: rgba(250, 252, 252, 0.96);
+    background: rgba(246, 247, 252, 0.97);
     backdrop-filter: blur(18px);
   }
 
@@ -4856,6 +5196,17 @@ button.morningBriefOutcome {
 
   .setupForm {
     padding: 4px 16px 20px;
+  }
+
+  .setupPhotoRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .setupPhotoRow p {
+    max-width: none;
+    text-align: left;
   }
 
   .setupIdentityGrid,

@@ -24,6 +24,7 @@
 		A20000000000000000000006 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A20000000000000000000007 /* Pepper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pepper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000009 /* Pepper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Pepper.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +56,7 @@
 				A20000000000000000000005 /* Assets.xcassets */,
 				A20000000000000000000006 /* PrivacyInfo.xcprivacy */,
 				A20000000000000000000008 /* Info.plist */,
+				A20000000000000000000009 /* Pepper.entitlements */,
 			);
 			path = Pepper;
 			sourceTree = "<group>";
@@ -193,7 +195,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CODE_SIGN_ENTITLEMENTS = Pepper/Pepper.entitlements;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 6H88BCZW6P;
 				ENABLE_PREVIEWS = YES;
@@ -201,6 +204,7 @@
 				INFOPLIST_FILE = Pepper/Info.plist;
 				MARKETING_VERSION = 0.1.0;
 				PEPPER_BASE_HOST = "pepper-family-beta.vercel.app";
+				PEPPER_HEALTH_HOST = "mfgyeolvfthxacrqwwtc.supabase.co";
 				PRODUCT_BUNDLE_IDENTIFIER = com.dkanneman.pepper;
 				PRODUCT_NAME = Pepper;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -215,7 +219,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CODE_SIGN_ENTITLEMENTS = Pepper/Pepper.entitlements;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 6H88BCZW6P;
 				ENABLE_PREVIEWS = NO;
@@ -223,6 +228,7 @@
 				INFOPLIST_FILE = Pepper/Info.plist;
 				MARKETING_VERSION = 0.1.0;
 				PEPPER_BASE_HOST = "pepper-family-beta.vercel.app";
+				PEPPER_HEALTH_HOST = "mfgyeolvfthxacrqwwtc.supabase.co";
 				PRODUCT_BUNDLE_IDENTIFIER = com.dkanneman.pepper;
 				PRODUCT_NAME = Pepper;
 				SWIFT_EMIT_LOC_STRINGS = YES;

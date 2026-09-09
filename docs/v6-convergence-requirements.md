@@ -2,6 +2,8 @@
 
 Audit date: 2026-09-01
 
+Canonical next-build sequence: [Pepper product roadmap](./pepper-product-roadmap.md).
+
 Implementation branch: `codex/v6-pepper-family-slice`, based on the canonical V6 commit `19c3393` (`v6-logistics-foundation`).
 
 ## System boundary
@@ -41,7 +43,7 @@ Implementation branch: `codex/v6-pepper-family-slice`, based on the canonical V6
 | Responsive family use | Existing V6 is responsive but single-column | Alpha includes phone-oriented controls and member pages | Deep actions need mobile ergonomics | Use full-width rows on phone and split member layout on desktop |
 | Accessibility | Existing native controls and labels; no complete audit | Alpha specifies contrast/reduced motion | Visual acceptance is incomplete | Preserve labels/focus, add non-color status text, verify contrast and mobile layout |
 | School logistics | V6 supports routines/events/transport but lacks full 2026-27 source normalization | Alpha contains seeded school schedules and exception concepts | Alpha data must not become a second calendar | Retain as reference until imported into canonical events/routines |
-| Health and intake | Preview adds member-scoped connection state and normalized daily step/goal/activity metrics | Alpha contains Apple Health/intake prototypes | A browser cannot read HealthKit directly and Alpha state is not canonical | Rebuild as explicit iPhone HealthKit export into Supabase; show health only where it changes the member's day |
+| Health and intake | Preview adds member-scoped connection state and normalized daily step/goal/activity metrics | Alpha contains Apple Health/intake prototypes | A browser cannot read HealthKit directly and Alpha state is not canonical | Use the TestFlight shell's read-only HealthKit bridge into Supabase, retain Shortcut fallback for browser-only use, and show health only where it changes the member's day |
 | Projects continuity | Universal task fields include `project`, area, next action, dependencies, tags, and recurrence | Alpha and earlier product notes treat individual/shared Projects as core | Current member pages expose task titles but not Project context or a Project destination | Preserve the fields in this slice; build canonical private/shared Project continuity next rather than flattening Projects into tasks |
 
 ## V6 product-law coverage
@@ -126,7 +128,7 @@ The earlier Projects/Connections product review remains useful when treated as a
 | --- | --- | --- |
 | Connections are directly reachable and easy to understand | Calendar, Gmail, and Apple Health have one Connections surface with honest configured/connected states | **Keep now.** Do not imply that Google is configured until preview credentials exist |
 | Connection detail explains owner, privacy, coverage, authority, and last sync | Current rows disclose owner, privacy, coverage, readable data, automatic behavior, and approval boundaries | **Keep now.** Disconnect and editable authority presets remain next, after OAuth is configured |
-| Family Week is an operational plan, not a prose summary or duplicate calendar block | Next 7 renders canonical horizon days, preparation, and coordination issues | **Keep now.** Add member filters and recommended conflict resolutions next; Day/Month are calendar depth, not required for this slice |
+| Family Week is an operational plan, not a prose summary or duplicate calendar block | Next 7 renders canonical horizon days, preparation, and coordination issues; Month renders the next 30 days from privacy-filtered canonical events | **Keep now.** Add member filters and recommended conflict resolutions next; do not duplicate Calendar as a separate source of truth |
 | Projects and chores connect to schedules and ownership | Member pages combine events, tasks, chores, and transportation; task rows retain their Project label | **Partial.** Build Project destinations and shared/private Project continuity in the next slice |
 | Routine work can proceed under standing Trust Rules | One Brain enforces permissions per mutation, but no household-configurable authority model exists | **Missing, high priority.** Build Trust Rules with the first protected-outcome workflow |
 | “Handled” requires completion evidence and a safe Undo path | This slice records audit/state changes and supports restore; UI currently shows status, not a receipt | **Missing, high priority.** Build evidence-backed handled receipts before claiming autonomous completion |

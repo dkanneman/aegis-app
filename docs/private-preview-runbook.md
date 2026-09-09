@@ -15,8 +15,8 @@
 | --- | --- | --- |
 | `pepper-family-beta-01` | Pepper member session | Canonical family state foundation |
 | `pepper-family-api` | Supabase platform JWT plus Pepper member session | Web application gateway and authorized mutations |
-| `pepper-integrations` | Supabase platform JWT plus Pepper member session | Honest connection status, Gmail start, Health pairing |
-| `pepper-health-ingest` | Supabase platform JWT plus one-time member pairing token | Member-scoped daily HealthKit metrics |
+| `pepper-integrations` | Supabase platform JWT plus Pepper member session | Honest connection status, Gmail start, native HealthKit pairing |
+| `pepper-health-ingest` | One-time member pairing token | Member-scoped daily HealthKit metrics |
 | `pepper-consequences` | Supabase platform JWT plus Pepper member session | Canonical missing-owner and conflict projection |
 | `pepper-horizon` | Supabase platform JWT plus Pepper member session | Seven-day operational horizon and readiness |
 | `pepper-preparation` | Supabase platform JWT plus Pepper member session | Preparation actions derived from canonical state |
@@ -33,7 +33,11 @@ Google Calendar and Gmail use preview-only callbacks and remain disconnected unt
 
 ## Apple Health pathway
 
-A web application cannot read Apple Health directly. Pepper creates a one-time pairing token for an iPhone Shortcut or future native companion. The Shortcut sends only approved daily metrics to the generated upload URL.
+A web application cannot read Apple Health directly. In the TestFlight app, the
+native shell requests read-only access to today's steps and exercise minutes,
+then sends those approved totals to the member-scoped upload URL with a one-time
+pairing token. Pepper never requests HealthKit write access. Browser-only use
+retains the explicit Shortcut pairing fallback.
 
 Required headers:
 

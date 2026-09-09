@@ -62,14 +62,16 @@ async function beginGmail(member:any,returnTarget:unknown){
   return url.toString()
 }
 
-async function pairHealth(member:any){
+async function pairHealth(member:any,client:unknown){
+  const nativeIOS=client==='native_ios'
+  const label=nativeIOS?'Pepper iPhone':'Apple Health Shortcut'
   const token=randomToken(40),tokenHash=await digest(token)
   await sql.begin(async(tx:any)=>{
     await tx`update private.health_ingest_tokens set revoked_at=now() where member_id=${member.id}::uuid and revoked_at is null`
-    await tx`insert into private.health_ingest_tokens(household_id,member_id,token_hash,label) values(${member.household_id}::uuid,${member.id}::uuid,${tokenHash},'Apple Health Shortcut')`
-    await tx`insert into public.integration_connections(household_id,member_id,provider,status,access_scope,last_attempt_at,metadata) values(${member.household_id}::uuid,${member.id}::uuid,'apple_health','pending','steps active_minutes',now(),'{}'::jsonb) on conflict(household_id,member_id,provider) do update set status='pending',last_attempt_at=now(),last_error=null,updated_at=now()`
+    await tx`insert into private.health_ingest_tokens(household_id,member_id,token_hash,label) values(${member.household_id}::uuid,${member.id}::uuid,${tokenHash},${label})`
+    await tx`insert into public.integration_connections(household_id,member_id,provider,status,access_scope,last_attempt_at,metadata) values(${member.household_id}::uuid,${member.id}::uuid,'apple_health','pending','steps active_minutes',now(),jsonb_build_object('client',${nativeIOS?'native_ios':'shortcut'}::text)) on conflict(household_id,member_id,provider) do update set status='pending',last_attempt_at=now(),last_error=null,metadata=excluded.metadata,updated_at=now()`
   })
-  return {pairing_token:token,publishable_key:SUPABASE_ANON_KEY,ingest_url:`${SUPABASE_URL}/functions/v1/pepper-health-ingest`,status:'pending',requires:'Apple Health Shortcut or Pepper iPhone companion'}
+  return {pairing_token:token,publishable_key:SUPABASE_ANON_KEY,ingest_url:`${SUPABASE_URL}/functions/v1/pepper-health-ingest`,status:'pending',requires:nativeIOS?'Pepper iPhone HealthKit permission':'Apple Health Shortcut'}
 }
 
 Deno.serve(async(req:Request)=>{
@@ -81,7 +83,7 @@ Deno.serve(async(req:Request)=>{
   try{
     if(body.action==='status')return json(req,{ok:true,...await status(member)})
     if(body.action==='gmail_start')return json(req,{ok:true,authorization_url:await beginGmail(member,body.return_target)})
-    if(body.action==='health_pair')return json(req,{ok:true,...await pairHealth(member)})
+    if(body.action==='health_pair')return json(req,{ok:true,...await pairHealth(member,body.client)})
     return json(req,{error:'Unknown integration action.'},400)
   }catch(error){return json(req,{error:error instanceof Error?error.message:'Connection failed.'},Number((error as any)?.status||500))}
 })

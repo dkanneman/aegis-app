@@ -8,16 +8,16 @@ export type PepperAtmosphere = {
 type AtmosphereStop = PepperAtmosphere & { minute: number };
 
 const atmosphereStops: AtmosphereStop[] = [
-  { minute: 0, top: "#132333", middle: "#1F3B50", bottom: "#172432", glow: "#3F718D" },
-  { minute: 300, top: "#1F3B50", middle: "#3F718D", bottom: "#9EB7C6", glow: "#D8C7A6" },
-  { minute: 420, top: "#F7F4EE", middle: "#C8DCE8", bottom: "#EEEDE9", glow: "#D8C7A6" },
-  { minute: 630, top: "#F7F4EE", middle: "#C8DCE8", bottom: "#9EB7C6", glow: "#F7F4EE" },
-  { minute: 780, top: "#C8DCE8", middle: "#9EB7C6", bottom: "#6E9DB7", glow: "#F7F4EE" },
-  { minute: 960, top: "#C8DCE8", middle: "#9EB7C6", bottom: "#B9D5D1", glow: "#F7F4EE" },
-  { minute: 1110, top: "#9EB7C6", middle: "#AFA9C4", bottom: "#D8C7A6", glow: "#C9897D" },
-  { minute: 1230, top: "#6E9DB7", middle: "#3F718D", bottom: "#1F3B50", glow: "#AFA9C4" },
-  { minute: 1350, top: "#1F3B50", middle: "#132333", bottom: "#132333", glow: "#3F718D" },
-  { minute: 1440, top: "#132333", middle: "#1F3B50", bottom: "#172432", glow: "#3F718D" },
+  { minute: 0, top: "#1E2A46", middle: "#33436B", bottom: "#294239", glow: "#6F79A7" },
+  { minute: 300, top: "#33436B", middle: "#6473A4", bottom: "#8FA993", glow: "#BDB7DA" },
+  { minute: 420, top: "#F3F1F8", middle: "#D9DEF2", bottom: "#E3EEE6", glow: "#F8F5ED" },
+  { minute: 630, top: "#EEF0F8", middle: "#D4DAEE", bottom: "#C6DCCB", glow: "#F8F7FB" },
+  { minute: 780, top: "#E0E5F4", middle: "#BEC7E4", bottom: "#AFC8B5", glow: "#F7F5EE" },
+  { minute: 960, top: "#D6DDEF", middle: "#B6C0DE", bottom: "#A9C5B1", glow: "#F3F1F8" },
+  { minute: 1110, top: "#B4BDD9", middle: "#A69FC8", bottom: "#92AE99", glow: "#D8B9C8" },
+  { minute: 1230, top: "#707AA3", middle: "#55628A", bottom: "#415E53", glow: "#BDB7DA" },
+  { minute: 1350, top: "#33436B", middle: "#1E2A46", bottom: "#223A34", glow: "#6473A4" },
+  { minute: 1440, top: "#1E2A46", middle: "#33436B", bottom: "#294239", glow: "#6F79A7" },
 ];
 
 function channel(value: string, offset: number) {

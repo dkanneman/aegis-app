@@ -186,10 +186,13 @@ test('tasks and appointments support audited edits, holds, and soft deletion', a
   assert.match(api, /deleted_at=now\(\)/)
   assert.match(api, /event_edit/)
   assert.match(api, /task_edit/)
+  assert.match(api, /item:updatedRows\[0\]/)
   assert.match(client, /Edit task/)
   assert.match(client, /Edit appointment/)
   assert.match(client, /On hold/)
   assert.match(client, /Delete from Pepper/)
+  assert.match(client, /Pepper could not verify that this change was saved/)
+  assert.match(client, /role="alert"/)
   assert.match(calendar, /canonical_content_override/)
 })
 
@@ -358,6 +361,8 @@ test('connections remain evidence inputs with explicit security boundaries', asy
   assert.match(api, /action:'sync',session_token:token,force:true/)
   assert.doesNotMatch(api, /Calendar reconnect is waiting/)
   assert.match(api, /action==='health_pair'/)
+  assert.match(api, /client:b\.client/)
+  assert.doesNotMatch(api, /client:body\.client/)
   assert.match(client, /Google Calendar/)
   assert.match(client, /Google email/)
   assert.match(client, /Gmail or Google Workspace/)
@@ -370,6 +375,7 @@ test('connections remain evidence inputs with explicit security boundaries', asy
   assert.match(integrations, /for their own account/)
   assert.doesNotMatch(integrations, /Only an adult can connect family email/)
   assert.match(integrations, /token_hash/)
+  assert.match(integrations, /client==='native_ios'/)
   assert.match(health, /x-pepper-health-token/)
   assert.doesNotMatch(health, /authorization\.startsWith\('Bearer '/)
   assert.match(calendar, /Deno\.env\.get\('PEPPER_APP_URL'\)/)
@@ -389,9 +395,42 @@ test('the approved Pepper visual language wraps the real connection pathways', a
   assert.match(client, /Built into One Brain/)
   assert.match(client, /ConnectionDetailDrawer/)
   assert.match(styles, /var\(--atmosphere-top\).*var\(--atmosphere-middle\).*var\(--atmosphere-bottom\)/s)
+  assert.match(styles, /--pepper-ciel: #d9def2/)
+  assert.match(styles, /--pepper-sage: #8fa993/)
   assert.match(styles, /background: url\("\/pepper-eucalyptus\.png"\)/)
+  assert.match(styles, /\.loginCard::after/)
   assert.match(styles, /@media \(max-width: 560px\)[\s\S]*\.tabs \{[\s\S]*position: fixed/)
   assert.ok(botanical.byteLength > 10_000)
+})
+
+test('TestFlight schedule and compact connection feedback stays covered', async () => {
+  const [api, client, styles] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(clientPath, 'utf8'),
+    readFile(pepperStylesPath, 'utf8'),
+  ])
+
+  assert.match(client, /onOpenEvent=\{\(item\) =>/)
+  assert.match(client, /candidate\.id === item\.id/)
+  assert.match(client, /styles\.horizonRowAction/)
+  assert.match(styles, /\.horizonRowAction/)
+  assert.match(
+    styles,
+    /@media \(max-width: 560px\)[\s\S]*\.connectionSummary,[\s\S]*\.connectionMetadata,[\s\S]*display: none/,
+  )
+  assert.match(styles, /\.connectionHero \{[\s\S]*min-height: 94px/)
+  assert.match(api, /async function monthState/)
+  assert.match(api, /e\.starts_at<\(\$\{end\}::date at time zone 'America\/Los_Angeles'\)/)
+  assert.match(api, /e\.visibility='household'[\s\S]*e\.owner_member_id=\$\{member\.id\}::uuid[\s\S]*e\.person_slug=\$\{member\.slug\}/)
+  assert.match(api, /state\.monthEvents=monthEvents/)
+  assert.match(client, /\["month", "Month"\]/)
+  assert.match(client, /Month view/)
+  assert.match(client, /state\?\.monthEvents/)
+  assert.match(client, /feeds: \["Today", "Next 7", "Month", "Family schedules"\]/)
+  assert.match(styles, /\.scheduleRangeTabs/)
+  assert.match(styles, /\.monthAgenda/)
+  assert.match(api, /client:b\.client/)
+  assert.doesNotMatch(api, /client:body\.client/)
 })
 
 test('the isolated API accepts the production beta and scoped preview host family', async () => {

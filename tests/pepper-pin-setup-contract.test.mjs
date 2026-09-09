@@ -89,7 +89,7 @@ test("the real family starts with PIN setup while App Review remains uninterrupt
 test("the API completes PIN setup before requiring a member session", async () => {
   const api = await readFile(apiPath, "utf8");
 
-  assert.match(api, /version:'1\.9'/);
+  assert.match(api, /version:'2\.1'/);
   assert.match(api, /capabilities:\[[^\]]*'pin_setup'/);
   assert.match(api, /if\(action==='pin_setup'\)/);
   assert.match(api, /private\.pepper_complete_pin_setup/);

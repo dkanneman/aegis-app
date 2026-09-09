@@ -43,7 +43,7 @@ The non-production dataset must include:
 - Renaming the canonical `elle` identity to Danielle.
 - Writing status changes back to Google Calendar.
 - Full school calendar ingestion, onboarding, meals, or messaging redesign.
-- Direct browser access to HealthKit. The preview uses an explicit iPhone Shortcut/companion export into member-scoped daily metrics.
+- Direct browser access to HealthKit. The TestFlight shell provides the read-only native bridge; browser-only use retains an explicit Shortcut export into member-scoped daily metrics.
 - Gmail message ingestion and reasoning. This slice exposes a read-only connection pathway only; future email evidence must reconcile into One Brain rather than become a second inbox.
 - Protected Outcomes, household-configurable Trust Rules, completion-evidence receipts, and automated recovery.
 - Full Project navigation and automation. Project metadata is preserved for the next continuity slice.

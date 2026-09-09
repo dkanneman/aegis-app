@@ -58,6 +58,17 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: cors })
 }
 
+function publicFailureMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : ''
+  if (
+    /aegis_sync_status|sharing_scope|capture_plan|apply_capture_plan|record_capture_apply_failure/i.test(message)
+    || /column .* does not exist|relation .* does not exist|function .* does not exist/i.test(message)
+  ) {
+    return 'Pepper could not save that update because the beta service needs maintenance. No changes were made.'
+  }
+  return message || 'Pepper could not interpret that update.'
+}
+
 async function member(req: Request): Promise<Member | null> {
   const token = req.headers.get('x-pepper-session') || ''
   if (!UUID.test(token)) return null
@@ -128,7 +139,7 @@ async function applyPlan(captureId: string, m: Member, idempotencyKey: string, p
     try {
       const rows = await sql<{ result: Record<string, unknown> }[]>`
         select private.apply_capture_plan(
-          ${captureId}::uuid,${m.id}::uuid,${idempotencyKey},${JSON.stringify(plan)}::jsonb
+          ${captureId}::uuid,${m.id}::uuid,${idempotencyKey},${sql.json(plan)}::jsonb
         ) as result
       `
       return rows[0]?.result
@@ -375,7 +386,7 @@ Deno.serve(async (req: Request) => {
       const rows = await sql<{ result: unknown }[]>`
         select private.resolve_capture_review(
           ${captureId}::uuid,${currentMember.id}::uuid,${idempotencyKey},
-          ${JSON.stringify(reviewPlan)}::jsonb
+          ${sql.json(reviewPlan)}::jsonb
         ) as result
       `
       return json(rows[0]?.result || { ok: false })
@@ -421,6 +432,6 @@ Deno.serve(async (req: Request) => {
     })
   } catch (error) {
     console.error(error)
-    return json({ error: error instanceof Error ? error.message : 'Pepper could not interpret that update.' }, 500)
+    return json({ error: publicFailureMessage(error) }, 500)
   }
 })
