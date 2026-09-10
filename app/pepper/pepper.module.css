@@ -48,7 +48,6 @@
   background-attachment: fixed;
   font-family:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  transition: background 90s linear;
 }
 
 .page * ,
@@ -70,7 +69,6 @@
     color-mix(in srgb, var(--atmosphere-bottom) 12%, rgba(246, 249, 248, 0.94))
   );
   backdrop-filter: blur(28px) saturate(118%);
-  transition: background 90s linear;
 }
 
 .topbar {
@@ -165,6 +163,10 @@
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 241, 250, 0.96));
   color: var(--ink);
   box-shadow: 0 4px 14px rgba(51, 67, 107, 0.11);
+}
+
+.mobileMoreTab {
+  display: none;
 }
 
 .calendarConfirmation {
@@ -1317,6 +1319,49 @@ button.morningBriefOutcome {
   cursor: pointer;
 }
 
+.inboxExplanation,
+.inboxEmpty {
+  margin: 0 0 14px;
+  color: var(--pepper-soft-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.inboxCaptureHeading {
+  display: flex;
+  min-height: 22px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+
+.inboxCaptureHeading time {
+  margin: 0;
+}
+
+.inboxCaptureHeading span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(130, 101, 154, 0.12);
+  color: #655075;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.inboxRetry {
+  display: block;
+  margin-top: 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--navy);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .details textarea,
 .ritualPanel textarea {
   width: 100%;
@@ -1673,6 +1718,28 @@ button.morningBriefOutcome {
   margin-bottom: 5px;
 }
 
+.sectionLoading {
+  display: flex;
+  min-height: 132px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.sectionLoading > span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--pepper-sage);
+  box-shadow: 0 0 0 6px rgba(143, 169, 147, 0.15);
+}
+
+.sectionLoading strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .composer {
   position: fixed;
   z-index: 50;
@@ -1754,20 +1821,45 @@ button.morningBriefOutcome {
   box-shadow: var(--shadow);
 }
 
-.toast button {
+.toastActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.toastLink,
+.toastDismiss {
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.toastLink {
+  min-height: 28px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.14);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.toastDismiss {
   display: grid;
   width: 28px;
   height: 28px;
   flex: 0 0 auto;
   place-items: center;
-  border: 0;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.12);
   color: inherit;
   cursor: pointer;
 }
 
-.toast button:focus-visible {
+.toastLink:focus-visible,
+.toastDismiss:focus-visible {
   outline: 2px solid rgba(255, 255, 255, 0.72);
   outline-offset: 2px;
 }
@@ -4115,6 +4207,51 @@ button.morningBriefOutcome {
   cursor: pointer;
 }
 
+.mobileMoreBackdrop {
+  z-index: 95;
+}
+
+.mobileMoreSheet {
+  width: min(520px, 100%);
+}
+
+.mobileMoreList {
+  display: grid;
+  margin-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.mobileMoreList button {
+  width: 100%;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 5px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mobileMoreList button > span {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mobileMoreList button strong {
+  font-size: 14px;
+}
+
+.mobileMoreList button[aria-current="page"] {
+  color: var(--pepper-mediterranean);
+}
+
 .sheetMeta,
 .sourceNote,
 .permissionNote {
@@ -4772,6 +4909,30 @@ button.morningBriefOutcome {
 }
 
 @media (max-width: 560px) {
+  .page,
+  .loginPage {
+    background-attachment: scroll;
+  }
+
+  .shell,
+  .tabs,
+  .composer,
+  .sheetBackdrop,
+  .connectionBackdrop,
+  .connectionDrawerHeader,
+  .connectionDrawerFooter {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .section,
+  .handledDetails,
+  .connectionGroup,
+  .workPrioritySection {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 420px;
+  }
+
   .morningBriefMasthead {
     align-items: flex-start;
     flex-direction: column;
@@ -4883,7 +5044,7 @@ button.morningBriefOutcome {
     left: 0;
     display: grid;
     width: 100%;
-    grid-template-columns: repeat(var(--pepper-tab-count, 6), 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 0;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
     margin: 0;
@@ -4902,7 +5063,15 @@ button.morningBriefOutcome {
     flex-direction: column;
     padding: 6px 3px;
     border-radius: 10px;
-    font-size: 8px;
+    font-size: 10px;
+  }
+
+  .tabs button[data-mobile-secondary="true"] {
+    display: none;
+  }
+
+  .tabs .mobileMoreTab {
+    display: inline-flex;
   }
 
   .tabActive {
@@ -4913,7 +5082,7 @@ button.morningBriefOutcome {
   .composer {
     bottom: calc(68px + env(safe-area-inset-bottom));
     padding: 9px 12px;
-    background: rgba(231, 235, 245, 0.78);
+    background: rgba(238, 241, 248, 0.97);
   }
 
   .composeInner {

@@ -132,6 +132,8 @@ async function monthState(member:any){
       and e.status<>'canceled'
       and e.starts_at>=(${start}::date at time zone 'America/Los_Angeles')
       and e.starts_at<(${end}::date at time zone 'America/Los_Angeles')
+      and lower(coalesce(e.kind,'')) not in ('work','task','chore','meal')
+      and lower(coalesce(e.title,'')) not like 'house reset%'
       and (
         e.visibility='household'
         or e.owner_member_id=${member.id}::uuid
@@ -385,7 +387,8 @@ async function updateGrocery(member:any,body:any){
       }
     }
     await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${`grocery_${operation}`},'grocery',${resultId}::uuid,${resultId===id?`${grocery.item} grocery ${operation} saved.`:`${grocery.item} was already open, so the existing grocery was kept.`})`
-    return {ok:true,id:resultId,operation,merged:resultId!==id}
+    const updatedRows=await tx<any[]>`select id,item,status,added_by_member_id,completed_by_member_id,owner_member_id,meal_plan_id,origin,updated_at,created_at from public.groceries where id=${resultId}::uuid and household_id=${member.household_id}::uuid`
+    return {ok:true,id:resultId,operation,merged:resultId!==id,grocery:updatedRows[0]}
   })
 }
 async function saveMemberSetup(member:any,body:any){
@@ -687,7 +690,31 @@ async function updateFamilyItem(member:any,body:any){
     return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0]}
   })
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.1',backend:'supabase',frontend:'vercel',capabilities:['chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+async function sectionState(member:any,section:string,headers:any,token:string){
+  if(section==='chores')return {chores:await choreState(member)}
+  if(section==='meals'){
+    const mealPlan=await mealState(member)
+    return {meals:mealPlan.meals,groceries:mealPlan.groceries,mealNeeds:mealPlan.mealNeeds}
+  }
+  if(section==='family')return {memberProfiles:await setupProfiles(member)}
+  if(section==='connections'){
+    const [calendarResult,integrations]=await Promise.all([
+      proxy(CALENDAR,headers,{action:'status',session_token:token}),
+      proxy(INTEGRATIONS,headers,{action:'status'}),
+    ])
+    const calendarStatus=calendarResult.ok
+      ?calendarResult.data
+      :{...await calendarState(member),configured:false,last_error:calendarResult.data?.error||'Calendar service is unavailable.'}
+    return {
+      calendarStatus,
+      integrations:integrations.ok
+        ?integrations.data
+        :{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}},
+    }
+  }
+  throw Object.assign(new Error('Unknown Pepper section.'),{status:400})
+}
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.2',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 if(action==='pin_setup'){
   const setupToken=String(b.setup_token||'').trim()
@@ -703,9 +730,22 @@ if(action==='logout'){await sql`update public.member_sessions set revoked_at=now
 if(action==='account_delete'){return json(req,await deleteAccount(member,b))}
 const headers:any={'content-type':'application/json','x-pepper-session':token,apikey:SUPABASE_ANON_KEY,authorization:`Bearer ${SUPABASE_ANON_KEY}`}
 if(action==='state'){
-  const core=await proxy(TARGET,headers,{action:'state'});if(!core.ok)return json(req,core.data,core.status)
-  const prep=await proxy(PREPARATION,headers,{action:'list'})
-  const [cr,ir,hr,calendarResult,rr,xr,chores,mealPlan,memberProfiles,frontSeat,monthEvents]=await Promise.all([proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'}),choreState(member),mealState(member),setupProfiles(member),frontSeatState(member),monthState(member)])
+  const progressive=b.progressive===true
+  const [core,prep,cr,ir,rr,xr,frontSeat]=await Promise.all([proxy(TARGET,headers,{action:'state'}),proxy(PREPARATION,headers,{action:'list'}),proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'}),frontSeatState(member)])
+  if(!core.ok)return json(req,core.data,core.status)
+  if(progressive){
+    const state=core.data?.state||{}
+    state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[]
+    state.weeklyInsight=ir.ok?ir.data?.insight||null:null
+    state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}}
+    state.preparation=prep.ok?prep.data:{now:[],watching:[]}
+    state.rituals=rr.ok?rr.data:null
+    state.frontSeat=frontSeat
+    state.apiVersion='2.2'
+    state.progressive=true
+    return json(req,{state})
+  }
+  const [hr,calendarResult,chores,mealPlan,memberProfiles,monthEvents]=await Promise.all([proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),choreState(member),mealState(member),setupProfiles(member),monthState(member)])
   const csr=calendarResult.ok?calendarResult.data:{...await calendarState(member),configured:false,last_error:calendarResult.data?.error||'Calendar service is unavailable.'}
   const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;state.meals=mealPlan.meals;state.groceries=mealPlan.groceries;state.mealNeeds=mealPlan.mealNeeds;state.memberProfiles=memberProfiles;state.frontSeat=frontSeat;state.monthEvents=monthEvents;
   if(state.horizon&&prep.ok&&Array.isArray(prep.data?.now)){
@@ -715,7 +755,11 @@ if(action==='state'){
     state.horizon.readiness=[...additions,...existing]
     if(state.horizon.coverage)state.horizon.coverage.preparation_now=additions.length
   }
-  state.apiVersion='2.1';return json(req,{state})
+  state.apiVersion='2.2';return json(req,{state})
+}
+if(action==='section_state'){
+  const section=String(b.section||'')
+  return json(req,{section,state:await sectionState(member,section,headers,token)})
 }
 if(action==='member_state'){return json(req,{state:await memberState(member,String(b.member_slug||''))})}
 if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}

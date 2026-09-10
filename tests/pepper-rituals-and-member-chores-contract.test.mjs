@@ -15,8 +15,8 @@ test('Morning Brief follows the approved one-page scan hierarchy', async () => {
   assert.match(client, /Places to be \+ transportation/)
   assert.match(client, /Tonight(?:'s|&apos;s) dinner \+ groceries/)
   assert.match(client, /Your task plan/)
-  assert.match(client, /No-surprises horizon/)
-  assert.match(client, /Confirm \+ think ahead/)
+  assert.match(client, /Decide \+ prepare/)
+  assert.doesNotMatch(client, /No-surprises horizon/)
   assert.match(client, /Heart \+ compass/)
   assert.match(client, /Trust \+ freshness/)
 })
@@ -43,14 +43,14 @@ test('Morning Brief foregrounds each member own prioritized task plan', async ()
   assert.match(css, /\.morningBriefTaskGroup/)
 })
 
-test('ritual panels remain responsive and the Tomorrow Check is a link', async () => {
+test('ritual panels remain responsive without a duplicate Tomorrow Check', async () => {
   const [client, css] = await Promise.all([
     readFile(clientPath, 'utf8'),
     readFile(cssPath, 'utf8'),
   ])
 
-  assert.match(client, /aria-label="Open tomorrow's plan"/)
-  assert.match(client, /onClick=\{\(\) => setView\("week"\)\}/)
+  assert.doesNotMatch(client, /Open tomorrow's plan|Tomorrow check/)
+  assert.doesNotMatch(client, /setView\("week"\)/)
   assert.match(css, /\.morningBriefColumns/)
   assert.match(css, /grid-template-columns:\s*1fr 1fr/)
   assert.match(css, /\.morningBriefColumns[\s\S]*grid-template-columns:\s*1fr/)
@@ -78,13 +78,11 @@ test('only adults can open member-page chore assignment and the API prevents cro
   assert.match(api, /dishwasher/)
 })
 
-test('Next 7 does not duplicate chores or work tasks in a Prepare Decide board', async () => {
+test('Today owns decisions without a duplicate Next 7 board', async () => {
   const client = await readFile(clientPath, 'utf8')
 
   assert.doesNotMatch(client, /Prepare \/ decide/)
-  assert.match(client, /const weekIssueCount = coordination\.length/)
-  assert.match(client, /openAttention\(nextDecision\)/)
-  assert.match(client, /function isFamilyWeekItem/)
-  assert.match(client, /if \(item\.item_type === "task"\) return false/)
-  assert.doesNotMatch(client, /day\.tasks\?\.map/)
+  assert.doesNotMatch(client, /view === "week"|Your next seven days|Next 7/)
+  assert.match(client, /openConsequences\.slice\(3\)\.map/)
+  assert.match(client, /onOpen=\{\(\) => openAttention\(item\)\}/)
 })

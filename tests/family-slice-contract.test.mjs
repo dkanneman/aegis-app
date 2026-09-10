@@ -26,6 +26,7 @@ const healthIngestPath = new URL(
   '../supabase/functions/pepper-health-ingest/index.ts',
   import.meta.url,
 )
+const supabaseConfigPath = new URL('../supabase/config.toml', import.meta.url)
 const calendarPath = new URL(
   '../supabase/functions/pepper-calendar/index.ts',
   import.meta.url,
@@ -217,7 +218,7 @@ test('chores use canonical household tasks with delegation and lifecycle control
   ])
 
   assert.match(api, /action==='chore_create'/)
-  assert.match(api, /capabilities:\['chore_create'/)
+  assert.match(api, /capabilities:\[[^\]]*'chore_create'/)
   assert.match(api, /code:'unknown_action'/)
   assert.match(api, /classification[^\n]*'Chore'/)
   assert.match(api, /array\['home','chores'\]/)
@@ -254,14 +255,20 @@ test('adult navigation includes a priority-organized canonical Work view', async
   assert.match(styles, /\.workTaskRow/)
 })
 
-test('Looking Ahead excludes tasks and remains a family events horizon', async () => {
-  const [client, horizon] = await Promise.all([
+test('future schedule evidence does not create a redundant Ahead destination', async () => {
+  const [client, api, horizon] = await Promise.all([
     readFile(clientPath, 'utf8'),
+    readFile(apiPath, 'utf8'),
     readFile(horizonPath, 'utf8'),
   ])
 
-  assert.match(client, /futureWatch\.filter\(\(item\) => item\.type !== "task"\)/)
-  assert.match(client, /appointments, holidays, school changes and important family dates/)
+  assert.doesNotMatch(client, /\["week", "Ahead"/)
+  assert.doesNotMatch(client, /view === "week"/)
+  assert.doesNotMatch(client, /Next 7|Your next seven days|Looking ahead|A quiet look ahead|No-surprises horizon/)
+  assert.match(api, /lower\(coalesce\(e\.kind,''\)\) not in \('work','task','chore','meal'\)/)
+  assert.match(api, /lower\(coalesce\(e\.title,''\)\) not like 'house reset%'/)
+  assert.match(horizon, /lower\(coalesce\(kind, ''\)\) not in \('work', 'task', 'chore', 'meal'\)/)
+  assert.match(horizon, /lower\(coalesce\(title, ''\)\) not like 'house reset%'/)
   assert.doesNotMatch(horizon, /aheadTasks/)
   assert.match(horizon, /\.\.\.schoolAhead\.map/)
   assert.match(horizon, /\.\.\.aheadWatch\.map/)
@@ -310,15 +317,14 @@ test('attention cards resolve canonical rides and conflicts instead of remaining
   assert.match(client, /function ConflictResolutionSheet/)
   assert.match(client, /function SchoolTransportationSummary/)
   assert.match(client, /function SchoolTransportGroup/)
-  assert.match(client, /function HorizonSchoolTransportGroup/)
-  assert.match(client, /item\.kind === "school_dropoff"/)
-  assert.match(client, /item\.kind === "school_pickup"/)
+  assert.match(client, /function routineSchoolTripKind/)
+  assert.match(client, /return "dropoff" as const/)
+  assert.match(client, /return "pickup" as const/)
   assert.match(client, /event\.source !== "routine"/)
   assert.match(client, /School drop-off/)
   assert.match(client, /School pickup/)
-  assert.match(client, /function revealWeekDecisions/)
-  assert.match(client, /const nextDecision = coordination\[0\]/)
-  assert.match(client, /openAttention\(nextDecision\)/)
+  assert.match(client, /openConsequences\.slice\(3\)\.map/)
+  assert.match(client, /onOpen=\{\(\) => openAttention\(item\)\}/)
   assert.doesNotMatch(client, /Prepare \/ decide/)
   assert.match(client, /action: "conflict_resolve"/)
   assert.match(client, /Cancel event and open email draft/)
@@ -336,8 +342,7 @@ test('showcase views suppress duplicate decisions and use progressive disclosure
   ])
 
   assert.match(client, /function visibleConsequences/)
-  assert.match(client, /function visibleReadiness/)
-  assert.match(client, /function uniqueHorizonItems/)
+  assert.match(client, /openConsequences\.slice\(3\)\.map/)
   assert.match(client, /group\.tasks\.length > initialCount/)
   assert.match(client, /Show all \$\{group\.tasks\.length\}/)
   assert.match(client, /Show all \$\{weekGroceries\.length\} groceries/)
@@ -347,12 +352,13 @@ test('showcase views suppress duplicate decisions and use progressive disclosure
 })
 
 test('connections remain evidence inputs with explicit security boundaries', async () => {
-  const [api, client, integrations, health, calendar] = await Promise.all([
+  const [api, client, integrations, health, calendar, config] = await Promise.all([
     readFile(apiPath, 'utf8'),
     readFile(clientPath, 'utf8'),
     readFile(integrationsPath, 'utf8'),
     readFile(healthIngestPath, 'utf8'),
     readFile(calendarPath, 'utf8'),
+    readFile(supabaseConfigPath, 'utf8'),
   ])
   assert.match(api, /SUPABASE_ANON_KEY/)
   assert.match(api, /action==='email_start'/)
@@ -378,8 +384,25 @@ test('connections remain evidence inputs with explicit security boundaries', asy
   assert.match(integrations, /client==='native_ios'/)
   assert.match(health, /x-pepper-health-token/)
   assert.doesNotMatch(health, /authorization\.startsWith\('Bearer '/)
+  assert.match(config, /\[functions\.pepper-health-ingest\][\s\S]*verify_jwt = false/)
+  assert.match(client, /This iPhone · Health access incomplete/)
+  assert.match(client, /Needs attention/)
+  assert.match(client, /Try again/)
   assert.match(calendar, /Deno\.env\.get\('PEPPER_APP_URL'\)/)
   assert.doesNotMatch(calendar, /olgyfgqlqrhfaujkfjtj/)
+})
+
+test('Pepper Inbox makes unplaced updates and calendar effects explicit', async () => {
+  const client = await readFile(clientPath, 'utf8')
+
+  assert.match(client, /result\.status === "needs_review"/)
+  assert.match(client, /No task, meal, or calendar event was created/)
+  assert.match(client, /result\.status === "partially_applied"/)
+  assert.match(client, /Open Inbox/)
+  assert.match(client, /Pepper Inbox preserves updates it could not safely place/)
+  assert.match(client, /Edit in composer/)
+  assert.match(client, /Read-only schedule evidence/)
+  assert.match(client, /Creating or changing an external calendar event/)
 })
 
 test('the approved Pepper visual language wraps the real connection pathways', async () => {
@@ -403,17 +426,13 @@ test('the approved Pepper visual language wraps the real connection pathways', a
   assert.ok(botanical.byteLength > 10_000)
 })
 
-test('TestFlight schedule and compact connection feedback stays covered', async () => {
+test('compact connection feedback and canonical month evidence stay covered', async () => {
   const [api, client, styles] = await Promise.all([
     readFile(apiPath, 'utf8'),
     readFile(clientPath, 'utf8'),
     readFile(pepperStylesPath, 'utf8'),
   ])
 
-  assert.match(client, /onOpenEvent=\{\(item\) =>/)
-  assert.match(client, /candidate\.id === item\.id/)
-  assert.match(client, /styles\.horizonRowAction/)
-  assert.match(styles, /\.horizonRowAction/)
   assert.match(
     styles,
     /@media \(max-width: 560px\)[\s\S]*\.connectionSummary,[\s\S]*\.connectionMetadata,[\s\S]*display: none/,
@@ -423,12 +442,7 @@ test('TestFlight schedule and compact connection feedback stays covered', async 
   assert.match(api, /e\.starts_at<\(\$\{end\}::date at time zone 'America\/Los_Angeles'\)/)
   assert.match(api, /e\.visibility='household'[\s\S]*e\.owner_member_id=\$\{member\.id\}::uuid[\s\S]*e\.person_slug=\$\{member\.slug\}/)
   assert.match(api, /state\.monthEvents=monthEvents/)
-  assert.match(client, /\["month", "Month"\]/)
-  assert.match(client, /Month view/)
-  assert.match(client, /state\?\.monthEvents/)
-  assert.match(client, /feeds: \["Today", "Next 7", "Month", "Family schedules"\]/)
-  assert.match(styles, /\.scheduleRangeTabs/)
-  assert.match(styles, /\.monthAgenda/)
+  assert.match(client, /feeds: \["Today", "Morning brief", "Family pages"\]/)
   assert.match(api, /client:b\.client/)
   assert.doesNotMatch(api, /client:body\.client/)
 })
@@ -473,7 +487,7 @@ test('One Brain resolves official school schedules in explicit precedence order'
   assert.match(horizon, /resolution_level === 'dated_exception'/)
   assert.match(api, /private\.resolve_school_schedule/)
   assert.match(client, /Normal dismissal/)
-  assert.match(client, /School schedule change/)
+  assert.match(client, /state\.school\.upcoming_changes\.slice\(0, 3\)/)
 })
 
 test('private runtime tables receive defense-in-depth RLS', async () => {
@@ -507,6 +521,56 @@ test('Pepper installs as a branded iPhone web app', async () => {
   assert.match(layout, /viewportFit: "cover"/)
   assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
   assert.ok(icon.byteLength > 1_000)
+})
+
+test('mobile navigation prioritizes daily work without hiding secondary sections', async () => {
+  const [client, styles] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(pepperStylesPath, 'utf8'),
+  ])
+
+  assert.match(client, /const mobilePrimaryKeys/)
+  assert.match(client, /\["today", "work", "chores", "meals"\]/)
+  assert.match(client, /More from Pepper/)
+  assert.match(client, /aria-expanded=\{mobileMoreOpen\}/)
+  assert.match(styles, /\.tabs button\[data-mobile-secondary="true"\]/)
+  assert.match(styles, /grid-template-columns: repeat\(5, 1fr\)/)
+  assert.match(styles, /\.mobileMoreList/)
+})
+
+test('Pepper loads the daily shell first and opens heavier sections on demand', async () => {
+  const [api, client] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(clientPath, 'utf8'),
+  ])
+
+  assert.match(api, /const progressive=b\.progressive===true/)
+  assert.match(api, /action==='section_state'/)
+  assert.match(api, /section==='chores'/)
+  assert.match(api, /section==='meals'/)
+  assert.match(client, /action: "state", progressive: true/)
+  assert.match(client, /action: "section_state", section/)
+  assert.match(client, /sectionForView\(view\)/)
+  assert.match(client, /document\.visibilityState === "visible"/)
+})
+
+test('item and grocery changes update locally without a blocking full reload', async () => {
+  const [api, client, styles] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(clientPath, 'utf8'),
+    readFile(pepperStylesPath, 'utf8'),
+  ])
+  const updateItem = client.slice(
+    client.indexOf('async function updateItem('),
+    client.indexOf('function openAttention('),
+  )
+
+  assert.match(updateItem, /optimisticSelectedItem/)
+  assert.match(updateItem, /patchPepperStateItem/)
+  assert.doesNotMatch(updateItem, /await load\(/)
+  assert.match(api, /grocery:updatedRows\[0\]/)
+  assert.match(styles, /background-attachment: scroll/)
+  assert.match(styles, /-webkit-backdrop-filter: none/)
 })
 
 test('TestFlight has a public Pepper privacy notice without exposed contact credentials', async () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties, FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Armchair,
   ArrowLeft,
@@ -9,12 +9,12 @@ import {
   Cable,
   Camera,
   CalendarDays,
-  CalendarRange,
   Check,
   ChevronRight,
   CircleX,
   ClipboardCheck,
   Copy,
+  Ellipsis,
   HeartPulse,
   House,
   Info,
@@ -30,7 +30,6 @@ import {
   ShieldCheck,
   ShoppingBasket,
   Sparkles,
-  Telescope,
   Trash2,
   Utensils,
   UsersRound,
@@ -86,6 +85,7 @@ type FamilyTask = {
   completed_at?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+  deleted_at?: string | null;
 };
 
 type FamilyEvent = {
@@ -170,6 +170,9 @@ type PreparationItem = {
 
 type Capture = {
   id?: string | number;
+  original_text?: string | null;
+  status?: string | null;
+  reconciliation_status?: string | null;
   summary?: string | null;
   pepper_reply?: string | null;
   reply?: string | null;
@@ -473,19 +476,20 @@ type PepperState = {
     morning?: MorningRitual;
     evening?: EveningRitual;
   };
+  progressive?: boolean;
 };
 
 type View =
   | "today"
-  | "week"
   | "work"
   | "meals"
-  | "ahead"
   | "chores"
   | "family"
   | "member"
   | "setup"
   | "connections";
+
+type LazySection = "chores" | "meals" | "family" | "connections";
 
 type ChoreDraft = {
   title: string;
@@ -782,43 +786,6 @@ function visibleConsequences(items: Consequence[]) {
   });
 }
 
-function visibleReadiness(items: ReadinessItem[]) {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (item.event_id && item.event_id === item.related_event_id) return false;
-    if (sameCalendarOccurrence(item.primary_event, item.related_event)) return false;
-    const key = [
-      item.consequence_type || item.type,
-      normalizedAttentionText(item.title),
-      normalizedAttentionText(item.summary),
-    ].join("|");
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function uniqueHorizonItems(items: HorizonRowItem[]) {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    const key = item.source === "routine"
-      ? [
-          "routine",
-          item.kind || "event",
-          item.person_slug || "",
-          item.starts_at || "",
-        ].join("|")
-      : [
-          item.item_type || item.kind || "event",
-          normalizedAttentionText(item.title),
-          normalizedAttentionText(item.location),
-        ].join("|");
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function longDate() {
   return new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
@@ -851,6 +818,7 @@ function countLabel(value: number, singular: string, plural = `${singular}s`) {
 
 function captureText(capture: Capture) {
   return (
+    capture.original_text ||
     capture.summary ||
     capture.pepper_reply ||
     capture.reply ||
@@ -927,6 +895,180 @@ function routineSchoolTripKind(event: FamilyEvent) {
   return null;
 }
 
+const LAZY_SECTIONS: LazySection[] = [
+  "chores",
+  "meals",
+  "family",
+  "connections",
+];
+
+function sectionForView(view: View): LazySection | null {
+  if (view === "setup") return "family";
+  return LAZY_SECTIONS.includes(view as LazySection)
+    ? (view as LazySection)
+    : null;
+}
+
+function optimisticSelectedItem(
+  selected: SelectedItem,
+  operation: ItemOperation,
+  changes: ItemUpdate,
+): SelectedItem {
+  if (selected.type === "task") {
+    const nextStatus: FamilyTask["status"] | undefined =
+      operation === "complete"
+        ? "completed"
+        : operation === "cancel" || operation === "delete"
+          ? "canceled"
+          : operation === "reopen"
+            ? "open"
+            : undefined;
+    return {
+      type: "task",
+      item: {
+        ...selected.item,
+        ...(changes.title ? { title: changes.title } : {}),
+        ...(changes.owner_member_id !== undefined
+          ? { owner_member_id: changes.owner_member_id }
+          : {}),
+        ...(changes.status ? { status: changes.status } : {}),
+        ...(changes.priority !== undefined ? { priority: changes.priority } : {}),
+        ...(changes.notes !== undefined ? { notes: changes.notes } : {}),
+        ...(changes.waiting_on !== undefined
+          ? { waiting_on: changes.waiting_on }
+          : {}),
+        ...(changes.next_action !== undefined
+          ? { next_action: changes.next_action }
+          : {}),
+        ...(nextStatus ? { status: nextStatus } : {}),
+        ...(operation === "complete"
+          ? { completed_at: new Date().toISOString() }
+          : operation === "reopen"
+            ? { completed_at: null }
+            : {}),
+      },
+    };
+  }
+  const nextStatus: FamilyEvent["status"] | undefined =
+    operation === "complete"
+      ? "completed"
+      : operation === "cancel" || operation === "delete"
+        ? "canceled"
+        : operation === "reopen"
+          ? "confirmed"
+          : undefined;
+  return {
+    type: "event",
+    item: {
+      ...selected.item,
+      ...(changes.title ? { title: changes.title } : {}),
+      ...(changes.location !== undefined ? { location: changes.location } : {}),
+      ...(changes.notes !== undefined ? { notes: changes.notes } : {}),
+      ...(changes.owner_member_id !== undefined
+        ? {
+            transport_owner_member_id: changes.owner_member_id,
+            transport_status: changes.owner_member_id ? "assigned" : "unassigned",
+          }
+        : {}),
+      ...(nextStatus ? { status: nextStatus } : {}),
+    },
+  };
+}
+
+function patchItemList<T extends { id: string }>(
+  items: T[] | undefined,
+  updated: T,
+  remove = false,
+) {
+  if (!items) return items;
+  if (remove) return items.filter((item) => item.id !== updated.id);
+  return items.map((item) => (item.id === updated.id ? updated : item));
+}
+
+function upsertItemList<T extends { id: string }>(items: T[] | undefined, item: T) {
+  if (!items?.some((candidate) => candidate.id === item.id)) {
+    return [...(items || []), item];
+  }
+  return items.map((candidate) => (candidate.id === item.id ? item : candidate));
+}
+
+function profileWithPhoto(
+  profile: MemberSetupProfile | null | undefined,
+  memberId: string,
+  avatarUrl: string | null,
+): MemberSetupProfile {
+  return {
+    member_id: memberId,
+    activities: [],
+    school_name: "",
+    grade_label: "",
+    dietary_preferences: [],
+    medications: [],
+    goals: [],
+    ...profile,
+    avatar_url: avatarUrl,
+  };
+}
+
+function patchProfilePhoto(
+  profiles: MemberSetupProfile[] | undefined,
+  memberId: string,
+  avatarUrl: string | null,
+) {
+  const current = profiles || [];
+  if (!current.some((profile) => profile.member_id === memberId)) {
+    return [...current, profileWithPhoto(null, memberId, avatarUrl)];
+  }
+  return current.map((profile) =>
+    profile.member_id === memberId
+      ? profileWithPhoto(profile, memberId, avatarUrl)
+      : profile,
+  );
+}
+
+function patchPepperStateItem(
+  current: PepperState,
+  selected: SelectedItem,
+): PepperState {
+  if (selected.type === "task") {
+    const remove = Boolean(selected.item.deleted_at);
+    return {
+      ...current,
+      familyTasks:
+        patchItemList(current.familyTasks, selected.item, remove) || [],
+      privateTasks:
+        patchItemList(current.privateTasks, selected.item, remove) || [],
+      chores: patchItemList(current.chores, selected.item, remove),
+    };
+  }
+  return {
+    ...current,
+    events: patchItemList(current.events, selected.item) || [],
+    monthEvents: patchItemList(current.monthEvents, selected.item),
+  };
+}
+
+function patchMemberStateItem(
+  current: MemberState,
+  selected: SelectedItem,
+): MemberState {
+  if (selected.type === "task") {
+    return {
+      ...current,
+      tasks:
+        patchItemList(
+          current.tasks,
+          selected.item,
+          Boolean(selected.item.deleted_at),
+        ) || [],
+    };
+  }
+  return {
+    ...current,
+    events: patchItemList(current.events, selected.item) || [],
+  };
+}
+
 export function PepperClient() {
   const [profileName, setProfileName] = useState("");
   const [pin, setPin] = useState("");
@@ -936,18 +1078,28 @@ export function PepperClient() {
   const [token, setToken] = useState("");
   const [state, setState] = useState<PepperState | null>(null);
   const [view, setView] = useState<View>("today");
-  const [scheduleRange, setScheduleRange] = useState<"week" | "month">("week");
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [memberState, setMemberState] = useState<MemberState | null>(null);
   const [memberBusy, setMemberBusy] = useState(false);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
   const [conflictResolution, setConflictResolution] =
     useState<AttentionItem | null>(null);
-  const [actionBusy, setActionBusy] = useState(false);
+  const [loadedSections, setLoadedSections] = useState<Set<LazySection>>(
+    () => new Set(),
+  );
+  const [loadingSections, setLoadingSections] = useState<Set<LazySection>>(
+    () => new Set(),
+  );
+  const [pendingActions, setPendingActions] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const sectionRequests = useRef<Partial<Record<LazySection, Promise<void>>>>({});
   const [atmosphere, setAtmosphere] = useState(() =>
     pepperAtmosphereAt(minutesInTimeZone(TZ)),
   );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [inboxOpen, setInboxOpen] = useState(false);
   const [tell, setTell] = useState("");
   const [reflection, setReflection] = useState("");
   const [reflectionSaved, setReflectionSaved] = useState(false);
@@ -963,11 +1115,44 @@ export function PepperClient() {
   const isPepperIOS =
     typeof navigator !== "undefined" && navigator.userAgent.includes("Pepper-iOS");
 
+  const setActionPending = useCallback((key: string, pending: boolean) => {
+    setPendingActions((current) => {
+      const next = new Set(current);
+      if (pending) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const isActionPending = useCallback(
+    (key: string) => pendingActions.has(key),
+    [pendingActions],
+  );
+
+  const openTask = useCallback(
+    (task: FamilyTask) => setSelectedItem({ type: "task", item: task }),
+    [],
+  );
+
+  const openSelectedItem = useCallback(
+    (item: SelectedItem) => setSelectedItem(item),
+    [],
+  );
+
   useEffect(() => {
     if (!message) return;
     const timeout = window.setTimeout(() => setMessage(""), 7000);
     return () => window.clearTimeout(timeout);
   }, [message]);
+
+  useEffect(() => {
+    if (!mobileMoreOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMoreOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileMoreOpen]);
 
   async function call(body: Record<string, unknown>, session = token) {
     if (!API || !SUPABASE_ANON_KEY) {
@@ -1002,8 +1187,13 @@ export function PepperClient() {
   async function load(session = token) {
     if (!session) return;
     try {
-      const result = await call({ action: "state" }, session);
-      setState(result.state);
+      const result = await call({ action: "state", progressive: true }, session);
+      setState((current) =>
+        current ? { ...current, ...result.state } : result.state,
+      );
+      if (result.state?.progressive !== true) {
+        setLoadedSections(new Set(LAZY_SECTIONS));
+      }
     } catch (error) {
       const text =
         error instanceof Error ? error.message : "Pepper could not load.";
@@ -1011,9 +1201,50 @@ export function PepperClient() {
         localStorage.removeItem("pepper_family_session");
         setToken("");
         setState(null);
+        setLoadedSections(new Set());
+        setLoadingSections(new Set());
+        sectionRequests.current = {};
       }
       setMessage(text);
     }
+  }
+
+  async function loadSection(
+    section: LazySection,
+    force = false,
+    session = token,
+  ) {
+    if (!session || (!force && loadedSections.has(section))) return;
+    const inFlight = sectionRequests.current[section];
+    if (inFlight) return inFlight;
+    const request = (async () => {
+      setLoadingSections((current) => new Set(current).add(section));
+      try {
+        const result = await call(
+          { action: "section_state", section },
+          session,
+        );
+        setState((current) =>
+          current ? { ...current, ...(result.state || {}) } : current,
+        );
+        setLoadedSections((current) => new Set(current).add(section));
+      } catch (error) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "Pepper could not open that section.",
+        );
+      } finally {
+        setLoadingSections((current) => {
+          const next = new Set(current);
+          next.delete(section);
+          return next;
+        });
+        delete sectionRequests.current[section];
+      }
+    })();
+    sectionRequests.current[section] = request;
+    return request;
   }
 
   async function loadMember(slug: string, session = token) {
@@ -1045,7 +1276,15 @@ export function PepperClient() {
     operation: ItemOperation,
     changes: ItemUpdate = {},
   ): Promise<ItemUpdateResult> {
-    setActionBusy(true);
+    const pendingKey = `item:${item.item.id}`;
+    const optimistic = optimisticSelectedItem(item, operation, changes);
+    setActionPending(pendingKey, true);
+    setState((current) =>
+      current ? patchPepperStateItem(current, optimistic) : current,
+    );
+    setMemberState((current) =>
+      current ? patchMemberStateItem(current, optimistic) : current,
+    );
     try {
       const result = await call({
         action: "item_update",
@@ -1073,6 +1312,13 @@ export function PepperClient() {
           "Pepper could not verify that this change was saved. Nothing was marked handled.",
         );
       }
+      const saved = { type: item.type, item: result.item } as SelectedItem;
+      setState((current) =>
+        current ? patchPepperStateItem(current, saved) : current,
+      );
+      setMemberState((current) =>
+        current ? patchMemberStateItem(current, saved) : current,
+      );
       setMessage(
         operation === "assign"
           ? "Assigned. Pepper updated the family plan."
@@ -1085,16 +1331,21 @@ export function PepperClient() {
             : `${operation === "complete" ? "Completed" : "Canceled"}. Pepper updated every view.`,
       );
       setSelectedItem(null);
-      await load();
-      if (memberState?.member.slug) await loadMember(memberState.member.slug);
+      if (item.type === "event") void load();
       return { ok: true };
     } catch (error) {
+      setState((current) =>
+        current ? patchPepperStateItem(current, item) : current,
+      );
+      setMemberState((current) =>
+        current ? patchMemberStateItem(current, item) : current,
+      );
       const text =
         error instanceof Error ? error.message : "Pepper could not update that.";
       setMessage(text);
       return { ok: false, error: text };
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -1132,7 +1383,8 @@ export function PepperClient() {
       setMessage("Pepper could not identify that conflict.");
       return false;
     }
-    setActionBusy(true);
+    const pendingKey = `conflict:${consequenceId}`;
+    setActionPending(pendingKey, true);
     try {
       await call({
         action: "conflict_resolve",
@@ -1140,10 +1392,24 @@ export function PepperClient() {
         keep_event_id: keepEventId,
         reject_event_id: rejectEventId,
       });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              events: current.events.map((event) =>
+                event.id === rejectEventId
+                  ? { ...event, status: "canceled" }
+                  : event,
+              ),
+              consequences: (current.consequences || []).filter(
+                (consequence) => consequence.id !== consequenceId,
+              ),
+            }
+          : current,
+      );
       setMessage("Conflict resolved. Pepper updated the family plan.");
       setConflictResolution(null);
-      await load();
-      if (memberState?.member.slug) await loadMember(memberState.member.slug);
+      void load();
       return true;
     } catch (error) {
       setMessage(
@@ -1153,32 +1419,37 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
-  }
-
-  function revealWeekDecisions() {
-    const nextDecision = coordination[0];
-    if (!nextDecision) {
-      setMessage("Pepper is refreshing the decisions that need you.");
-      void load();
-      return;
-    }
-    openAttention(nextDecision);
   }
 
   async function createChore(draft: ChoreDraft) {
-    setActionBusy(true);
+    const pendingKey = "chore:create";
+    setActionPending(pendingKey, true);
     try {
-      await call({
+      const result = await call({
         action: "chore_create",
         title: draft.title,
         owner_member_id: draft.ownerMemberId || null,
         due_date: draft.dueDate || null,
         recurrence: draft.recurrence,
       });
+      const chore = result.chore as FamilyTask;
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              familyTasks: upsertItemList(current.familyTasks, chore),
+              chores: upsertItemList(current.chores, chore),
+            }
+          : current,
+      );
+      setMemberState((current) =>
+        current && current.member.id === chore.owner_member_id
+          ? { ...current, tasks: upsertItemList(current.tasks, chore) }
+          : current,
+      );
       setMessage("Chore added. Pepper updated everyone’s plan.");
-      await load();
       return true;
     } catch (error) {
       setMessage(
@@ -1186,7 +1457,7 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -1194,7 +1465,8 @@ export function PepperClient() {
     operation: "assign" | "reset" | "confirm",
     assignedMemberId?: string,
   ) {
-    setActionBusy(true);
+    const pendingKey = "front-seat";
+    setActionPending(pendingKey, true);
     try {
       const result = await call({
         action: "front_seat_update",
@@ -1202,6 +1474,9 @@ export function PepperClient() {
         assigned_member_id: assignedMemberId || null,
       });
       const rider = result.frontSeat?.today?.assigned_member?.display_name;
+      setState((current) =>
+        current ? { ...current, frontSeat: result.frontSeat } : current,
+      );
       setMessage(
         operation === "confirm"
           ? `${rider || "Today’s rider"} is confirmed in front.`
@@ -1209,7 +1484,6 @@ export function PepperClient() {
             ? `Back to the regular rotation. ${rider || "Today’s rider"} has the front seat.`
             : `${rider || "Today’s rider"} has the front seat today.`,
       );
-      await load();
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -1217,22 +1491,27 @@ export function PepperClient() {
           : "Pepper could not update the front-seat turn.",
       );
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function saveMeal(draft: MealDraft) {
-    setActionBusy(true);
+    const pendingKey = `meal:${draft.mealDate}`;
+    setActionPending(pendingKey, true);
     try {
-      await call({
+      const result = await call({
         action: "meal_upsert",
         meal_date: draft.mealDate,
         meal_name: draft.mealName,
         owner_member_id: draft.ownerMemberId || null,
         shopping_owner_member_id: draft.shoppingOwnerMemberId || null,
       });
+      setState((current) =>
+        current
+          ? { ...current, meals: upsertItemList(current.meals, result.meal) }
+          : current,
+      );
       setMessage("Meal saved. Pepper updated the weekly plan.");
-      await load();
       return true;
     } catch (error) {
       setMessage(
@@ -1240,22 +1519,30 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function saveMealNeed(draft: MealNeedDraft) {
-    setActionBusy(true);
+    const pendingKey = "meal-need:create";
+    setActionPending(pendingKey, true);
     try {
-      await call({
+      const result = await call({
         action: "meal_need_upsert",
         member_id: draft.memberId,
         need_type: draft.needType,
         label: draft.label,
         details: draft.details,
       });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              mealNeeds: upsertItemList(current.mealNeeds, result.mealNeed),
+            }
+          : current,
+      );
       setMessage("Family meal need saved.");
-      await load();
       return true;
     } catch (error) {
       setMessage(
@@ -1265,16 +1552,26 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function removeMealNeed(id: string) {
-    setActionBusy(true);
+    const pendingKey = `meal-need:${id}`;
+    setActionPending(pendingKey, true);
     try {
       await call({ action: "meal_need_upsert", id, active: false });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              mealNeeds: (current.mealNeeds || []).filter(
+                (need) => need.id !== id,
+              ),
+            }
+          : current,
+      );
       setMessage("Meal need removed from the active plan.");
-      await load();
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -1282,21 +1579,29 @@ export function PepperClient() {
           : "Pepper could not update that meal need.",
       );
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function createGrocery(draft: GroceryDraft) {
-    setActionBusy(true);
+    const pendingKey = "grocery:create";
+    setActionPending(pendingKey, true);
     try {
-      await call({
+      const result = await call({
         action: "grocery_create",
         item: draft.item,
         owner_member_id: draft.ownerMemberId || null,
         meal_plan_id: draft.mealPlanId || null,
       });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              groceries: upsertItemList(current.groceries, result.grocery),
+            }
+          : current,
+      );
       setMessage("Grocery added to the weekly meal plan.");
-      await load();
       return true;
     } catch (error) {
       setMessage(
@@ -1306,7 +1611,7 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -1315,30 +1620,77 @@ export function PepperClient() {
     operation: "assign" | "attach" | "complete" | "reopen",
     value?: string,
   ) {
-    setActionBusy(true);
+    const pendingKey = `grocery:${id}`;
+    setActionPending(pendingKey, true);
+    const previous = state?.groceries.find((item) => item.id === id);
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            groceries: current.groceries.map((item) =>
+              item.id !== id
+                ? item
+                : {
+                    ...item,
+                    ...(operation === "assign"
+                      ? { owner_member_id: value || null }
+                      : {}),
+                    ...(operation === "attach"
+                      ? { meal_plan_id: value || null }
+                      : {}),
+                    ...(operation === "complete" ? { status: "completed" } : {}),
+                    ...(operation === "reopen" ? { status: "open" } : {}),
+                  },
+            ),
+          }
+        : current,
+    );
     try {
-      await call({
+      const result = await call({
         action: "grocery_update",
         id,
         operation,
         ...(operation === "assign" ? { owner_member_id: value || null } : {}),
         ...(operation === "attach" ? { meal_plan_id: value || null } : {}),
       });
+      setState((current) =>
+        current && result.grocery
+          ? {
+              ...current,
+              groceries: result.merged
+                ? upsertItemList(
+                    current.groceries.filter((item) => item.id !== id),
+                    result.grocery,
+                  )
+                : upsertItemList(current.groceries, result.grocery),
+            }
+          : current,
+      );
       setMessage("Grocery plan updated for everyone.");
-      await load();
     } catch (error) {
+      if (previous) {
+        setState((current) =>
+          current
+            ? {
+                ...current,
+                groceries: upsertItemList(current.groceries, previous),
+              }
+            : current,
+        );
+      }
       setMessage(
         error instanceof Error
           ? error.message
           : "Pepper could not update that grocery.",
       );
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function generateMealPlan() {
-    setActionBusy(true);
+    const pendingKey = "meal-plan";
+    setActionPending(pendingKey, true);
     try {
       const result = await call({
         action: "meal_plan_generate",
@@ -1349,7 +1701,7 @@ export function PepperClient() {
       setMessage(
         `Week refreshed from ${result.needs_considered || 0} saved family meal ${result.needs_considered === 1 ? "need" : "needs"}, with ${result.grocery_count || 0} unique groceries. Review meals and assign cooking or shopping.`,
       );
-      await load();
+      await loadSection("meals", true);
       return true;
     } catch (error) {
       setMessage(
@@ -1359,22 +1711,35 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function createPersonalTask(draft: PersonalTaskDraft) {
-    setActionBusy(true);
+    const pendingKey = "personal-task:create";
+    setActionPending(pendingKey, true);
     try {
-      await call({
+      const result = await call({
         action: "personal_task_create",
         title: draft.title,
         due_date: draft.dueDate || null,
         priority: draft.priority,
       });
+      const task = result.task as FamilyTask;
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              privateTasks: upsertItemList(current.privateTasks, task),
+            }
+          : current,
+      );
+      setMemberState((current) =>
+        current && current.member.id === task.owner_member_id
+          ? { ...current, tasks: upsertItemList(current.tasks, task) }
+          : current,
+      );
       setMessage("Added to your private to-do list.");
-      await load();
-      if (memberState?.member.slug) await loadMember(memberState.member.slug);
       return true;
     } catch (error) {
       setMessage(
@@ -1382,14 +1747,15 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function saveMemberSetup(draft: MemberSetupDraft) {
-    setActionBusy(true);
+    const pendingKey = `member-setup:${draft.memberId || "new"}`;
+    setActionPending(pendingKey, true);
     try {
-      await call({
+      const result = await call({
         action: "member_setup_save",
         member_id: draft.memberId || null,
         display_name: draft.displayName,
@@ -1402,12 +1768,39 @@ export function PepperClient() {
         medications: draft.medications,
         goals: draft.goals,
       });
+      setState((current) => {
+        if (!current) return current;
+        const existingProfile = current.memberProfiles?.find(
+          (profile) => profile.member_id === result.member_id,
+        );
+        const profile = {
+          ...existingProfile,
+          ...result.profile,
+          member_id: result.member_id,
+        } as MemberSetupProfile;
+        const savedMember = {
+          id: result.member_id,
+          slug: result.slug,
+          display_name: draft.displayName,
+          role: draft.role,
+        };
+        return {
+          ...current,
+          members: upsertItemList(current.members, savedMember),
+          memberProfiles: current.memberProfiles?.some(
+            (item) => item.member_id === profile.member_id,
+          )
+            ? current.memberProfiles.map((item) =>
+                item.member_id === profile.member_id ? profile : item,
+              )
+            : [...(current.memberProfiles || []), profile],
+        };
+      });
       setMessage(
         draft.memberId
           ? `${draft.displayName}’s details are updated.`
           : `${draft.displayName} was added to the family.`,
       );
-      await load();
       return true;
     } catch (error) {
       setMessage(
@@ -1417,22 +1810,45 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function saveProfilePhoto(memberId: string, file: File) {
-    setActionBusy(true);
+    const pendingKey = `photo:${memberId}`;
+    setActionPending(pendingKey, true);
     try {
       const imageDataUrl = await prepareProfilePhoto(file);
-      await call({
+      const result = await call({
         action: "member_photo_save",
         member_id: memberId,
         image_data_url: imageDataUrl,
       });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              memberProfiles: patchProfilePhoto(
+                current.memberProfiles,
+                memberId,
+                result.avatar_url,
+              ),
+            }
+          : current,
+      );
+      setMemberState((current) =>
+        current?.member.id === memberId
+          ? {
+              ...current,
+              setup: profileWithPhoto(
+                current.setup,
+                memberId,
+                result.avatar_url,
+              ),
+            }
+          : current,
+      );
       setMessage("Profile photo updated for the family.");
-      await load();
-      if (memberState?.member.slug) await loadMember(memberState.member.slug);
       return true;
     } catch (error) {
       setMessage(
@@ -1442,17 +1858,36 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
   async function removeProfilePhoto(memberId: string) {
-    setActionBusy(true);
+    const pendingKey = `photo:${memberId}`;
+    setActionPending(pendingKey, true);
     try {
       await call({ action: "member_photo_remove", member_id: memberId });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              memberProfiles: patchProfilePhoto(
+                current.memberProfiles,
+                memberId,
+                null,
+              ),
+            }
+          : current,
+      );
+      setMemberState((current) =>
+        current?.member.id === memberId
+          ? {
+              ...current,
+              setup: profileWithPhoto(current.setup, memberId, null),
+            }
+          : current,
+      );
       setMessage("Profile photo removed.");
-      await load();
-      if (memberState?.member.slug) await loadMember(memberState.member.slug);
       return true;
     } catch (error) {
       setMessage(
@@ -1462,7 +1897,7 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -1546,10 +1981,18 @@ export function PepperClient() {
 
   useEffect(() => {
     if (!token) return;
-    const timer = window.setInterval(() => load(token), 30000);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load(token);
+    }, 60_000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    const section = sectionForView(view);
+    if (token && section) void loadSection(section);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, view]);
 
   const schoolTransportation = useMemo(() => {
     const dropoffs: FamilyEvent[] = [];
@@ -1589,29 +2032,12 @@ export function PepperClient() {
   const preparationNow = state?.preparation?.now || [];
   const morning = state?.rituals?.morning;
   const evening = state?.rituals?.evening;
-  const morningTomorrowHeadline =
-    morning?.tomorrow?.headline || morning?.tomorrow_headline || "";
-  const eveningTomorrowHeadline =
-    evening?.tomorrow_headline || morningTomorrowHeadline;
-  const tomorrowHeadline =
-    morningTomorrowHeadline || eveningTomorrowHeadline;
   const rhythmPhase =
     currentHour() < 12
       ? "morning"
-      : currentHour() < 18
-        ? "tomorrow"
-        : "evening";
-  const horizon = state?.horizon;
-  const readiness = horizon?.readiness || [];
-  const futureWatch = horizon?.ahead?.future_watch || [];
-  const familyFutureWatch = futureWatch.filter((item) => item.type !== "task");
-  const routineSummaries = horizon?.ahead?.routine_summaries || [];
-  const coordination = visibleReadiness(
-    readiness.filter(
-      (item) =>
-        item.severity === "urgent" || item.severity === "needs_attention",
-    ),
-  );
+      : currentHour() >= 18
+        ? "evening"
+        : null;
   const activeFamilyTasks = (state?.familyTasks || []).filter(
     (task) => !["completed", "canceled"].includes(task.status),
   );
@@ -1621,27 +2047,6 @@ export function PepperClient() {
   const activeGroceries = (state?.groceries || []).filter(
     (item) => item.status !== "completed",
   );
-  const monthEvents = useMemo(
-    () =>
-      [...(state?.monthEvents || [])]
-        .filter((event) => event.status !== "canceled")
-        .sort(
-          (left, right) =>
-            new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
-        ),
-    [state],
-  );
-  const monthEventGroups = useMemo(() => {
-    const groups = new Map<string, FamilyEvent[]>();
-    for (const event of monthEvents) {
-      const date = localDateFor(event.starts_at);
-      if (!date) continue;
-      const group = groups.get(date) || [];
-      group.push(event);
-      groups.set(date, group);
-    }
-    return [...groups.entries()];
-  }, [monthEvents]);
   const recentCaptures = [...(state?.captures || [])]
     .sort((a, b) => {
       const aTime = new Date(
@@ -1742,6 +2147,10 @@ export function PepperClient() {
     localStorage.removeItem("pepper_family_session");
     setToken("");
     setState(null);
+    setLoadedSections(new Set());
+    setLoadingSections(new Set());
+    setPendingActions(new Set());
+    sectionRequests.current = {};
     setPin("");
     setPinSetup(null);
     setNewPin("");
@@ -1749,7 +2158,8 @@ export function PepperClient() {
   }
 
   async function deleteAccount(confirmation: string) {
-    setActionBusy(true);
+    const pendingKey = "account:delete";
+    setActionPending(pendingKey, true);
     try {
       await call({ action: "account_delete", confirmation });
       localStorage.removeItem("pepper_family_session");
@@ -1765,7 +2175,7 @@ export function PepperClient() {
       );
       return false;
     } finally {
-      setActionBusy(false);
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -1781,7 +2191,19 @@ export function PepperClient() {
         source: "text",
       });
       setTell("");
-      setMessage(result.reply || "Updated.");
+      if (result.status === "needs_review") {
+        setInboxOpen(true);
+        setMessage(
+          "Saved in Pepper Inbox only. No task, meal, or calendar event was created.",
+        );
+      } else if (result.status === "partially_applied") {
+        setInboxOpen(true);
+        setMessage(
+          "Pepper applied the confirmed changes. The remaining words are in Pepper Inbox only and were not added to the calendar.",
+        );
+      } else {
+        setMessage(result.reply || "Updated.");
+      }
       await load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Pepper hit an error.");
@@ -1808,8 +2230,20 @@ export function PepperClient() {
     setHandlingPreparation(id);
     try {
       await call({ action: "preparation_handle", id });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              preparation: {
+                ...current.preparation,
+                now: (current.preparation?.now || []).filter(
+                  (item) => item.id !== id,
+                ),
+              },
+            }
+          : current,
+      );
       setMessage("Handled. Pepper updated the plan.");
-      await load();
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -1831,7 +2265,7 @@ export function PepperClient() {
       setReflection("");
       setReflectionSaved(true);
       setMessage("Saved privately.");
-      await load();
+      void load();
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -1847,6 +2281,7 @@ export function PepperClient() {
     setView("today");
     setRitualOpen(ritual);
     if (ritual === "evening") {
+      void loadSection("connections");
       setReflectionSaved(false);
       setReflectionSavedText("");
     }
@@ -1874,6 +2309,8 @@ export function PepperClient() {
   }
 
   async function connectCalendar() {
+    const pendingKey = "connection:calendar";
+    setActionPending(pendingKey, true);
     try {
       const result = await call({
         action: "calendar_start",
@@ -1888,23 +2325,31 @@ export function PepperClient() {
           ? error.message
           : "Calendar setup is not ready yet.",
       );
+    } finally {
+      setActionPending(pendingKey, false);
     }
   }
 
   async function syncCalendar() {
+    const pendingKey = "connection:calendar";
+    setActionPending(pendingKey, true);
     try {
       setMessage("Pepper is refreshing your calendar…");
       await call({ action: "calendar_sync" });
-      await load();
+      await Promise.all([load(), loadSection("connections", true)]);
       setMessage("Calendar refreshed.");
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Calendar refresh failed.",
       );
+    } finally {
+      setActionPending(pendingKey, false);
     }
   }
 
   async function connectEmail() {
+    const pendingKey = "connection:email";
+    setActionPending(pendingKey, true);
     try {
       const result = await call({
         action: "email_start",
@@ -1915,10 +2360,14 @@ export function PepperClient() {
       setMessage(
         error instanceof Error ? error.message : "Email setup is not ready yet.",
       );
+    } finally {
+      setActionPending(pendingKey, false);
     }
   }
 
   async function pairHealth() {
+    const pendingKey = "connection:health";
+    setActionPending(pendingKey, true);
     try {
       const nativeHealth = nativeHealthMessageHandler();
       const result = await call({
@@ -1936,11 +2385,13 @@ export function PepperClient() {
         setHealthSetup(result);
         setMessage("The Apple Health Shortcut pairing is ready for this iPhone.");
       }
-      await load();
+      await Promise.all([load(), loadSection("connections", true)]);
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Apple Health setup failed.",
       );
+    } finally {
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -2079,24 +2530,26 @@ export function PepperClient() {
   }
 
   const calendar = state.calendarStatus;
-  const calendarConfigured = Boolean(calendar?.configured);
   const calendarConnected = Boolean(calendar?.connected);
-  const coverage = horizon?.coverage;
-  const weekIssueCount = coordination.length;
-  const weekCoverageHeadline = weekIssueCount
-    ? `Pepper sees ${weekIssueCount} ${weekIssueCount === 1 ? "decision" : "decisions"} to resolve in the family plan.`
-    : "The known family plan looks covered.";
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
   const primaryNavigation = [
     ["today", "Today", House],
-    ["week", "Next 7", CalendarRange],
     ...(actorIsAdult ? [["work", "Work", Briefcase] as const] : []),
     ["chores", "Chores", ClipboardCheck],
     ["meals", "Meals", Utensils],
-    ["ahead", "Ahead", Telescope],
     ["family", "Family", UsersRound],
     ["connections", "Connect", Cable],
   ] as const;
+  const mobilePrimaryKeys: View[] = actorIsAdult
+    ? ["today", "work", "chores", "meals"]
+    : ["today", "chores", "meals", "family"];
+  const mobileMoreNavigation = primaryNavigation.filter(
+    ([key]) => !mobilePrimaryKeys.includes(key as View),
+  );
+  const mobileMoreIsActive = mobileMoreNavigation.some(
+    ([key]) =>
+      view === key || (["member", "setup"].includes(view) && key === "family"),
+  );
 
   return (
     <main className={styles.page} style={atmosphereStyle}>
@@ -2128,6 +2581,9 @@ export function PepperClient() {
             <button
               key={key}
               type="button"
+              data-mobile-secondary={
+                mobilePrimaryKeys.includes(key as View) ? undefined : "true"
+              }
               aria-current={
                 view === key || (["member", "setup"].includes(view) && key === "family")
                   ? "page"
@@ -2138,12 +2594,25 @@ export function PepperClient() {
                   ? styles.tabActive
                   : styles.tab
               }
-              onClick={() => setView(key as View)}
+              onClick={() => {
+                setView(key as View);
+                setMobileMoreOpen(false);
+              }}
             >
               <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
               <span>{label}</span>
             </button>
           ))}
+          <button
+            type="button"
+            className={`${mobileMoreIsActive ? styles.tabActive : styles.tab} ${styles.mobileMoreTab}`}
+            aria-expanded={mobileMoreOpen}
+            aria-label="More Pepper sections"
+            onClick={() => setMobileMoreOpen(true)}
+          >
+            <Ellipsis size={18} strokeWidth={1.8} aria-hidden="true" />
+            <span>More</span>
+          </button>
         </nav>
 
         {calendarConfirmation ? (
@@ -2185,14 +2654,23 @@ export function PepperClient() {
                   ))}
                 </div>
                 {openConsequences.length > 3 ? (
-                  <button
-                    type="button"
-                    className={styles.attentionMore}
-                    onClick={() => setView("week")}
-                  >
-                    View all {openConsequences.length} decisions
-                    <ChevronRight size={16} aria-hidden="true" />
-                  </button>
+                  <details className={styles.preparationMore}>
+                    <summary>
+                      Show {openConsequences.length - 3} more{" "}
+                      {openConsequences.length - 3 === 1
+                        ? "decision"
+                        : "decisions"}
+                    </summary>
+                    <div className={styles.noticeStack}>
+                      {openConsequences.slice(3).map((item) => (
+                        <AttentionCard
+                          item={item}
+                          key={item.id}
+                          onOpen={() => openAttention(item)}
+                        />
+                      ))}
+                    </div>
+                  </details>
                 ) : null}
               </section>
             ) : null}
@@ -2271,27 +2749,8 @@ export function PepperClient() {
                     <strong>Morning Brief</strong>
                     <p>
                       {morning?.headline ||
-                        "A calm look at what matters today and what is coming next."}
+                        "A calm look at what matters today."}
                     </p>
-                  </div>
-                  <span className={styles.arrow}>→</span>
-                </button>
-              ) : rhythmPhase === "tomorrow" ? (
-                <button
-                  type="button"
-                  className={styles.lookAhead}
-                  aria-label="Open tomorrow's plan"
-                  onClick={() => setView("week")}
-                >
-                  <div>
-                    <span className={styles.sectionLabel}>
-                      A quiet look ahead
-                    </span>
-                    <strong>Tomorrow check</strong>
-                    <p>
-                      {tomorrowHeadline ||
-                        "Pepper is keeping tomorrow in view without asking anything of you yet."}
-                      </p>
                   </div>
                   <span className={styles.arrow}>→</span>
                 </button>
@@ -2363,7 +2822,6 @@ export function PepperClient() {
                       onOpenItem={setSelectedItem}
                       onOpenAttention={openAttention}
                       onMeals={() => setView("meals")}
-                      onWeek={() => setView("week")}
                       onMember={() => void openMember(state.member.slug)}
                     />
                   ) : (
@@ -2410,8 +2868,6 @@ export function PepperClient() {
                           state={state}
                           input={reflectionSavedText}
                           evening={evening}
-                          tomorrowHeadline={eveningTomorrowHeadline}
-                          onTomorrow={() => setView("week")}
                         />
                       )}
                     </>
@@ -2481,29 +2937,6 @@ export function PepperClient() {
                 )}
               </div>
             </section>
-
-            {coverage ? (
-              <section className={styles.section}>
-                <button
-                  type="button"
-                  className={styles.lookAhead}
-                  onClick={() => setView("week")}
-                >
-                  <div>
-                    <span className={styles.sectionLabel}>Looking ahead</span>
-                    <strong>
-                      {weekIssueCount
-                        ? `${weekIssueCount} ${
-                            weekIssueCount === 1 ? "decision" : "decisions"
-                          } still need attention.`
-                        : "Pepper is looking after next week, too."}
-                    </strong>
-                    <p>{weekCoverageHeadline}</p>
-                  </div>
-                  <span className={styles.arrow}>→</span>
-                </button>
-              </section>
-            ) : null}
 
             <section className={styles.section}>
               <div className={styles.sectionHeading}>
@@ -2596,285 +3029,114 @@ export function PepperClient() {
                   />
                 ))}
               </details>
-              {recentCaptures.length ? (
-                <details>
-                  <summary>Recent Pepper updates</summary>
-                  <div className={styles.evidence}>
-                    {recentCaptures.map((capture, index) => (
-                      <blockquote
-                        key={capture.id || `capture-${index}`}
-                      >
-                        {captureTime(capture) ? (
-                          <time>{captureTime(capture)}</time>
-                        ) : null}
-                        {captureText(capture)}
-                      </blockquote>
-                    ))}
-                  </div>
-                </details>
-              ) : null}
-            </section>
-          </>
-        ) : null}
-
-        {view === "week" ? (
-          <>
-            <section className={styles.hero}>
-              <div className={styles.eyebrow}>Planning horizon</div>
-              <h1>
-                {scheduleRange === "week"
-                  ? "Your next seven days."
-                  : "Your next 30 days."}
-              </h1>
-              <p>
-                {scheduleRange === "week"
-                  ? coverage
-                    ? weekCoverageHeadline
-                    : "Pepper is building the family plan it currently knows about."
-                  : "Family events and connected calendar evidence, kept in one editable view."}
-              </p>
-            </section>
-
-            <div className={styles.scheduleRangeToolbar}>
-              <div
-                className={styles.scheduleRangeTabs}
-                role="tablist"
-                aria-label="Schedule range"
+              <details
+                open={inboxOpen}
+                onToggle={(event) => setInboxOpen(event.currentTarget.open)}
               >
-                {([
-                  ["week", "Next 7"],
-                  ["month", "Month"],
-                ] as const).map(([range, label]) => (
-                  <button
-                    key={range}
-                    type="button"
-                    role="tab"
-                    aria-selected={scheduleRange === range}
-                    className={
-                      scheduleRange === range
-                        ? styles.scheduleRangeActive
-                        : styles.scheduleRangeTab
-                    }
-                    onClick={() => setScheduleRange(range)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {scheduleRange === "week" ? (
-              <>
-                <button
-                  type="button"
-                  className={`${styles.confidenceCard} ${styles.confidenceAction} ${
-                    weekIssueCount ? styles.confidenceNeedsWork : ""
-                  }`}
-                  disabled={!weekIssueCount}
-                  onClick={revealWeekDecisions}
-                >
-                  <div className={styles.confidenceIcon}>
-                    {weekIssueCount ? "!" : "✓"}
-                  </div>
-                  <div>
-                    <strong>
-                      {weekIssueCount
-                        ? `${weekIssueCount} ${
-                            weekIssueCount === 1 ? "thing needs" : "things need"
-                          } a decision.`
-                        : "The known plan looks covered."}
-                    </strong>
-                    <p>
-                      {calendarConnected
-                        ? "Pepper is checking this against your connected calendar and family state."
-                        : "This is based on Pepper's current family state. Connect Google Calendar to improve coverage."}
-                    </p>
-                  </div>
-                  {weekIssueCount ? (
-                    <span className={styles.confidenceActionLabel}>
-                      Resolve next <ChevronRight size={19} aria-hidden="true" />
-                    </span>
-                  ) : null}
-                </button>
-
-                <section className={styles.section}>
-                  <div className={styles.sectionLabel}>The week</div>
-                  <div className={styles.weekStack}>
-                    {(horizon?.days || []).map((day) => (
-                      <HorizonDayCard
-                        day={day}
-                        key={day.date}
-                        onOpenEvent={(item) => {
-                          const event = state.events.find(
-                            (candidate) => candidate.id === item.id,
-                          );
-                          if (!event) {
-                            setMessage(
-                              "This schedule rule is managed from Family setup.",
-                            );
-                            return;
-                          }
-                          setSelectedItem({ type: "event", item: event });
-                        }}
-                      />
-                    ))}
-                  </div>
-                </section>
-              </>
-            ) : (
-              <section className={styles.section}>
-                <div className={styles.sectionHeading}>
-                  <div className={styles.sectionLabel}>Month view</div>
-                  <span className={styles.monthRangeLabel}>
-                    {dateLabel(localDate())} to {dateLabel(addDateDays(localDate(), 29))}
-                  </span>
-                </div>
-                {monthEventGroups.length ? (
-                  <div className={styles.monthAgenda}>
-                    {monthEventGroups.map(([date, events]) => (
-                      <section className={styles.monthDay} key={date}>
-                        <header className={styles.monthDayHeader}>
-                          <h2>{dateLabel(date)}</h2>
-                          <span>{countLabel(events.length, "plan")}</span>
-                        </header>
-                        <div className={styles.monthDayEvents}>
-                          {events.map((event) => (
-                            <EventRow
-                              key={event.id}
-                              event={event}
-                              state={state}
-                              onOpen={() =>
-                                setSelectedItem({ type: "event", item: event })
-                              }
-                            />
-                          ))}
-                        </div>
-                      </section>
-                    ))}
+                <summary>
+                  Pepper Inbox
+                  {recentCaptures.some((capture) =>
+                    ["captured", "needs_review", "partially_applied"].includes(
+                      capture.status || "",
+                    ),
+                  )
+                    ? " · review needed"
+                    : ""}
+                </summary>
+                <p className={styles.inboxExplanation}>
+                  Pepper Inbox preserves updates it could not safely place. An
+                  item here is not a task, meal, or calendar event unless Pepper
+                  explicitly says it created one.
+                </p>
+                {recentCaptures.length ? (
+                  <div className={styles.evidence}>
+                    {recentCaptures.map((capture, index) => {
+                      const needsReview = [
+                        "captured",
+                        "needs_review",
+                        "partially_applied",
+                      ].includes(capture.status || "");
+                      return (
+                        <blockquote key={capture.id || `capture-${index}`}>
+                          <div className={styles.inboxCaptureHeading}>
+                            {captureTime(capture) ? (
+                              <time>{captureTime(capture)}</time>
+                            ) : null}
+                            {needsReview ? <span>Needs review</span> : null}
+                          </div>
+                          {captureText(capture)}
+                          {capture.status === "needs_review" ? (
+                            <button
+                              type="button"
+                              className={styles.inboxRetry}
+                              onClick={() => {
+                                setTell(captureText(capture));
+                                setMessage(
+                                  "Edit the update below so Pepper knows whether it is a task, meal, or event.",
+                                );
+                              }}
+                            >
+                              Edit in composer
+                            </button>
+                          ) : null}
+                        </blockquote>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <div className={styles.quietEmpty}>
-                    <strong>No family plans are visible for the next 30 days.</strong>
-                    <p>Connect or refresh Google Calendar to improve coverage.</p>
-                  </div>
+                  <p className={styles.inboxEmpty}>Nothing is waiting for review.</p>
                 )}
-              </section>
-            )}
-
-            <CalendarCard
-              configured={calendarConfigured}
-              connected={calendarConnected}
-              status={calendar}
-              onConnect={() => void connectCalendar()}
-              onSync={() => void syncCalendar()}
-            />
-          </>
-        ) : null}
-
-        {view === "ahead" ? (
-          <>
-            <section className={styles.hero}>
-              <div className={styles.eyebrow}>30-day foresight</div>
-              <h1>What could sneak up on us?</h1>
-              <p>
-                Pepper keeps normal routines quiet here and surfaces exceptions,
-                appointments, holidays, school changes and important family dates.
-              </p>
+              </details>
             </section>
-
-            {familyFutureWatch.length ? (
-              <section className={styles.section}>
-                <div className={styles.sectionLabel}>Coming up</div>
-                <div className={styles.aheadStack}>
-                  {familyFutureWatch.map((item, index) => (
-                    <article
-                      className={styles.aheadCard}
-                      key={`${item.type}-${item.date}-${item.title}-${index}`}
-                    >
-                      <div className={styles.aheadDate}>{item.when}</div>
-                      <div>
-                        <strong>{item.title}</strong>
-                        {item.preparation_summary ? (
-                          <p>{item.preparation_summary}</p>
-                        ) : item.location ? (
-                          <p>{item.location}</p>
-                        ) : null}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ) : (
-              <section className={styles.quietEmpty}>
-                <strong>No exceptions are loaded yet.</strong>
-                <p>
-                  As calendar, school dates and family commitments flow into
-                  Pepper, family events worth preparing for will appear here.
-                </p>
-              </section>
-            )}
-
-            {routineSummaries.length ? (
-              <section className={styles.section}>
-                <div className={styles.sectionLabel}>Still running normally</div>
-                <div className={styles.routineSummary}>
-                  {routineSummaries.map((item) => (
-                    <div key={item.id}>
-                      <strong>{item.title}</strong>
-                      <span>{item.summary}</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-
-            <CalendarCard
-              configured={calendarConfigured}
-              connected={calendarConnected}
-              status={calendar}
-              onConnect={() => void connectCalendar()}
-              onSync={() => void syncCalendar()}
-            />
           </>
         ) : null}
 
         {view === "chores" ? (
-          <ChoresPage
-            chores={state.chores || []}
-            state={state}
-            busy={actionBusy}
-            onCreate={createChore}
-            onOpen={(task) => setSelectedItem({ type: "task", item: task })}
-            onToggle={(task) =>
-              void updateItem(
-                { type: "task", item: task },
-                task.status === "completed" ? "reopen" : "complete",
-              )
-            }
-          />
+          loadedSections.has("chores") ? (
+            <ChoresPage
+              chores={state.chores || []}
+              state={state}
+              createBusy={isActionPending("chore:create")}
+              isItemBusy={(id) => isActionPending(`item:${id}`)}
+              onCreate={createChore}
+              onOpen={openTask}
+              onToggle={(task) =>
+                void updateItem(
+                  { type: "task", item: task },
+                  task.status === "completed" ? "reopen" : "complete",
+                )
+              }
+            />
+          ) : (
+            <SectionLoading label="Opening family chores" active={loadingSections.has("chores")} />
+          )
         ) : null}
 
         {view === "meals" ? (
-          <MealsPage
-            meals={state.meals || []}
-            mealNeeds={state.mealNeeds || []}
-            groceries={state.groceries || []}
-            state={state}
-            busy={actionBusy}
-            onSaveMeal={saveMeal}
-            onSaveNeed={saveMealNeed}
-            onRemoveNeed={removeMealNeed}
-            onGenerate={generateMealPlan}
-            onCreateGrocery={createGrocery}
-            onChangeGrocery={changeGrocery}
-          />
+          loadedSections.has("meals") ? (
+            <MealsPage
+              meals={state.meals || []}
+              mealNeeds={state.mealNeeds || []}
+              groceries={state.groceries || []}
+              state={state}
+              isPending={isActionPending}
+              onSaveMeal={saveMeal}
+              onSaveNeed={saveMealNeed}
+              onRemoveNeed={removeMealNeed}
+              onGenerate={generateMealPlan}
+              onCreateGrocery={createGrocery}
+              onChangeGrocery={changeGrocery}
+            />
+          ) : (
+            <SectionLoading label="Opening this week’s meals" active={loadingSections.has("meals")} />
+          )
         ) : null}
 
         {view === "work" && actorIsAdult ? (
           <WorkPage
             tasks={[...(state.familyTasks || []), ...(state.privateTasks || [])]}
             state={state}
-            onOpen={(task) => setSelectedItem({ type: "task", item: task })}
+            onOpen={openTask}
           />
         ) : null}
 
@@ -2889,24 +3151,28 @@ export function PepperClient() {
         ) : null}
 
         {view === "setup" && actorIsAdult ? (
-          <FamilySetupPage
-            state={state}
-            busy={actionBusy}
-            onBack={() => setView("family")}
-            onSave={saveMemberSetup}
-            onPhotoUpload={saveProfilePhoto}
-            onPhotoRemove={removeProfilePhoto}
-          />
+          loadedSections.has("family") ? (
+            <FamilySetupPage
+              state={state}
+              isPending={isActionPending}
+              onBack={() => setView("family")}
+              onSave={saveMemberSetup}
+              onPhotoUpload={saveProfilePhoto}
+              onPhotoRemove={removeProfilePhoto}
+            />
+          ) : (
+            <SectionLoading label="Opening family setup" active={loadingSections.has("family")} />
+          )
         ) : null}
 
         {view === "member" ? (
           <MemberPage
             state={memberState}
             busy={memberBusy}
-            actionBusy={actionBusy}
+            isPending={isActionPending}
             household={state}
             onBack={() => setView("family")}
-            onOpen={setSelectedItem}
+            onOpen={openSelectedItem}
             onCreateChore={createChore}
             onCreatePersonalTask={createPersonalTask}
             onPhotoUpload={saveProfilePhoto}
@@ -2915,31 +3181,85 @@ export function PepperClient() {
         ) : null}
 
         {view === "connections" ? (
-          <ConnectionsPage
-            calendar={calendar}
-            gmail={state.integrations?.gmail}
-            health={state.integrations?.apple_health}
-            healthSetup={healthSetup}
-            nativeHealthAvailable={Boolean(nativeHealthMessageHandler())}
-            member={state.member}
-            members={state.members}
-            onCalendar={() =>
-              void (calendarConnected ? syncCalendar() : connectCalendar())
-            }
-            onEmail={() => void connectEmail()}
-            onHealth={() => void pairHealth()}
-            onFamily={() => setView("family")}
-            onDeleteAccount={deleteAccount}
-            deletingAccount={actionBusy}
-          />
+          loadedSections.has("connections") ? (
+            <ConnectionsPage
+              calendar={calendar}
+              gmail={state.integrations?.gmail}
+              health={state.integrations?.apple_health}
+              healthSetup={healthSetup}
+              nativeHealthAvailable={Boolean(nativeHealthMessageHandler())}
+              member={state.member}
+              members={state.members}
+              isPending={isActionPending}
+              onCalendar={() =>
+                void (calendarConnected ? syncCalendar() : connectCalendar())
+              }
+              onEmail={() => void connectEmail()}
+              onHealth={() => void pairHealth()}
+              onFamily={() => setView("family")}
+              onDeleteAccount={deleteAccount}
+            />
+          ) : (
+            <SectionLoading label="Checking connections" active={loadingSections.has("connections")} />
+          )
         ) : null}
       </div>
+
+      {mobileMoreOpen ? (
+        <div
+          className={`${styles.sheetBackdrop} ${styles.mobileMoreBackdrop}`}
+          onMouseDown={() => setMobileMoreOpen(false)}
+        >
+          <section
+            className={`${styles.actionSheet} ${styles.mobileMoreSheet}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pepper-more-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              className={styles.sheetClose}
+              aria-label="Close more sections"
+              onClick={() => setMobileMoreOpen(false)}
+            >
+              <X size={20} aria-hidden="true" />
+            </button>
+            <div className={styles.eyebrow}>Navigate</div>
+            <h2 id="pepper-more-title">More from Pepper</h2>
+            <nav className={styles.mobileMoreList} aria-label="More Pepper sections">
+              {mobileMoreNavigation.map(([key, label, Icon]) => {
+                const isActive =
+                  view === key ||
+                  (["member", "setup"].includes(view) && key === "family");
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-current={isActive ? "page" : undefined}
+                    onClick={() => {
+                      setView(key as View);
+                      setMobileMoreOpen(false);
+                    }}
+                  >
+                    <span>
+                      <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
+                      <strong>{label}</strong>
+                    </span>
+                    <ChevronRight size={18} aria-hidden="true" />
+                  </button>
+                );
+              })}
+            </nav>
+          </section>
+        </div>
+      ) : null}
 
       {selectedItem ? (
         <ItemActionSheet
           selected={selectedItem}
           state={state}
-          busy={actionBusy}
+          busy={isActionPending(`item:${selectedItem.item.id}`)}
           onClose={() => setSelectedItem(null)}
           onUpdate={(operation, changes) =>
             updateItem(selectedItem, operation, changes)
@@ -2951,7 +3271,13 @@ export function PepperClient() {
         <ConflictResolutionSheet
           item={conflictResolution}
           state={state}
-          busy={actionBusy}
+          busy={isActionPending(
+            `conflict:${
+              "id" in conflictResolution
+                ? conflictResolution.id
+                : conflictResolution.consequence_id || ""
+            }`,
+          )}
           onClose={() => setConflictResolution(null)}
           onResolve={(keepEventId, rejectEventId) =>
             resolveConflict(conflictResolution, keepEventId, rejectEventId)
@@ -2962,7 +3288,7 @@ export function PepperClient() {
       {frontSeatOpen && state.frontSeat ? (
         <FrontSeatSheet
           frontSeat={state.frontSeat}
-          busy={actionBusy}
+          busy={isActionPending("front-seat")}
           onClose={() => setFrontSeatOpen(false)}
           onUpdate={updateFrontSeat}
         />
@@ -2979,13 +3305,28 @@ export function PepperClient() {
           {message ? (
             <div className={styles.toast} role="status">
               <span>{message}</span>
-              <button
-                type="button"
-                onClick={() => setMessage("")}
-                aria-label="Dismiss message"
-              >
-                <X size={15} aria-hidden="true" />
-              </button>
+              <div className={styles.toastActions}>
+                {message.includes("Pepper Inbox") ? (
+                  <button
+                    type="button"
+                    className={styles.toastLink}
+                    onClick={() => {
+                      setView("today");
+                      setInboxOpen(true);
+                    }}
+                  >
+                    Open Inbox
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={styles.toastDismiss}
+                  onClick={() => setMessage("")}
+                  aria-label="Dismiss message"
+                >
+                  <X size={15} aria-hidden="true" />
+                </button>
+              </div>
             </div>
           ) : null}
           <div className={styles.composeInner}>
@@ -3018,6 +3359,15 @@ export function PepperClient() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function SectionLoading({ label, active }: { label: string; active: boolean }) {
+  return (
+    <section className={styles.sectionLoading} aria-live="polite">
+      <span aria-hidden="true" />
+      <strong>{active ? `${label}…` : label}</strong>
+    </section>
   );
 }
 
@@ -3116,7 +3466,6 @@ function MorningBriefPanel({
   onOpenItem,
   onOpenAttention,
   onMeals,
-  onWeek,
   onMember,
 }: {
   state: PepperState;
@@ -3126,7 +3475,6 @@ function MorningBriefPanel({
   onOpenItem: (item: SelectedItem) => void;
   onOpenAttention: (item: AttentionItem) => void;
   onMeals: () => void;
-  onWeek: () => void;
   onMember: () => void;
 }) {
   const today = localDate();
@@ -3199,9 +3547,6 @@ function MorningBriefPanel({
     (item) => !item.owner_member_id,
   );
   const latestHealth = state.integrations?.apple_health?.latest;
-  const horizonDays = (state.horizon?.days || [])
-    .filter((day) => day.date > today)
-    .slice(0, 4);
   const nextEvent = activeEvents[0];
   const nextTask = focusTasks[0];
   const firstAttention = openConsequences[0];
@@ -3410,7 +3755,7 @@ function MorningBriefPanel({
             )}
           </BriefSection>
 
-          <BriefSection title="Confirm + think ahead" tone="coral">
+          <BriefSection title="Decide + prepare" tone="coral">
             {openConsequences.length || relevantPreparation.length ? (
               <>
                 {openConsequences.slice(0, 3).map((item) => (
@@ -3469,33 +3814,6 @@ function MorningBriefPanel({
                 {mealGroceries.length > 4 ? ` +${mealGroceries.length - 4} more` : ""}
               </p>
             ) : null}
-          </BriefSection>
-
-          <BriefSection title="No-surprises horizon" tone="blue">
-            <button
-              type="button"
-              className={styles.morningBriefFeature}
-              onClick={onWeek}
-            >
-              <CalendarRange size={20} aria-hidden="true" />
-              <span>
-                <strong>{morning?.tomorrow?.headline || "Open the next seven days"}</strong>
-                <small>Family events, appointments, exceptions, and decisions.</small>
-              </span>
-              <ChevronRight size={16} aria-hidden="true" />
-            </button>
-            {horizonDays.map((day) => {
-              const familyItems = (day.items || []).filter(
-                (item) => item.item_type !== "task",
-              );
-              const count = familyItems.length + (day.watch || []).length;
-              return count ? (
-                <div className={styles.morningBriefHorizonRow} key={day.date}>
-                  <strong>{day.label || dateLabel(day.date)}</strong>
-                  <span>{countLabel(count, "known family item")}</span>
-                </div>
-              ) : null;
-            })}
           </BriefSection>
 
           <BriefSection title="Evening self-care" tone="lavender">
@@ -3581,14 +3899,10 @@ function EveningReflectionOutput({
   state,
   input,
   evening,
-  tomorrowHeadline,
-  onTomorrow,
 }: {
   state: PepperState;
   input: string;
   evening?: EveningRitual;
-  tomorrowHeadline: string;
-  onTomorrow: () => void;
 }) {
   const today = localDate();
   const taskMap = new Map<string, FamilyTask>();
@@ -3682,12 +3996,9 @@ function EveningReflectionOutput({
       <section>
         <h3>Future {person}</h3>
         <p>
-          {tomorrowHeadline ||
+          {evening?.tomorrow_headline ||
             "Begin with a short exact-state check, protect the first commitment, and carry forward only verified gaps."}
         </p>
-        <button type="button" className={styles.textButton} onClick={onTomorrow}>
-          Open tomorrow&apos;s plan <ChevronRight size={16} aria-hidden="true" />
-        </button>
       </section>
 
       <footer className={styles.eveningFreshness}>
@@ -4052,12 +4363,12 @@ function ConnectionsPage({
   nativeHealthAvailable,
   member,
   members,
+  isPending,
   onCalendar,
   onEmail,
   onHealth,
   onFamily,
   onDeleteAccount,
-  deletingAccount,
 }: {
   calendar?: CalendarStatus;
   gmail?: NonNullable<PepperState["integrations"]>["gmail"];
@@ -4066,12 +4377,12 @@ function ConnectionsPage({
   nativeHealthAvailable: boolean;
   member: PepperState["member"];
   members: PepperState["members"];
+  isPending: (key: string) => boolean;
   onCalendar: () => void;
   onEmail: () => void;
   onHealth: () => void;
   onFamily: () => void;
   onDeleteAccount: (confirmation: string) => Promise<boolean>;
-  deletingAccount: boolean;
 }) {
   const [openProvider, setOpenProvider] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -4128,13 +4439,15 @@ function ConnectionsPage({
       ],
       sharing:
         "Calendar evidence keeps the household or private visibility of the family item it supports.",
-      feeds: ["Today", "Next 7", "Month", "Family schedules"],
+      feeds: ["Today", "Morning brief", "Family pages"],
       action: calendar?.connected
         ? "Refresh"
         : calendar?.configured
           ? "Connect"
           : "Setup pending",
-      actionDisabled: !calendar?.configured,
+      actionDisabled:
+        !calendar?.configured || isPending("connection:calendar"),
+      actionBusy: isPending("connection:calendar"),
       actionIcon: calendar?.connected ? <RefreshCw size={15} /> : <Plus size={15} />,
       onAction: onCalendar,
     },
@@ -4187,7 +4500,9 @@ function ConnectionsPage({
           : canConnectEmail
             ? "Setup pending"
             : undefined,
-      actionDisabled: !gmail?.configured || !canConnectEmail,
+      actionDisabled:
+        !gmail?.configured || !canConnectEmail || isPending("connection:email"),
+      actionBusy: isPending("connection:email"),
       actionIcon: <Plus size={15} />,
       onAction: onEmail,
     },
@@ -4220,7 +4535,7 @@ function ConnectionsPage({
       ],
       sharing:
         "School logistics are shared only with members of this Pepper household.",
-      feeds: ["Today", "Next 7", "Family pages"],
+      feeds: ["Today", "Morning brief", "Family pages"],
       action: "Open family",
       actionIcon: <UsersRound size={15} />,
       onAction: onFamily,
@@ -4234,14 +4549,18 @@ function ConnectionsPage({
       identifier: health?.connected
         ? `Last received ${health.latest?.metric_date || "recently"}`
         : nativeHealthAvailable
-          ? "This iPhone · HealthKit"
-        : health?.status === "pending"
+          ? health?.status === "pending"
+            ? "This iPhone · Health access incomplete"
+            : "This iPhone · HealthKit"
+          : health?.status === "pending"
           ? "Apple Health Shortcut waiting"
           : "This iPhone",
       summary: health?.connected
         ? "Approved daily steps, goals, and active minutes are reaching Pepper."
         : nativeHealthAvailable
-          ? "Read your approved daily steps and exercise minutes directly from Apple Health."
+          ? health?.status === "pending"
+            ? "No activity has reached Pepper yet. Try again and approve Steps and Exercise in Health."
+            : "Read your approved daily steps and exercise minutes directly from Apple Health."
           : "A private iPhone pathway for steps, goals, and active minutes.",
       state: health?.connected
         ? "connected"
@@ -4251,7 +4570,9 @@ function ConnectionsPage({
       statusLabel: health?.connected
         ? "Connected"
         : health?.status === "pending"
-          ? "Pairing ready"
+          ? nativeHealthAvailable
+            ? "Needs attention"
+            : "Pairing ready"
           : "Not connected",
       owner: displayName(member),
       privacy: "Private",
@@ -4279,9 +4600,13 @@ function ConnectionsPage({
       action: health?.connected
         ? "Refresh"
         : nativeHealthAvailable
-          ? "Connect"
+          ? health?.status === "pending"
+            ? "Try again"
+            : "Connect"
           : "Set up Shortcut",
       actionIcon: health?.connected ? <RefreshCw size={15} /> : <Plus size={15} />,
+      actionDisabled: isPending("connection:health"),
+      actionBusy: isPending("connection:health"),
       onAction: onHealth,
     },
   ];
@@ -4291,6 +4616,7 @@ function ConnectionsPage({
   ).length;
   const selectedProvider =
     providers.find((provider) => provider.id === openProvider) || null;
+  const deletingAccount = isPending("account:delete");
 
   function runProviderAction(provider: ConnectionProviderView) {
     if (provider.actionDisabled || !provider.onAction) return;
@@ -4468,6 +4794,7 @@ type ConnectionProviderView = {
   feeds: string[];
   action?: string;
   actionDisabled?: boolean;
+  actionBusy?: boolean;
   actionIcon?: React.ReactNode;
   onAction?: () => void;
 };
@@ -4534,7 +4861,7 @@ function ConnectionCard({
               onClick={onAction}
             >
               {provider.actionIcon}
-              {provider.action}
+              {provider.actionBusy ? "Working…" : provider.action}
             </button>
           ) : null}
         </div>
@@ -4626,7 +4953,7 @@ function ConnectionDetailDrawer({
               onClick={onAction}
             >
               {provider.actionIcon}
-              {provider.action}
+              {provider.actionBusy ? "Working…" : provider.action}
             </button>
           ) : null}
         </footer>
@@ -4741,9 +5068,9 @@ function WorkPage({
                     <WorkTaskRow
                       key={task.id}
                       task={task}
-                      state={state}
+                      members={state.members}
                       priority={group.key}
-                      onOpen={() => onOpen(task)}
+                      onOpen={onOpen}
                     />
                   ))}
                 </div>
@@ -4782,9 +5109,9 @@ function WorkPage({
               <WorkTaskRow
                 key={task.id}
                 task={task}
-                state={state}
+                members={state.members}
                 priority={workPriority(task)}
-                onOpen={() => onOpen(task)}
+                onOpen={onOpen}
               />
             ))}
           </div>
@@ -4794,20 +5121,22 @@ function WorkPage({
   );
 }
 
-function WorkTaskRow({
+const WorkTaskRow = memo(function WorkTaskRow({
   task,
-  state,
+  members,
   priority,
   onOpen,
 }: {
   task: FamilyTask;
-  state: PepperState;
+  members: PepperState["members"];
   priority: ReturnType<typeof workPriority>;
-  onOpen: () => void;
+  onOpen: (task: FamilyTask) => void;
 }) {
-  const owner = memberName(state, task.owner_member_id);
+  const owner = displayName(
+    members.find((member) => member.id === task.owner_member_id),
+  );
   return (
-    <button type="button" className={styles.workTaskRow} onClick={onOpen}>
+    <button type="button" className={styles.workTaskRow} onClick={() => onOpen(task)}>
       <span
         className={styles.workPriorityMark}
         data-priority={priority}
@@ -4827,21 +5156,23 @@ function WorkTaskRow({
       <ChevronRight size={18} aria-hidden="true" />
     </button>
   );
-}
+});
 
 type ChoreFilter = "today" | "week" | "all";
 
 function ChoresPage({
   chores,
   state,
-  busy,
+  createBusy,
+  isItemBusy,
   onCreate,
   onOpen,
   onToggle,
 }: {
   chores: FamilyTask[];
   state: PepperState;
-  busy: boolean;
+  createBusy: boolean;
+  isItemBusy: (id: string) => boolean;
   onCreate: (draft: ChoreDraft) => Promise<boolean>;
   onOpen: (task: FamilyTask) => void;
   onToggle: (task: FamilyTask) => void;
@@ -4903,10 +5234,11 @@ function ChoresPage({
             <ChoreRow
               key={task.id}
               task={task}
-              state={state}
-              busy={busy}
-              onOpen={() => onOpen(task)}
-              onToggle={() => onToggle(task)}
+              members={state.members}
+              actor={state.member}
+              busy={isItemBusy(task.id)}
+              onOpen={onOpen}
+              onToggle={onToggle}
             />
           ))
         ) : (
@@ -4938,11 +5270,12 @@ function ChoresPage({
             <ChoreRow
               key={task.id}
               task={task}
-              state={state}
-              busy={busy}
+              members={state.members}
+              actor={state.member}
+              busy={isItemBusy(task.id)}
               quiet
-              onOpen={() => onOpen(task)}
-              onToggle={() => onToggle(task)}
+              onOpen={onOpen}
+              onToggle={onToggle}
             />
           ))}
         </details>
@@ -4952,7 +5285,7 @@ function ChoresPage({
         <ChoreComposer
           members={state.members}
           actor={state.member}
-          busy={busy}
+          busy={createBusy}
           onClose={() => setComposerOpen(false)}
           onCreate={async (draft) => {
             const created = await onCreate(draft);
@@ -4964,27 +5297,29 @@ function ChoresPage({
   );
 }
 
-function ChoreRow({
+const ChoreRow = memo(function ChoreRow({
   task,
-  state,
+  members,
+  actor,
   busy,
   quiet = false,
   onOpen,
   onToggle,
 }: {
   task: FamilyTask;
-  state: PepperState;
+  members: PepperState["members"];
+  actor: PepperState["member"];
   busy: boolean;
   quiet?: boolean;
-  onOpen: () => void;
-  onToggle: () => void;
+  onOpen: (task: FamilyTask) => void;
+  onToggle: (task: FamilyTask) => void;
 }) {
-  const owner = state.members.find((member) => member.id === task.owner_member_id);
-  const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+  const owner = members.find((member) => member.id === task.owner_member_id);
+  const actorIsAdult = ["adult_admin", "adult"].includes(actor.role);
   const canChange =
     actorIsAdult ||
-    task.owner_member_id === state.member.id ||
-    task.creator_member_id === state.member.id;
+    task.owner_member_id === actor.id ||
+    task.creator_member_id === actor.id;
   const completed = task.status === "completed";
   const canceled = task.status === "canceled";
   const schedule = choreSchedule(task);
@@ -4996,11 +5331,11 @@ function ChoreRow({
         className={`${styles.choreCheck} ${completed ? styles.choreCheckDone : ""}`}
         disabled={busy || !canChange}
         aria-label={completed ? `Restore ${task.title}` : canceled ? `Open ${task.title}` : `Complete ${task.title}`}
-        onClick={canceled ? onOpen : onToggle}
+        onClick={() => (canceled ? onOpen(task) : onToggle(task))}
       >
         {completed ? <Check size={17} aria-hidden="true" /> : canceled ? <CircleX size={16} aria-hidden="true" /> : null}
       </button>
-      <button type="button" className={styles.choreBody} onClick={onOpen}>
+      <button type="button" className={styles.choreBody} onClick={() => onOpen(task)}>
         <strong>{task.title}</strong>
         <small>{canceled ? "Canceled" : completed ? "Completed" : task.status === "on_hold" ? "On hold" : schedule}</small>
       </button>
@@ -5008,14 +5343,14 @@ function ChoreRow({
         type="button"
         className={`${styles.choreOwner} ${owner ? "" : styles.choreOwnerEmpty}`}
         data-member={owner?.slug || "unassigned"}
-        onClick={onOpen}
+        onClick={() => onOpen(task)}
         aria-label={owner ? `Assigned to ${displayName(owner)}` : `Assign ${task.title}`}
       >
         {owner ? displayName(owner) : <><Plus size={15} aria-hidden="true" /> Assign</>}
       </button>
     </article>
   );
-}
+});
 
 function choreSchedule(task: FamilyTask) {
   const due = localDateFor(task.due_at);
@@ -5198,7 +5533,7 @@ function MealsPage({
   mealNeeds,
   groceries,
   state,
-  busy,
+  isPending,
   onSaveMeal,
   onSaveNeed,
   onRemoveNeed,
@@ -5210,7 +5545,7 @@ function MealsPage({
   mealNeeds: MealNeed[];
   groceries: GroceryItem[];
   state: PepperState;
-  busy: boolean;
+  isPending: (key: string) => boolean;
   onSaveMeal: (draft: MealDraft) => Promise<boolean>;
   onSaveNeed: (draft: MealNeedDraft) => Promise<boolean>;
   onRemoveNeed: (id: string) => Promise<void>;
@@ -5223,6 +5558,7 @@ function MealsPage({
   ) => Promise<void>;
 }) {
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+  const planBusy = isPending("meal-plan");
   const [mealDraft, setMealDraft] = useState<MealDraft | null>(null);
   const [needComposerOpen, setNeedComposerOpen] = useState(false);
   const [groceryComposerOpen, setGroceryComposerOpen] = useState(false);
@@ -5269,11 +5605,11 @@ function MealsPage({
             <button
               type="button"
               className={styles.generateMealButton}
-              disabled={busy}
+              disabled={planBusy}
               onClick={() => void onGenerate()}
             >
               <Sparkles size={16} aria-hidden="true" />
-              {busy ? "Planning…" : hasPlannedWeek ? "Refresh week" : "Plan my week"}
+              {planBusy ? "Planning…" : hasPlannedWeek ? "Refresh week" : "Plan my week"}
             </button>
           ) : null}
         </div>
@@ -5359,7 +5695,7 @@ function MealsPage({
                       <button
                         type="button"
                         aria-label={`Remove ${need.label}`}
-                        disabled={busy}
+                        disabled={isPending(`meal-need:${need.id}`)}
                         onClick={() => void onRemoveNeed(need.id)}
                       >
                         <X size={14} aria-hidden="true" />
@@ -5396,6 +5732,7 @@ function MealsPage({
         <div className={styles.groceryList}>
           {weekGroceries.length ? (
             displayedGroceries.map((item) => {
+              const groceryBusy = isPending(`grocery:${item.id}`);
               const completed = item.status === "completed";
               const canComplete =
                 actorIsAdult || !item.owner_member_id || item.owner_member_id === state.member.id;
@@ -5409,7 +5746,7 @@ function MealsPage({
                     type="button"
                     className={`${styles.groceryCheck} ${completed ? styles.groceryCheckDone : ""}`}
                     aria-label={completed ? `Restore ${item.item}` : `Complete ${item.item}`}
-                    disabled={busy || !canComplete}
+                    disabled={groceryBusy || !canComplete}
                     onClick={() =>
                       void onChangeGrocery(item.id, completed ? "reopen" : "complete")
                     }
@@ -5426,7 +5763,7 @@ function MealsPage({
                         <span>Meal</span>
                         <select
                           value={item.meal_plan_id || ""}
-                          disabled={busy}
+                          disabled={groceryBusy}
                           onChange={(event) =>
                             void onChangeGrocery(item.id, "attach", event.target.value)
                           }
@@ -5441,7 +5778,7 @@ function MealsPage({
                         <span>Owner</span>
                         <select
                           value={item.owner_member_id || ""}
-                          disabled={busy}
+                          disabled={groceryBusy}
                           onChange={(event) =>
                             void onChangeGrocery(item.id, "assign", event.target.value)
                           }
@@ -5485,7 +5822,7 @@ function MealsPage({
           draft={mealDraft}
           members={state.members}
           mealNeeds={mealNeeds}
-          busy={busy}
+          busy={isPending(`meal:${mealDraft.mealDate}`)}
           onClose={() => setMealDraft(null)}
           onSave={async (draft) => {
             const saved = await onSaveMeal(draft);
@@ -5496,7 +5833,7 @@ function MealsPage({
       {needComposerOpen ? (
         <MealNeedComposer
           members={state.members}
-          busy={busy}
+          busy={isPending("meal-need:create")}
           onClose={() => setNeedComposerOpen(false)}
           onSave={async (draft) => {
             const saved = await onSaveNeed(draft);
@@ -5509,7 +5846,7 @@ function MealsPage({
           meals={weekMeals.flatMap(({ meal }) => (meal ? [meal] : []))}
           members={state.members}
           actor={state.member}
-          busy={busy}
+          busy={isPending("grocery:create")}
           onClose={() => setGroceryComposerOpen(false)}
           onSave={async (draft) => {
             const saved = await onCreateGrocery(draft);
@@ -5739,14 +6076,14 @@ function setupDraft(
 
 function FamilySetupPage({
   state,
-  busy,
+  isPending,
   onBack,
   onSave,
   onPhotoUpload,
   onPhotoRemove,
 }: {
   state: PepperState;
-  busy: boolean;
+  isPending: (key: string) => boolean;
   onBack: () => void;
   onSave: (draft: MemberSetupDraft) => Promise<boolean>;
   onPhotoUpload: (memberId: string, file: File) => Promise<boolean>;
@@ -5764,6 +6101,10 @@ function FamilySetupPage({
   const [draft, setDraft] = useState<MemberSetupDraft>(() =>
     setupDraft(selectedMember, selectedProfile),
   );
+  const saveBusy = isPending(`member-setup:${draft.memberId || "new"}`);
+  const photoBusy = selectedMember
+    ? isPending(`photo:${selectedMember.id}`)
+    : false;
 
   function chooseMember(memberId: string) {
     setSelectedMemberId(memberId);
@@ -5831,7 +6172,7 @@ function FamilySetupPage({
               <ProfilePhotoPicker
                 name={displayName(selectedMember)}
                 photoUrl={selectedProfile?.avatar_url}
-                busy={busy}
+                busy={photoBusy}
                 onSelect={(file) => void onPhotoUpload(selectedMember.id, file)}
                 onRemove={() => void onPhotoRemove(selectedMember.id)}
               />
@@ -5903,8 +6244,8 @@ function FamilySetupPage({
 
           <div className={styles.setupActions}>
             <span><LockKeyhole size={15} aria-hidden="true" /> Medications stay private to the member and adults.</span>
-            <button type="submit" disabled={busy || !draft.displayName.trim() || (!draft.memberId && draft.pin.length < 4)}>
-              <Check size={17} aria-hidden="true" /> {busy ? "Saving…" : "Save family details"}
+            <button type="submit" disabled={saveBusy || !draft.displayName.trim() || (!draft.memberId && draft.pin.length < 4)}>
+              <Check size={17} aria-hidden="true" /> {saveBusy ? "Saving…" : "Save family details"}
             </button>
           </div>
         </form>
@@ -6006,7 +6347,7 @@ function isChore(task: FamilyTask) {
 function MemberPage({
   state,
   busy,
-  actionBusy,
+  isPending,
   household,
   onBack,
   onOpen,
@@ -6017,7 +6358,7 @@ function MemberPage({
 }: {
   state: MemberState | null;
   busy: boolean;
-  actionBusy: boolean;
+  isPending: (key: string) => boolean;
   household: PepperState;
   onBack: () => void;
   onOpen: (item: SelectedItem) => void;
@@ -6058,7 +6399,7 @@ function MemberPage({
           <ProfilePhotoPicker
             name={displayName(state.member)}
             photoUrl={state.setup?.avatar_url}
-            busy={actionBusy}
+            busy={isPending(`photo:${state.member.id}`)}
             compact
             onSelect={(file) => void onPhotoUpload(state.member.id, file)}
             onRemove={() => void onPhotoRemove(state.member.id)}
@@ -6237,7 +6578,7 @@ function MemberPage({
           members={household.members}
           actor={household.member}
           initialOwnerMemberId={state.member.id}
-          busy={actionBusy}
+          busy={isPending("chore:create")}
           onClose={() => setChoreComposerOpen(false)}
           onCreate={async (draft) => {
             const created = await onCreateChore(draft);
@@ -6248,7 +6589,7 @@ function MemberPage({
 
       {todoComposerOpen ? (
         <PersonalTaskComposer
-          busy={actionBusy}
+          busy={isPending("personal-task:create")}
           onClose={() => setTodoComposerOpen(false)}
           onCreate={async (draft) => {
             const created = await onCreatePersonalTask(draft);
@@ -6818,177 +7159,6 @@ function ConflictResolutionSheet({
   );
 }
 
-function HorizonRow({
-  item,
-  onOpen,
-}: {
-  item: HorizonRowItem;
-  onOpen?: (item: HorizonRowItem) => void;
-}) {
-  const driver = productNameText(item.transport_owner_name);
-  const label =
-    item.item_type === "task"
-      ? "Task"
-      : item.item_type === "watch"
-        ? "Coming up"
-        : item.item_type === "school_schedule"
-          ? item.schedule_kind === "no_school"
-            ? "No school"
-            : item.resolution_level === "dated_exception"
-              ? "School schedule change"
-              : "Weekly school rule"
-        : item.source === "routine"
-          ? "Routine"
-          : "Plan";
-  const className = `${styles.horizonRow} ${
-    item.resolution_level === "dated_exception" ? styles.horizonRowAlert : ""
-  } ${onOpen ? styles.horizonRowAction : ""}`;
-  const content = (
-    <>
-      <div className={styles.horizonTime}>
-        {item.item_type === "watch"
-          ? "—"
-          : item.all_day
-            ? "All day"
-            : time(item.starts_at)}
-      </div>
-      <div>
-        <strong>{productNameText(item.title)}</strong>
-        {item.detail ? <p className={styles.horizonDetail}>{productNameText(item.detail)}</p> : null}
-        <div className={styles.horizonMeta}>
-          <span>{label}</span>
-          {item.location ? <span>{item.location}</span> : null}
-          {driver ? <span>{driver} owns it</span> : null}
-        </div>
-      </div>
-      {onOpen ? <ChevronRight className={styles.rowChevron} size={18} /> : null}
-    </>
-  );
-  return onOpen ? (
-    <button type="button" className={className} onClick={() => onOpen(item)}>
-      {content}
-    </button>
-  ) : (
-    <div className={className}>{content}</div>
-  );
-}
-
-function isFamilyWeekItem(item: HorizonRowItem) {
-  if (item.item_type === "task") return false;
-  const kind = (item.kind || "").toLowerCase();
-  const title = item.title.toLowerCase();
-  if (/work|task|chore/.test(kind)) return false;
-  if (/\bcw warren\b|\bhouse reset\b/.test(title)) return false;
-  return true;
-}
-
-function HorizonDayCard({
-  day,
-  onOpenEvent,
-}: {
-  day: HorizonDay;
-  onOpenEvent: (item: HorizonRowItem) => void;
-}) {
-  const items = uniqueHorizonItems((day.items || []).filter(isFamilyWeekItem));
-  const groupedDropoffs = items.filter(
-    (item) =>
-      item.source === "routine" &&
-      item.kind === "school_dropoff" &&
-      Boolean(item.transport_owner_name),
-  );
-  const groupedPickups = items.filter(
-    (item) =>
-      item.source === "routine" &&
-      item.kind === "school_pickup" &&
-      Boolean(item.transport_owner_name),
-  );
-  const groupedIds = new Set(
-    [...groupedDropoffs, ...groupedPickups].map((item) => item.id),
-  );
-  const visibleItems = items.filter((item) => !groupedIds.has(item.id));
-  const knownCount = items.length + (day.watch?.length || 0);
-
-  return (
-    <article className={styles.dayCard}>
-      <div className={styles.dayHeading}>
-        <strong>{day.label}</strong>
-        <span>{knownCount} known</span>
-      </div>
-      {groupedDropoffs.length ? (
-        <HorizonSchoolTransportGroup
-          items={groupedDropoffs}
-          label="School drop-off"
-        />
-      ) : null}
-      {groupedPickups.length ? (
-        <HorizonSchoolTransportGroup
-          items={groupedPickups}
-          label="School pickup"
-        />
-      ) : null}
-      {visibleItems.map((item) => (
-        <HorizonRow
-          key={item.id}
-          item={item}
-          onOpen={
-            item.item_type === "event" || item.item_type === "school_schedule"
-              ? onOpenEvent
-              : undefined
-          }
-        />
-      ))}
-      {day.watch?.map((item) => (
-        <HorizonRow
-          key={`watch-${item.id}`}
-          item={{
-            ...item,
-            starts_at: `${item.date}T12:00:00Z`,
-            title: item.title,
-            item_type: "watch",
-          }}
-        />
-      ))}
-      {!knownCount ? <div className={styles.emptyDay}>Open.</div> : null}
-    </article>
-  );
-}
-
-function HorizonSchoolTransportGroup({
-  items,
-  label,
-}: {
-  items: HorizonRowItem[];
-  label: "School drop-off" | "School pickup";
-}) {
-  const drivers = Array.from(
-    new Set(items.map((item) => productNameText(item.transport_owner_name)).filter(Boolean)),
-  );
-  const countLabel =
-    label === "School drop-off"
-      ? "Confirmed daily route"
-      : `${items.length} ${items.length === 1 ? "pickup" : "pickups"}`;
-
-  return (
-    <details className={styles.horizonTransportGroup}>
-      <summary>
-        <span>
-          <strong>{label}</strong>
-          <small>
-            {countLabel}
-            {drivers.length ? ` · ${drivers.join(" + ")} driving` : ""}
-          </small>
-        </span>
-        <ChevronRight size={18} aria-hidden="true" />
-      </summary>
-      <div className={styles.horizonTransportDetails}>
-        {items.map((item) => (
-          <HorizonRow item={item} key={item.id} />
-        ))}
-      </div>
-    </details>
-  );
-}
-
 function CheckRow({
   label,
   checked,
@@ -7007,70 +7177,5 @@ function CheckRow({
       />
       <span>{label}</span>
     </label>
-  );
-}
-
-function CalendarCard({
-  configured,
-  connected,
-  status,
-  onConnect,
-  onSync,
-}: {
-  configured: boolean;
-  connected: boolean;
-  status?: CalendarStatus;
-  onConnect: () => void;
-  onSync: () => void;
-}) {
-  return (
-    <section className={styles.section}>
-      <div className={styles.sectionLabel}>Calendar coverage</div>
-      <article className={styles.calendarCard}>
-        <div>
-          <strong>
-            {connected
-              ? status?.connection?.calendar_name || "Google Calendar connected"
-              : configured
-                ? "Add Google Calendar"
-                : "Google Calendar setup pending"}
-          </strong>
-          <p>
-            {connected
-              ? `Last scan ${
-                  status?.connection?.last_synced_at
-                    ? new Intl.DateTimeFormat("en-US", {
-                        timeZone: TZ,
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      }).format(
-                        new Date(status.connection.last_synced_at),
-                      )
-                    : "has not completed yet"
-                }.`
-              : configured
-                ? "Connect your primary calendar so Pepper can compare the next two weeks with the family plan."
-                : "The Pepper calendar engine is built, but Google OAuth credentials still need to be configured before connection can begin."}
-          </p>
-        </div>
-        {connected ? (
-          <button type="button" className={styles.secondaryButton} onClick={onSync}>
-            Refresh
-          </button>
-        ) : configured ? (
-          <button
-            type="button"
-            className={styles.primaryButtonSmall}
-            onClick={onConnect}
-          >
-            Connect
-          </button>
-        ) : (
-          <span className={styles.setupPill}>Backend setup</span>
-        )}
-      </article>
-    </section>
   );
 }

@@ -179,6 +179,8 @@ Deno.serve(async (req: Request) => {
             and status <> 'canceled'
             and starts_at >= (${start}::date::timestamp at time zone ${TZ})
             and starts_at < ((${end30}::date + 1)::timestamp at time zone ${TZ})
+            and lower(coalesce(kind, '')) not in ('work', 'task', 'chore', 'meal')
+            and lower(coalesce(title, '')) not like 'house reset%'
             and (visibility = 'household' or owner_member_id = ${currentMember.id}::uuid)
           order by starts_at
         `,
