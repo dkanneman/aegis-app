@@ -180,9 +180,11 @@ test('tasks and appointments support audited edits, holds, and soft deletion', a
   assert.match(migration, /deleted_at timestamptz/)
   assert.match(migration, /deleted_by_member_id uuid/)
   assert.match(migration, /canonical_content_override jsonb/)
-  assert.match(api, /\['assign','edit','complete','cancel','delete','reopen'\]/)
+  assert.match(api, /\['assign','edit','complete','cancel','delete','reopen','restore'\]/)
   assert.match(api, /operation==='edit'/)
   assert.match(api, /operation==='delete'/)
+  assert.match(api, /expectedUpdatedAt/)
+  assert.match(api, /deleted_at is not null/)
   assert.match(api, /status.*on_hold/s)
   assert.match(api, /deleted_at=now\(\)/)
   assert.match(api, /event_edit/)
@@ -192,6 +194,7 @@ test('tasks and appointments support audited edits, holds, and soft deletion', a
   assert.match(client, /Edit appointment/)
   assert.match(client, /On hold/)
   assert.match(client, /Delete from Pepper/)
+  assert.match(client, /expected_updated_at: item\.item\.updated_at/)
   assert.match(client, /Pepper could not verify that this change was saved/)
   assert.match(client, /role="alert"/)
   assert.match(calendar, /canonical_content_override/)
@@ -235,15 +238,15 @@ test('chores use canonical household tasks with delegation and lifecycle control
   assert.match(styles, /\.choreOwner/)
 })
 
-test('adult navigation includes a priority-organized canonical Work view', async () => {
+test('adult Tasks includes a priority-organized canonical Work view', async () => {
   const [client, work, styles] = await Promise.all([
     readFile(clientPath, 'utf8'),
     readFile(new URL('../app/pepper/pepper-work.ts', import.meta.url), 'utf8'),
     readFile(pepperStylesPath, 'utf8'),
   ])
 
-  assert.match(client, /\["work", "Work", Briefcase\]/)
-  assert.match(client, /view === "work" && actorIsAdult/)
+  assert.match(client, /\["tasks", "Tasks", ListTodo\]/)
+  assert.match(client, /mode === "work" && actorIsAdult/)
   assert.match(client, /state\.familyTasks[\s\S]*state\.privateTasks/)
   assert.match(client, /function WorkPage/)
   assert.match(client, /setSelectedItem\(\{ type: "task", item: task \}\)/)
@@ -395,14 +398,36 @@ test('connections remain evidence inputs with explicit security boundaries', asy
 test('Pepper Inbox makes unplaced updates and calendar effects explicit', async () => {
   const client = await readFile(clientPath, 'utf8')
 
-  assert.match(client, /result\.status === "needs_review"/)
-  assert.match(client, /No task, meal, or calendar event was created/)
-  assert.match(client, /result\.status === "partially_applied"/)
+  assert.match(client, /\["needs_review", "partially_applied"\]\.includes\(result\.status\)/)
+  assert.match(client, /Pepper needs one detail before changing the plan/)
   assert.match(client, /Open Inbox/)
   assert.match(client, /Pepper Inbox preserves updates it could not safely place/)
+  assert.match(client, /capture_review_retry/)
+  assert.match(client, /Retry now/)
+  assert.match(client, /const reviewCaptures =/)
   assert.match(client, /Edit in composer/)
+  assert.match(client, /Ask Pepper or tell her what changed/)
+  assert.match(client, /pepperExchange/)
+  assert.match(client, /Pepper found/)
+  assert.match(client, /Pepper updated/)
+  assert.match(client, /One detail needed/)
+  assert.match(client, /clarification_text/)
+  assert.match(client, /Undo/)
+  assert.match(client, /capture_undo/)
   assert.match(client, /Read-only schedule evidence/)
   assert.match(client, /Creating or changing an external calendar event/)
+})
+
+test('Pepper navigation keeps daily work focused in five destinations', async () => {
+  const client = await readFile(clientPath, 'utf8')
+  assert.match(client, /\["today", "Today", House\]/)
+  assert.match(client, /\["tasks", "Tasks", ListTodo\]/)
+  assert.match(client, /\["meals", "Meals", Utensils\]/)
+  assert.match(client, /\["family", "Family", UsersRound\]/)
+  assert.match(client, /\["member", "Me", CircleUserRound\]/)
+  assert.match(client, /function TasksPage/)
+  assert.match(client, /Today&apos;s responsibilities/)
+  assert.doesNotMatch(client, /Prepare before it becomes urgent/)
 })
 
 test('the approved Pepper visual language wraps the real connection pathways', async () => {
@@ -523,19 +548,17 @@ test('Pepper installs as a branded iPhone web app', async () => {
   assert.ok(icon.byteLength > 1_000)
 })
 
-test('mobile navigation prioritizes daily work without hiding secondary sections', async () => {
+test('mobile navigation exposes five stable primary destinations', async () => {
   const [client, styles] = await Promise.all([
     readFile(clientPath, 'utf8'),
     readFile(pepperStylesPath, 'utf8'),
   ])
 
-  assert.match(client, /const mobilePrimaryKeys/)
-  assert.match(client, /\["today", "work", "chores", "meals"\]/)
-  assert.match(client, /More from Pepper/)
-  assert.match(client, /aria-expanded=\{mobileMoreOpen\}/)
-  assert.match(styles, /\.tabs button\[data-mobile-secondary="true"\]/)
+  assert.match(client, /const primaryNavigation =/)
+  assert.match(client, /\["today", "Today", House\][\s\S]*\["tasks", "Tasks", ListTodo\][\s\S]*\["meals", "Meals", Utensils\][\s\S]*\["family", "Family", UsersRound\][\s\S]*\["member", "Me", CircleUserRound\]/)
+  assert.doesNotMatch(client, /mobileMoreOpen|More from Pepper/)
   assert.match(styles, /grid-template-columns: repeat\(5, 1fr\)/)
-  assert.match(styles, /\.mobileMoreList/)
+  assert.doesNotMatch(styles, /\.mobileMoreList/)
 })
 
 test('Pepper loads the daily shell first and opens heavier sections on demand', async () => {

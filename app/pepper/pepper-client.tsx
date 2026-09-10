@@ -5,16 +5,15 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Armchair,
   ArrowLeft,
-  Briefcase,
+  ArrowUp,
   Cable,
   Camera,
   CalendarDays,
   Check,
   ChevronRight,
+  CircleUserRound,
   CircleX,
-  ClipboardCheck,
   Copy,
-  Ellipsis,
   HeartPulse,
   House,
   Info,
@@ -31,6 +30,7 @@ import {
   ShoppingBasket,
   Sparkles,
   Trash2,
+  Undo2,
   Utensils,
   UsersRound,
   UserPlus,
@@ -106,6 +106,8 @@ type FamilyEvent = {
   external_organizer_email?: string | null;
   external_organizer_name?: string | null;
   notes?: string | null;
+  updated_at?: string | null;
+  deleted_at?: string | null;
 };
 
 type MemberState = {
@@ -140,7 +142,8 @@ type ItemOperation =
   | "complete"
   | "cancel"
   | "delete"
-  | "reopen";
+  | "reopen"
+  | "restore";
 
 type ItemUpdate = {
   owner_member_id?: string | null;
@@ -358,12 +361,6 @@ type WeeklyInsight = {
   observation?: string | null;
 };
 
-type ReflectionEvidence = {
-  id: string;
-  reflection_date: string;
-  original_text: string;
-};
-
 type SpeechRecognitionEventLike = {
   results?: {
     [index: number]: { [index: number]: { transcript?: string } };
@@ -481,9 +478,8 @@ type PepperState = {
 
 type View =
   | "today"
-  | "work"
+  | "tasks"
   | "meals"
-  | "chores"
   | "family"
   | "member"
   | "setup"
@@ -558,6 +554,60 @@ type NativeHealthMessageHandler = {
   }) => void;
 };
 
+type PepperAnswer = {
+  title: string;
+  summary: string;
+  items?: string[];
+};
+
+type PepperExchange = {
+  prompt: string;
+  mode: "answer" | "action" | "clarification";
+  reply: string;
+  answer?: PepperAnswer;
+  captureId?: string;
+  clarification?: { question: string; placeholder?: string };
+  undoable?: boolean;
+  viewItem?: SelectedItem;
+  undo?:
+    | { type: "capture"; captureId: string }
+    | {
+        type: "item";
+        before: SelectedItem;
+        after: SelectedItem;
+        operation: ItemOperation;
+      };
+};
+
+type DayPlanItem = {
+  id: string;
+  record_id: string;
+  kind: "task" | "appointment" | "email";
+  title: string;
+  detail?: string | null;
+  reason: string;
+  urgency: "critical" | "high" | "planned" | "fixed";
+  scheduled_for?: string | null;
+  ends_at?: string | null;
+  source: "tasks" | "calendar" | "email";
+  external_url?: string | null;
+};
+
+type DailyPlan = {
+  generated_at: string;
+  date: string;
+  headline: string;
+  summary: string;
+  items: DayPlanItem[];
+  conflicts: string[];
+  counts: { tasks: number; appointments: number; emails: number };
+  email: {
+    status: "connected" | "not_connected" | "unavailable";
+    scanned: number;
+    error?: string | null;
+  };
+};
+
 function nativeHealthMessageHandler() {
   if (typeof window === "undefined") return null;
   const nativeWindow = window as Window & {
@@ -607,10 +657,6 @@ type PinSetupState = {
 function displayName(member?: Pick<Member, "slug" | "display_name"> | null) {
   if (!member) return "";
   return member.slug === "elle" ? "Danielle" : member.display_name;
-}
-
-function profileForMember(state: PepperState, memberId?: string) {
-  return state.memberProfiles?.find((profile) => profile.member_id === memberId);
 }
 
 async function prepareProfilePhoto(file: File) {
@@ -904,6 +950,7 @@ const LAZY_SECTIONS: LazySection[] = [
 
 function sectionForView(view: View): LazySection | null {
   if (view === "setup") return "family";
+  if (view === "tasks") return "chores";
   return LAZY_SECTIONS.includes(view as LazySection)
     ? (view as LazySection)
     : null;
@@ -920,7 +967,7 @@ function optimisticSelectedItem(
         ? "completed"
         : operation === "cancel" || operation === "delete"
           ? "canceled"
-          : operation === "reopen"
+          : operation === "reopen" || operation === "restore"
             ? "open"
             : undefined;
     return {
@@ -941,9 +988,14 @@ function optimisticSelectedItem(
           ? { next_action: changes.next_action }
           : {}),
         ...(nextStatus ? { status: nextStatus } : {}),
+        ...(operation === "delete"
+          ? { deleted_at: new Date().toISOString() }
+          : operation === "restore"
+            ? { deleted_at: null }
+            : {}),
         ...(operation === "complete"
           ? { completed_at: new Date().toISOString() }
-          : operation === "reopen"
+          : operation === "reopen" || operation === "restore"
             ? { completed_at: null }
             : {}),
       },
@@ -954,7 +1006,7 @@ function optimisticSelectedItem(
       ? "completed"
       : operation === "cancel" || operation === "delete"
         ? "canceled"
-        : operation === "reopen"
+        : operation === "reopen" || operation === "restore"
           ? "confirmed"
           : undefined;
   return {
@@ -971,7 +1023,35 @@ function optimisticSelectedItem(
           }
         : {}),
       ...(nextStatus ? { status: nextStatus } : {}),
+      ...(operation === "delete"
+        ? { deleted_at: new Date().toISOString() }
+        : operation === "restore"
+          ? { deleted_at: null }
+          : {}),
     },
+  };
+}
+
+function itemUpdateFrom(selected: SelectedItem): ItemUpdate {
+  if (selected.type === "task") {
+    return {
+      title: selected.item.title,
+      status: ["in_progress", "on_hold"].includes(selected.item.status)
+        ? (selected.item.status as "in_progress" | "on_hold")
+        : "open",
+      due_date: localDateFor(selected.item.due_at),
+      priority: selected.item.priority || "",
+      notes: selected.item.notes || "",
+      waiting_on: selected.item.waiting_on || "",
+      next_action: selected.item.next_action || "",
+    };
+  }
+  return {
+    title: selected.item.title,
+    starts_local: localDateTimeFor(selected.item.starts_at),
+    ends_local: localDateTimeFor(selected.item.ends_at),
+    location: selected.item.location || "",
+    notes: selected.item.notes || "",
   };
 }
 
@@ -1032,19 +1112,32 @@ function patchPepperStateItem(
 ): PepperState {
   if (selected.type === "task") {
     const remove = Boolean(selected.item.deleted_at);
+    const familyTasks = selected.item.visibility === "household"
+      ? upsertItemList(current.familyTasks, selected.item)
+      : patchItemList(current.familyTasks, selected.item, true) || [];
+    const privateTasks = selected.item.visibility === "private"
+      ? upsertItemList(current.privateTasks, selected.item)
+      : patchItemList(current.privateTasks, selected.item, true) || [];
     return {
       ...current,
-      familyTasks:
-        patchItemList(current.familyTasks, selected.item, remove) || [],
-      privateTasks:
-        patchItemList(current.privateTasks, selected.item, remove) || [],
-      chores: patchItemList(current.chores, selected.item, remove),
+      familyTasks: remove ? patchItemList(familyTasks, selected.item, true) || [] : familyTasks,
+      privateTasks: remove ? patchItemList(privateTasks, selected.item, true) || [] : privateTasks,
+      chores: isChore(selected.item)
+        ? remove
+          ? patchItemList(current.chores, selected.item, true)
+          : upsertItemList(current.chores, selected.item)
+        : patchItemList(current.chores, selected.item, true),
     };
   }
+  const remove = Boolean(selected.item.deleted_at);
   return {
     ...current,
-    events: patchItemList(current.events, selected.item) || [],
-    monthEvents: patchItemList(current.monthEvents, selected.item),
+    events: remove
+      ? patchItemList(current.events, selected.item, true) || []
+      : upsertItemList(current.events, selected.item),
+    monthEvents: remove
+      ? patchItemList(current.monthEvents, selected.item, true)
+      : upsertItemList(current.monthEvents, selected.item),
   };
 }
 
@@ -1053,19 +1146,20 @@ function patchMemberStateItem(
   selected: SelectedItem,
 ): MemberState {
   if (selected.type === "task") {
+    const remove = Boolean(selected.item.deleted_at);
     return {
       ...current,
-      tasks:
-        patchItemList(
-          current.tasks,
-          selected.item,
-          Boolean(selected.item.deleted_at),
-        ) || [],
+      tasks: remove
+        ? patchItemList(current.tasks, selected.item, true) || []
+        : upsertItemList(current.tasks, selected.item),
     };
   }
+  const remove = Boolean(selected.item.deleted_at);
   return {
     ...current,
-    events: patchItemList(current.events, selected.item) || [],
+    events: remove
+      ? patchItemList(current.events, selected.item, true) || []
+      : upsertItemList(current.events, selected.item),
   };
 }
 
@@ -1078,7 +1172,6 @@ export function PepperClient() {
   const [token, setToken] = useState("");
   const [state, setState] = useState<PepperState | null>(null);
   const [view, setView] = useState<View>("today");
-  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [memberState, setMemberState] = useState<MemberState | null>(null);
   const [memberBusy, setMemberBusy] = useState(false);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
@@ -1098,7 +1191,12 @@ export function PepperClient() {
     pepperAtmosphereAt(minutesInTimeZone(TZ)),
   );
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState("");
+  const [pepperExchange, setPepperExchange] = useState<PepperExchange | null>(null);
+  const [dayPlan, setDayPlan] = useState<DailyPlan | null>(null);
+  const [dayPlanBusy, setDayPlanBusy] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [tell, setTell] = useState("");
   const [reflection, setReflection] = useState("");
@@ -1106,11 +1204,8 @@ export function PepperClient() {
   const [reflectionSavedText, setReflectionSavedText] = useState("");
   const [ritualOpen, setRitualOpen] = useState<Ritual | null>(null);
   const [ritualBusy, setRitualBusy] = useState(false);
-  const [handlingPreparation, setHandlingPreparation] = useState("");
   const [calendarConfirmation, setCalendarConfirmation] = useState("");
   const [healthSetup, setHealthSetup] = useState<HealthSetup | null>(null);
-  const [insightOpen, setInsightOpen] = useState(false);
-  const [insightRefs, setInsightRefs] = useState<ReflectionEvidence[]>([]);
   const [frontSeatOpen, setFrontSeatOpen] = useState(false);
   const isPepperIOS =
     typeof navigator !== "undefined" && navigator.userAgent.includes("Pepper-iOS");
@@ -1145,15 +1240,6 @@ export function PepperClient() {
     return () => window.clearTimeout(timeout);
   }, [message]);
 
-  useEffect(() => {
-    if (!mobileMoreOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileMoreOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [mobileMoreOpen]);
-
   async function call(body: Record<string, unknown>, session = token) {
     if (!API || !SUPABASE_ANON_KEY) {
       throw new Error("Pepper preview is not configured.");
@@ -1186,14 +1272,17 @@ export function PepperClient() {
 
   async function load(session = token) {
     if (!session) return;
+    setSyncing(true);
     try {
       const result = await call({ action: "state", progressive: true }, session);
       setState((current) =>
         current ? { ...current, ...result.state } : result.state,
       );
+      setDayPlan(null);
       if (result.state?.progressive !== true) {
         setLoadedSections(new Set(LAZY_SECTIONS));
       }
+      setLastSyncedAt(new Date());
     } catch (error) {
       const text =
         error instanceof Error ? error.message : "Pepper could not load.";
@@ -1206,6 +1295,8 @@ export function PepperClient() {
         sectionRequests.current = {};
       }
       setMessage(text);
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -1275,6 +1366,7 @@ export function PepperClient() {
     item: SelectedItem,
     operation: ItemOperation,
     changes: ItemUpdate = {},
+    options: { receipt?: boolean } = {},
   ): Promise<ItemUpdateResult> {
     const pendingKey = `item:${item.item.id}`;
     const optimistic = optimisticSelectedItem(item, operation, changes);
@@ -1291,6 +1383,7 @@ export function PepperClient() {
         item_type: item.type,
         id: item.item.id,
         operation,
+        expected_updated_at: item.item.updated_at || null,
         ...changes,
       });
       const expectedStatus =
@@ -1298,7 +1391,7 @@ export function PepperClient() {
           ? "completed"
           : operation === "cancel" || operation === "delete"
             ? "canceled"
-            : operation === "reopen"
+            : operation === "reopen" || operation === "restore"
               ? item.type === "event"
                 ? "confirmed"
                 : "open"
@@ -1319,18 +1412,28 @@ export function PepperClient() {
       setMemberState((current) =>
         current ? patchMemberStateItem(current, saved) : current,
       );
-      setMessage(
-        operation === "assign"
-          ? "Assigned. Pepper updated the family plan."
-          : operation === "edit"
-            ? "Saved. Pepper updated every affected view."
-            : operation === "delete"
-              ? "Deleted from Pepper. The change remains in the audit history."
-          : operation === "reopen"
-            ? "Restored. Pepper updated every view."
-            : `${operation === "complete" ? "Completed" : "Canceled"}. Pepper updated every view.`,
-      );
+      const receipt = operation === "assign"
+        ? "Assigned. The family plan is current."
+        : operation === "edit"
+          ? "Saved everywhere this item appears."
+          : operation === "delete"
+            ? "Deleted from Pepper."
+            : operation === "reopen" || operation === "restore"
+              ? "Restored to the active plan."
+              : `${operation === "complete" ? "Completed" : "Canceled"}. The family plan is current.`;
+      if (options.receipt !== false) {
+        setPepperExchange({
+          prompt: item.item.title,
+          mode: "action",
+          reply: receipt,
+          viewItem: saved,
+          undoable: true,
+          undo: { type: "item", before: item, after: saved, operation },
+        });
+        setMessage("");
+      }
       setSelectedItem(null);
+      setDayPlan(null);
       if (item.type === "event") void load();
       return { ok: true };
     } catch (error) {
@@ -1346,6 +1449,68 @@ export function PepperClient() {
       return { ok: false, error: text };
     } finally {
       setActionPending(pendingKey, false);
+    }
+  }
+
+  async function undoPepperExchange() {
+    const exchange = pepperExchange;
+    if (!exchange?.undo) return;
+    setBusy(true);
+    try {
+      if (exchange.undo.type === "capture") {
+        const result = await call({
+          action: "capture_undo",
+          capture_id: exchange.undo.captureId,
+        });
+        setPepperExchange({
+          prompt: exchange.prompt,
+          mode: "action",
+          reply: result.reply || "Undone. Pepper restored the previous plan.",
+          undoable: false,
+        });
+        void load();
+        return;
+      }
+
+      const { before, after, operation } = exchange.undo;
+      let reverseOperation: ItemOperation = "reopen";
+      let reverseChanges: ItemUpdate = {};
+      if (operation === "assign") {
+        reverseOperation = "assign";
+        reverseChanges = {
+          owner_member_id:
+            before.type === "event"
+              ? before.item.transport_owner_member_id || null
+              : before.item.owner_member_id || null,
+        };
+      } else if (operation === "edit") {
+        reverseOperation = "edit";
+        reverseChanges = itemUpdateFrom(before);
+      } else if (operation === "delete") {
+        reverseOperation = "restore";
+      } else if (operation === "restore") {
+        reverseOperation = "delete";
+      } else if (before.item.status === "completed") {
+        reverseOperation = "complete";
+      } else if (before.item.status === "canceled") {
+        reverseOperation = "cancel";
+      } else if (before.type === "task") {
+        reverseOperation = "edit";
+        reverseChanges = itemUpdateFrom(before);
+      }
+      const undone = await updateItem(after, reverseOperation, reverseChanges, {
+        receipt: false,
+      });
+      if (!undone.ok) return;
+      setPepperExchange({
+        prompt: exchange.prompt,
+        mode: "action",
+        reply: "Undone. Pepper restored the previous plan.",
+        viewItem: before,
+        undoable: false,
+      });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1930,7 +2095,7 @@ export function PepperClient() {
       if (connection === "gmail_connected") {
         setView("connections");
         setCalendarConfirmation(
-          "Google email connected. Message scanning is not enabled in this beta.",
+          "Google email connected. Pepper can check recent messages when you ask her to plan your day.",
         );
       } else if (connection === "gmail_error") {
         setView("connections");
@@ -2028,6 +2193,16 @@ export function PepperClient() {
         .slice(0, 5),
     [schoolTransportation, state],
   );
+  const todayAgenda = useMemo(
+    () =>
+      Array.from(
+        new Map([...nowEvents, ...nextEvents].map((event) => [event.id, event])).values(),
+      ).sort(
+        (a, b) =>
+          new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime(),
+      ),
+    [nextEvents, nowEvents],
+  );
   const openConsequences = visibleConsequences(state?.consequences || []);
   const preparationNow = state?.preparation?.now || [];
   const morning = state?.rituals?.morning;
@@ -2038,16 +2213,32 @@ export function PepperClient() {
       : currentHour() >= 18
         ? "evening"
         : null;
-  const activeFamilyTasks = (state?.familyTasks || []).filter(
-    (task) => !["completed", "canceled"].includes(task.status),
-  );
-  const activePrivateTasks = (state?.privateTasks || []).filter(
-    (task) => !["completed", "canceled"].includes(task.status),
-  );
-  const activeGroceries = (state?.groceries || []).filter(
-    (item) => item.status !== "completed",
-  );
-  const recentCaptures = [...(state?.captures || [])]
+  const todayResponsibilities = useMemo(() => {
+    if (!state) return [];
+    const today = localDate();
+    return Array.from(
+      new Map(
+        [...(state.familyTasks || []), ...(state.privateTasks || [])].map((task) => [task.id, task]),
+      ).values(),
+    )
+      .filter(
+        (task) =>
+          !["completed", "canceled"].includes(task.status) &&
+          (task.owner_member_id === state.member.id ||
+            (task.visibility === "private" &&
+              task.creator_member_id === state.member.id)) &&
+          ((Boolean(task.due_at) && localDateFor(task.due_at) <= today) ||
+            ["P0", "P1"].includes((task.priority || "").toUpperCase())),
+      )
+      .sort(compareWorkTasks)
+      .slice(0, 6);
+  }, [state]);
+  const reviewCaptures = [...(state?.captures || [])]
+    .filter((capture) =>
+      ["captured", "needs_review", "partially_applied"].includes(
+        capture.status || "",
+      ),
+    )
     .sort((a, b) => {
       const aTime = new Date(
         a.created_at || a.captured_at || a.updated_at || 0,
@@ -2147,6 +2338,7 @@ export function PepperClient() {
     localStorage.removeItem("pepper_family_session");
     setToken("");
     setState(null);
+    setDayPlan(null);
     setLoadedSections(new Set());
     setLoadingSections(new Set());
     setPendingActions(new Set());
@@ -2165,6 +2357,7 @@ export function PepperClient() {
       localStorage.removeItem("pepper_family_session");
       setToken("");
       setState(null);
+      setDayPlan(null);
       setProfileName("");
       setPin("");
       setMessage("Your Pepper account was deleted.");
@@ -2179,32 +2372,140 @@ export function PepperClient() {
     }
   }
 
+  function openDayPlanItem(item: DayPlanItem) {
+    if (item.kind === "email") {
+      if (item.external_url) {
+        window.open(item.external_url, "_blank", "noopener,noreferrer");
+      } else {
+        setMessage("Pepper could not open that email directly.");
+      }
+      return;
+    }
+    if (!state) return;
+    if (item.kind === "task") {
+      const task = [...state.familyTasks, ...state.privateTasks].find(
+        (candidate) => candidate.id === item.record_id,
+      );
+      if (task) {
+        setSelectedItem({ type: "task", item: task });
+        return;
+      }
+    } else {
+      const event = [...state.events, ...(state.monthEvents || [])].find(
+        (candidate) => candidate.id === item.record_id,
+      );
+      if (event) {
+        setSelectedItem({ type: "event", item: event });
+        return;
+      }
+    }
+    setMessage("This item changed since Pepper organized the day. Refresh the plan.");
+  }
+
+  async function generateDayPlan(fromAsk = false, prompt = "Plan my day") {
+    if (dayPlanBusy) return;
+    setDayPlanBusy(true);
+    if (fromAsk) setBusy(true);
+    setMessage("Pepper is organizing tasks, email, and appointments…");
+    try {
+      const result = await call({ action: "day_plan" });
+      if (!result.plan || !Array.isArray(result.plan.items)) {
+        throw new Error("Pepper could not verify a complete day plan.");
+      }
+      const plan = result.plan as DailyPlan;
+      setDayPlan(plan);
+      setTell("");
+      setView("today");
+      setRitualOpen(null);
+      setMessage("");
+      if (fromAsk) {
+        setPepperExchange({
+          prompt,
+          mode: "answer",
+          reply: plan.headline,
+          answer: {
+            title: "Your day is organized",
+            summary: plan.headline,
+            items: plan.conflicts.length ? plan.conflicts : undefined,
+          },
+        });
+      }
+      window.requestAnimationFrame(() => {
+        document.getElementById("pepper-day-plan")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Pepper could not organize today.",
+      );
+    } finally {
+      setDayPlanBusy(false);
+      if (fromAsk) setBusy(false);
+    }
+  }
+
   async function sendTell(text = tell) {
     const clean = text.trim();
     if (!clean) return;
+    const clarificationContext =
+      pepperExchange?.mode === "clarification" && pepperExchange.captureId
+        ? pepperExchange
+        : null;
+    if (
+      !clarificationContext &&
+      (/\b(plan|organize|prioritize|structure)\b.*\b(?:my |the )?(?:day|today)\b/i.test(clean) ||
+        /\bwhat should i do (?:first|today)\b/i.test(clean))
+    ) {
+      await generateDayPlan(true, clean);
+      return;
+    }
     setBusy(true);
-    setMessage("Pepper is updating the plan…");
+    setMessage(clarificationContext ? "Pepper is finishing that update…" : "Pepper is checking One Brain…");
     try {
-      const result = await call({
-        action: "tell",
-        text: clean,
-        source: "text",
-      });
+      const result = await call(
+        clarificationContext
+          ? {
+              action: "capture_review_retry",
+              capture_id: clarificationContext.captureId,
+              clarification_text: clean,
+              idempotency_key: crypto.randomUUID(),
+            }
+          : {
+              action: "tell",
+              text: clean,
+              source: "text",
+              idempotency_key: crypto.randomUUID(),
+            },
+      );
       setTell("");
-      if (result.status === "needs_review") {
-        setInboxOpen(true);
-        setMessage(
-          "Saved in Pepper Inbox only. No task, meal, or calendar event was created.",
-        );
-      } else if (result.status === "partially_applied") {
-        setInboxOpen(true);
-        setMessage(
-          "Pepper applied the confirmed changes. The remaining words are in Pepper Inbox only and were not added to the calendar.",
-        );
-      } else {
-        setMessage(result.reply || "Updated.");
-      }
-      await load();
+      const mode = result.mode === "answer"
+        ? "answer"
+        : result.mode === "clarification" || ["needs_review", "partially_applied"].includes(result.status)
+          ? "clarification"
+          : "action";
+      const captureId = result.captureId || result.capture_id || clarificationContext?.captureId;
+      setPepperExchange({
+        prompt: clarificationContext?.prompt || clean,
+        mode,
+        reply:
+          result.reply ||
+          (mode === "answer"
+            ? "Pepper found an answer."
+            : mode === "clarification"
+              ? "Pepper needs one detail before changing the plan."
+              : "Updated."),
+        answer: result.answer,
+        captureId,
+        clarification: result.clarification,
+        undoable: Boolean(result.undoable),
+        undo: result.undoable && captureId
+          ? { type: "capture", captureId }
+          : undefined,
+      });
+      setMessage("");
+      if (mode !== "answer" && mode !== "clarification") void load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Pepper hit an error.");
     } finally {
@@ -2212,46 +2513,41 @@ export function PepperClient() {
     }
   }
 
-  async function updateTask(id: string, complete: boolean) {
-    const item = [...(state?.familyTasks || []), ...(state?.privateTasks || [])]
-      .find((task) => task.id === id);
-    if (!item) return;
-    await updateItem(
-      { type: "task", item },
-      complete ? "complete" : "reopen",
-    );
-  }
-
-  async function updateGrocery(id: string, complete: boolean) {
-    await changeGrocery(id, complete ? "complete" : "reopen");
-  }
-
-  async function handlePreparation(id: string) {
-    setHandlingPreparation(id);
+  async function retryCapture(capture: Capture) {
+    if (!capture.id) return;
+    const pendingKey = `capture:retry:${capture.id}`;
+    setActionPending(pendingKey, true);
     try {
-      await call({ action: "preparation_handle", id });
-      setState((current) =>
-        current
-          ? {
-              ...current,
-              preparation: {
-                ...current.preparation,
-                now: (current.preparation?.now || []).filter(
-                  (item) => item.id !== id,
-                ),
-              },
-            }
-          : current,
-      );
-      setMessage("Handled. Pepper updated the plan.");
+      const result = await call({
+        action: "capture_review_retry",
+        capture_id: String(capture.id),
+        idempotency_key: crypto.randomUUID(),
+      });
+      const mode = result.mode === "answer"
+        ? "answer"
+        : result.mode === "clarification" || ["needs_review", "partially_applied"].includes(result.status)
+          ? "clarification"
+          : "action";
+      const captureId = result.captureId || result.capture_id || String(capture.id);
+      setPepperExchange({
+        prompt: captureText(capture),
+        mode,
+        reply: result.reply || (mode === "clarification" ? "Pepper needs one detail." : "Pepper reprocessed that update."),
+        answer: result.answer,
+        captureId,
+        clarification: result.clarification,
+        undoable: Boolean(result.undoable),
+        undo: result.undoable ? { type: "capture", captureId } : undefined,
+      });
+      setMessage("");
+      if (result.status === "applied" || result.status === "answered") setInboxOpen(false);
+      if (mode !== "clarification") void load();
     } catch (error) {
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Pepper could not mark that handled.",
+        error instanceof Error ? error.message : "Pepper could not retry that update.",
       );
     } finally {
-      setHandlingPreparation("");
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -2284,27 +2580,6 @@ export function PepperClient() {
       void loadSection("connections");
       setReflectionSaved(false);
       setReflectionSavedText("");
-    }
-  }
-
-  async function exploreInsight() {
-    const insight = state?.weeklyInsight;
-    if (!insight?.id) return;
-    if (insightOpen) {
-      setInsightOpen(false);
-      return;
-    }
-    try {
-      const result = (await call({
-        action: "reflection_explore",
-        insight_id: insight.id,
-      })) as { reflections?: ReflectionEvidence[] };
-      setInsightRefs(result.reflections || []);
-      setInsightOpen(true);
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Pepper could not open that.",
-      );
     }
   }
 
@@ -2421,7 +2696,9 @@ export function PepperClient() {
     return (
       <main className={styles.loginPage} style={atmosphereStyle}>
         <section className={styles.loginCard}>
-          <div className={styles.eyebrow}>Private family access</div>
+          <div className={styles.eyebrow}>
+            {pinSetup ? "Private family access" : "Pepper's promise"}
+          </div>
           <div className={styles.wordmark}>Pepper</div>
           {pinSetup ? (
             <>
@@ -2482,8 +2759,13 @@ export function PepperClient() {
             </>
           ) : (
             <>
-              <h1>Your family, handled.</h1>
-              <p>
+              <h1>Your day, organized.</h1>
+              <p className={styles.loginPromise}>
+                Pepper brings together your email, school events, chores, tasks,
+                and appointments, then creates a daily flow in order of importance
+                so you stay on top of everything and miss nothing.
+              </p>
+              <p className={styles.loginInstructions}>
                 Enter your profile name and PIN. On your first visit, use the
                 one-time invitation code from your family organizer.
               </p>
@@ -2534,22 +2816,21 @@ export function PepperClient() {
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
   const primaryNavigation = [
     ["today", "Today", House],
-    ...(actorIsAdult ? [["work", "Work", Briefcase] as const] : []),
-    ["chores", "Chores", ClipboardCheck],
+    ["tasks", "Tasks", ListTodo],
     ["meals", "Meals", Utensils],
     ["family", "Family", UsersRound],
-    ["connections", "Connect", Cable],
+    ["member", "Me", CircleUserRound],
   ] as const;
-  const mobilePrimaryKeys: View[] = actorIsAdult
-    ? ["today", "work", "chores", "meals"]
-    : ["today", "chores", "meals", "family"];
-  const mobileMoreNavigation = primaryNavigation.filter(
-    ([key]) => !mobilePrimaryKeys.includes(key as View),
-  );
-  const mobileMoreIsActive = mobileMoreNavigation.some(
-    ([key]) =>
-      view === key || (["member", "setup"].includes(view) && key === "family"),
-  );
+  const navIsActive = (key: (typeof primaryNavigation)[number][0]) => {
+    if (key === "member") {
+      return view === "member" && memberState?.member.id === state.member.id;
+    }
+    if (key === "family") {
+      return view === "family" || view === "setup" ||
+        (view === "member" && memberState?.member.id !== state.member.id);
+    }
+    return view === key;
+  };
 
   return (
     <main className={styles.page} style={atmosphereStyle}>
@@ -2562,6 +2843,27 @@ export function PepperClient() {
             </div>
           </div>
           <div className={styles.topbarActions}>
+            <button
+              type="button"
+              className={styles.syncStatus}
+              data-syncing={syncing ? "true" : undefined}
+              title={lastSyncedAt ? `Last updated ${lastSyncedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Refresh Pepper"}
+              aria-label={syncing ? "Pepper is syncing" : "Refresh Pepper"}
+              disabled={syncing}
+              onClick={() => void load()}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{syncing ? "Syncing" : "Live"}</span>
+            </button>
+            <button
+              type="button"
+              className={styles.iconButton}
+              onClick={() => setView("connections")}
+              aria-label="Open connections"
+              title="Connections"
+            >
+              <Cable size={18} aria-hidden="true" />
+            </button>
             <button type="button" className={styles.quietButton} onClick={logout}>
               Switch
             </button>
@@ -2581,38 +2883,20 @@ export function PepperClient() {
             <button
               key={key}
               type="button"
-              data-mobile-secondary={
-                mobilePrimaryKeys.includes(key as View) ? undefined : "true"
-              }
-              aria-current={
-                view === key || (["member", "setup"].includes(view) && key === "family")
-                  ? "page"
-                  : undefined
-              }
-              className={
-                view === key || (["member", "setup"].includes(view) && key === "family")
-                  ? styles.tabActive
-                  : styles.tab
-              }
+              aria-current={navIsActive(key) ? "page" : undefined}
+              className={navIsActive(key) ? styles.tabActive : styles.tab}
               onClick={() => {
-                setView(key as View);
-                setMobileMoreOpen(false);
+                if (key === "member") {
+                  void openMember(state.member.slug);
+                  return;
+                }
+                setView(key);
               }}
             >
               <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
               <span>{label}</span>
             </button>
           ))}
-          <button
-            type="button"
-            className={`${mobileMoreIsActive ? styles.tabActive : styles.tab} ${styles.mobileMoreTab}`}
-            aria-expanded={mobileMoreOpen}
-            aria-label="More Pepper sections"
-            onClick={() => setMobileMoreOpen(true)}
-          >
-            <Ellipsis size={18} strokeWidth={1.8} aria-hidden="true" />
-            <span>More</span>
-          </button>
         </nav>
 
         {calendarConfirmation ? (
@@ -2675,64 +2959,13 @@ export function PepperClient() {
               </section>
             ) : null}
 
-            {preparationNow.length ? (
-              <section className={styles.section}>
-                <div className={styles.sectionLabel}>
-                  Prepare before it becomes urgent
-                </div>
-                <div className={styles.noticeStack}>
-                  {preparationNow.slice(0, 2).map((item) => (
-                    <article
-                      className={`${styles.prepareCard} ${styles.preparationAction}`}
-                      key={item.id}
-                    >
-                      <div>
-                        <strong>{item.title}</strong>
-                        {item.summary ? <p>{item.summary}</p> : null}
-                      </div>
-                      <button
-                        type="button"
-                        className={styles.secondaryButton}
-                        disabled={handlingPreparation === item.id}
-                        onClick={() => void handlePreparation(item.id)}
-                      >
-                        {handlingPreparation === item.id
-                          ? "Handling…"
-                          : "Handled"}
-                      </button>
-                    </article>
-                  ))}
-                  {preparationNow.length > 2 ? (
-                    <details className={styles.preparationMore}>
-                      <summary>
-                        {preparationNow.length - 2} more preparation {preparationNow.length - 2 === 1 ? "item" : "items"}
-                      </summary>
-                      <div className={styles.noticeStack}>
-                        {preparationNow.slice(2).map((item) => (
-                          <article
-                            className={`${styles.prepareCard} ${styles.preparationAction}`}
-                            key={item.id}
-                          >
-                            <div>
-                              <strong>{item.title}</strong>
-                              {item.summary ? <p>{item.summary}</p> : null}
-                            </div>
-                            <button
-                              type="button"
-                              className={styles.secondaryButton}
-                              disabled={handlingPreparation === item.id}
-                              onClick={() => void handlePreparation(item.id)}
-                            >
-                              {handlingPreparation === item.id ? "Handling…" : "Handled"}
-                            </button>
-                          </article>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                </div>
-              </section>
-            ) : null}
+            <DayPlanPanel
+              plan={dayPlan}
+              busy={dayPlanBusy}
+              emailConnected={Boolean(state.integrations?.gmail?.connected)}
+              onGenerate={() => void generateDayPlan()}
+              onOpen={openDayPlanItem}
+            />
 
             <section className={styles.section}>
               <div className={styles.sectionLabel}>Daily Rhythm</div>
@@ -2876,36 +3109,43 @@ export function PepperClient() {
               ) : null}
             </section>
 
-            <section className={styles.section}>
-              <div className={styles.sectionLabel}>Now</div>
-              <div className={styles.nowCard}>
-                {nowEvents.length ? (
-                  nowEvents.map((event) => (
-                    <EventRow
-                      key={event.id}
-                      event={event}
-                      state={state}
-                      onOpen={() => setSelectedItem({ type: "event", item: event })}
-                    />
-                  ))
-                ) : (
-                  <div className={styles.empty}>
-                    Nothing needs you right this minute.
+            {!dayPlan ? (
+              <>
+                <section className={styles.section}>
+                  <div className={styles.sectionHeading}>
+                    <div className={styles.sectionLabel}>Today&apos;s schedule</div>
+                    <span className={styles.sectionCount}>{todayAgenda.length}</span>
                   </div>
-                )}
-              </div>
-            </section>
+                  <div className={styles.timeline}>
+                    {todayAgenda.length ? (
+                      todayAgenda.map((event) => (
+                        <EventRow
+                          key={event.id}
+                          event={event}
+                          state={state}
+                          onOpen={() => setSelectedItem({ type: "event", item: event })}
+                        />
+                      ))
+                    ) : (
+                      <div className={styles.empty}>
+                        The rest of today is clear.
+                      </div>
+                    )}
+                  </div>
+                </section>
 
-            {schoolTransportation.dropoffs.length ||
-            schoolTransportation.pickups.length ? (
-              <SchoolTransportationSummary
-                dropoffs={schoolTransportation.dropoffs}
-                pickups={schoolTransportation.pickups}
-                state={state}
-                onOpen={(event) =>
-                  setSelectedItem({ type: "event", item: event })
-                }
-              />
+                {schoolTransportation.dropoffs.length ||
+                schoolTransportation.pickups.length ? (
+                  <SchoolTransportationSummary
+                    dropoffs={schoolTransportation.dropoffs}
+                    pickups={schoolTransportation.pickups}
+                    state={state}
+                    onOpen={(event) =>
+                      setSelectedItem({ type: "event", item: event })
+                    }
+                  />
+                ) : null}
+              </>
             ) : null}
 
             {state.frontSeat ? (
@@ -2920,126 +3160,40 @@ export function PepperClient() {
               onOpen={() => setView("connections")}
             />
 
-            <section className={styles.section}>
-              <div className={styles.sectionLabel}>Next</div>
-              <div className={styles.timeline}>
-                {nextEvents.length ? (
-                  nextEvents.map((event) => (
-                    <EventRow
-                      key={event.id}
-                      event={event}
-                      state={state}
-                      onOpen={() => setSelectedItem({ type: "event", item: event })}
-                    />
-                  ))
-                ) : (
-                  <div className={styles.empty}>The rest of today is clear.</div>
-                )}
-              </div>
-            </section>
-
-            <section className={styles.section}>
+            {!dayPlan ? <section className={styles.section}>
               <div className={styles.sectionHeading}>
-                <div className={styles.sectionLabel}>Family</div>
+                <div className={styles.sectionLabel}>Today&apos;s responsibilities</div>
                 <button
                   type="button"
                   className={styles.textButton}
-                  onClick={() => setView("family")}
+                  onClick={() => setView("tasks")}
                 >
-                  Everyone
+                  All tasks
                 </button>
               </div>
-              <div className={styles.familyRail}>
-                {state.members.map((member) => (
-                  <button
-                    type="button"
-                    className={styles.familyPerson}
-                    key={member.id}
-                    onClick={() => void openMember(member.slug)}
-                  >
-                    <MemberAvatar
-                      name={displayName(member)}
-                      photoUrl={profileForMember(state, member.id)?.avatar_url}
-                      className={styles.avatar}
-                    />
-                    <span>{displayName(member)}</span>
-                  </button>
-                ))}
+              <div className={styles.taskHubList}>
+                {todayResponsibilities.length ? todayResponsibilities.map((task) => (
+                  <TaskActionRow
+                    key={task.id}
+                    task={task}
+                    state={state}
+                    onOpen={() => setSelectedItem({ type: "task", item: task })}
+                  />
+                )) : (
+                  <div className={styles.empty}>Nothing is waiting on you today.</div>
+                )}
               </div>
-            </section>
+            </section> : null}
 
-            {state.weeklyInsight ? (
-              <section className={styles.section}>
-                <div className={styles.sectionLabel}>For you</div>
-                <article className={styles.insight}>
-                  <h2>Something Pepper noticed this week…</h2>
-                  <p>{state.weeklyInsight.observation}</p>
-                  <button
-                    type="button"
-                    className={styles.textButton}
-                    onClick={() => void exploreInsight()}
-                  >
-                    {insightOpen ? "Close" : "Explore why →"}
-                  </button>
-                  {insightOpen ? (
-                    <div className={styles.evidence}>
-                      {insightRefs.map((item) => (
-                        <blockquote key={item.id}>
-                          <time>{dateLabel(item.reflection_date)}</time>
-                          {item.original_text}
-                        </blockquote>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              </section>
-            ) : null}
-
-            <section className={styles.details}>
-              <details>
-                <summary>Family tasks</summary>
-                {activeFamilyTasks.map((task) => (
-                  <CheckRow
-                    key={task.id}
-                    label={task.title}
-                    checked={false}
-                    onChange={(checked) => void updateTask(task.id, checked)}
-                  />
-                ))}
-              </details>
-              <details>
-                <summary>My private tasks</summary>
-                {activePrivateTasks.map((task) => (
-                  <CheckRow
-                    key={task.id}
-                    label={task.title}
-                    checked={false}
-                    onChange={(checked) => void updateTask(task.id, checked)}
-                  />
-                ))}
-              </details>
-              <details>
-                <summary>Groceries</summary>
-                {activeGroceries.map((item) => (
-                  <CheckRow
-                    key={item.id}
-                    label={item.item}
-                    checked={false}
-                    onChange={(checked) => void updateGrocery(item.id, checked)}
-                  />
-                ))}
-              </details>
+            {reviewCaptures.length ? (
+            <section className={`${styles.details} ${styles.inboxOnly}`}>
               <details
                 open={inboxOpen}
                 onToggle={(event) => setInboxOpen(event.currentTarget.open)}
               >
                 <summary>
                   Pepper Inbox
-                  {recentCaptures.some((capture) =>
-                    ["captured", "needs_review", "partially_applied"].includes(
-                      capture.status || "",
-                    ),
-                  )
+                  {reviewCaptures.length
                     ? " · review needed"
                     : ""}
                 </summary>
@@ -3048,9 +3202,9 @@ export function PepperClient() {
                   item here is not a task, meal, or calendar event unless Pepper
                   explicitly says it created one.
                 </p>
-                {recentCaptures.length ? (
+                {reviewCaptures.length ? (
                   <div className={styles.evidence}>
-                    {recentCaptures.map((capture, index) => {
+                    {reviewCaptures.map((capture, index) => {
                       const needsReview = [
                         "captured",
                         "needs_review",
@@ -3065,40 +3219,53 @@ export function PepperClient() {
                             {needsReview ? <span>Needs review</span> : null}
                           </div>
                           {captureText(capture)}
-                          {capture.status === "needs_review" ? (
-                            <button
-                              type="button"
-                              className={styles.inboxRetry}
-                              onClick={() => {
-                                setTell(captureText(capture));
-                                setMessage(
-                                  "Edit the update below so Pepper knows whether it is a task, meal, or event.",
-                                );
-                              }}
-                            >
-                              Edit in composer
-                            </button>
+                          {needsReview ? (
+                            <div className={styles.inboxCaptureActions}>
+                              <button
+                                type="button"
+                                className={styles.inboxRetry}
+                                disabled={isActionPending(`capture:retry:${capture.id}`)}
+                                onClick={() => void retryCapture(capture)}
+                              >
+                                <RefreshCw size={13} aria-hidden="true" />
+                                {isActionPending(`capture:retry:${capture.id}`)
+                                  ? "Retrying…"
+                                  : "Retry now"}
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.inboxRetry}
+                                onClick={() => {
+                                  setTell(captureText(capture));
+                                  setMessage(
+                                    "Edit the update below so Pepper has the missing details it needs.",
+                                  );
+                                }}
+                              >
+                                <Pencil size={13} aria-hidden="true" />
+                                Edit in composer
+                              </button>
+                            </div>
                           ) : null}
                         </blockquote>
                       );
                     })}
                   </div>
-                ) : (
-                  <p className={styles.inboxEmpty}>Nothing is waiting for review.</p>
-                )}
+                ) : null}
               </details>
             </section>
+            ) : null}
           </>
         ) : null}
 
-        {view === "chores" ? (
+        {view === "tasks" ? (
           loadedSections.has("chores") ? (
-            <ChoresPage
+            <TasksPage
               chores={state.chores || []}
               state={state}
-              createBusy={isActionPending("chore:create")}
-              isItemBusy={(id) => isActionPending(`item:${id}`)}
-              onCreate={createChore}
+              isPending={isActionPending}
+              onCreateChore={createChore}
+              onCreatePersonalTask={createPersonalTask}
               onOpen={openTask}
               onToggle={(task) =>
                 void updateItem(
@@ -3108,7 +3275,7 @@ export function PepperClient() {
               }
             />
           ) : (
-            <SectionLoading label="Opening family chores" active={loadingSections.has("chores")} />
+            <SectionLoading label="Opening tasks" active={loadingSections.has("chores")} />
           )
         ) : null}
 
@@ -3130,14 +3297,6 @@ export function PepperClient() {
           ) : (
             <SectionLoading label="Opening this week’s meals" active={loadingSections.has("meals")} />
           )
-        ) : null}
-
-        {view === "work" && actorIsAdult ? (
-          <WorkPage
-            tasks={[...(state.familyTasks || []), ...(state.privateTasks || [])]}
-            state={state}
-            onOpen={openTask}
-          />
         ) : null}
 
         {view === "family" ? (
@@ -3205,56 +3364,6 @@ export function PepperClient() {
         ) : null}
       </div>
 
-      {mobileMoreOpen ? (
-        <div
-          className={`${styles.sheetBackdrop} ${styles.mobileMoreBackdrop}`}
-          onMouseDown={() => setMobileMoreOpen(false)}
-        >
-          <section
-            className={`${styles.actionSheet} ${styles.mobileMoreSheet}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="pepper-more-title"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              className={styles.sheetClose}
-              aria-label="Close more sections"
-              onClick={() => setMobileMoreOpen(false)}
-            >
-              <X size={20} aria-hidden="true" />
-            </button>
-            <div className={styles.eyebrow}>Navigate</div>
-            <h2 id="pepper-more-title">More from Pepper</h2>
-            <nav className={styles.mobileMoreList} aria-label="More Pepper sections">
-              {mobileMoreNavigation.map(([key, label, Icon]) => {
-                const isActive =
-                  view === key ||
-                  (["member", "setup"].includes(view) && key === "family");
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    aria-current={isActive ? "page" : undefined}
-                    onClick={() => {
-                      setView(key as View);
-                      setMobileMoreOpen(false);
-                    }}
-                  >
-                    <span>
-                      <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
-                      <strong>{label}</strong>
-                    </span>
-                    <ChevronRight size={18} aria-hidden="true" />
-                  </button>
-                );
-              })}
-            </nav>
-          </section>
-        </div>
-      ) : null}
-
       {selectedItem ? (
         <ItemActionSheet
           selected={selectedItem}
@@ -3302,6 +3411,75 @@ export function PepperClient() {
 
       {!ritualOpen ? (
         <div className={styles.composer}>
+          {pepperExchange ? (
+            <section
+              className={styles.pepperReply}
+              data-mode={pepperExchange.mode}
+              aria-live="polite"
+            >
+              <div className={styles.pepperReplyHeading}>
+                <span className={styles.pepperReplyMark} aria-hidden="true">
+                  <Sparkles size={15} />
+                </span>
+                <div>
+                  <small>
+                    {pepperExchange.mode === "answer"
+                      ? "Pepper found"
+                      : pepperExchange.mode === "clarification"
+                        ? "One detail needed"
+                        : "Pepper updated"}
+                  </small>
+                  <strong>
+                    {pepperExchange.answer?.title ||
+                      (pepperExchange.mode === "answer"
+                        ? "From your family plan"
+                        : pepperExchange.mode === "clarification"
+                          ? "Before I change the plan"
+                          : "One Brain")}
+                  </strong>
+                </div>
+                <button
+                  type="button"
+                  className={styles.pepperReplyDismiss}
+                  onClick={() => setPepperExchange(null)}
+                  aria-label="Dismiss Pepper response"
+                >
+                  <X size={15} aria-hidden="true" />
+                </button>
+              </div>
+              <p>
+                {pepperExchange.mode === "clarification"
+                  ? pepperExchange.clarification?.question || pepperExchange.reply
+                  : pepperExchange.answer?.summary || pepperExchange.reply}
+              </p>
+              {pepperExchange.answer?.items?.length ? (
+                <ul className={styles.pepperReplyItems}>
+                  {pepperExchange.answer.items.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {pepperExchange.undoable || pepperExchange.viewItem || pepperExchange.mode === "clarification" ? (
+                <div className={styles.pepperReplyActions}>
+                  {pepperExchange.undoable ? (
+                    <button type="button" disabled={busy} onClick={() => void undoPepperExchange()}>
+                      <Undo2 size={15} aria-hidden="true" /> Undo
+                    </button>
+                  ) : null}
+                  {pepperExchange.viewItem ? (
+                    <button type="button" onClick={() => setSelectedItem(pepperExchange.viewItem || null)}>
+                      <Pencil size={15} aria-hidden="true" /> View or edit
+                    </button>
+                  ) : null}
+                  {pepperExchange.mode === "clarification" ? (
+                    <button type="button" onClick={() => { setPepperExchange(null); setTell(""); }}>
+                      <X size={15} aria-hidden="true" /> Start over
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
           {message ? (
             <div className={styles.toast} role="status">
               <span>{message}</span>
@@ -3344,7 +3522,11 @@ export function PepperClient() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") void sendTell();
               }}
-              placeholder="Tell Pepper what changed…"
+              placeholder={
+                pepperExchange?.mode === "clarification"
+                  ? pepperExchange.clarification?.placeholder || "Add the missing detail…"
+                  : "Ask Pepper or tell her what changed…"
+              }
             />
             <button
               type="button"
@@ -3353,12 +3535,129 @@ export function PepperClient() {
               onClick={() => void sendTell()}
               aria-label="Send to Pepper"
             >
-              ↑
+              <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
             </button>
           </div>
         </div>
       ) : null}
     </main>
+  );
+}
+
+function DayPlanPanel({
+  plan,
+  busy,
+  emailConnected,
+  onGenerate,
+  onOpen,
+}: {
+  plan: DailyPlan | null;
+  busy: boolean;
+  emailConnected: boolean;
+  onGenerate: () => void;
+  onOpen: (item: DayPlanItem) => void;
+}) {
+  return (
+    <section
+      className={`${styles.section} ${styles.dayPlan}`}
+      id="pepper-day-plan"
+      aria-busy={busy}
+    >
+      <header className={styles.dayPlanHeader}>
+        <div>
+          <span className={styles.sectionLabel}>Pepper&apos;s plan</span>
+          <h2>Your day, organized.</h2>
+          <p>
+            {plan
+              ? plan.headline
+              : "Pepper can arrange your priorities around the places you need to be."}
+          </p>
+        </div>
+        <button
+          type="button"
+          className={styles.dayPlanGenerate}
+          disabled={busy}
+          onClick={onGenerate}
+        >
+          {plan ? (
+            <RefreshCw size={16} aria-hidden="true" />
+          ) : (
+            <Sparkles size={16} aria-hidden="true" />
+          )}
+          {busy ? "Organizing…" : plan ? "Refresh plan" : "Plan my day"}
+        </button>
+      </header>
+
+      {plan ? (
+        <>
+          {plan.conflicts.length ? (
+            <div className={styles.dayPlanConflicts} role="alert">
+              <strong>Resolve before the day starts</strong>
+              {plan.conflicts.map((conflict) => (
+                <span key={conflict}>{conflict}</span>
+              ))}
+            </div>
+          ) : null}
+
+          <div className={styles.dayPlanList}>
+            {plan.items.length ? (
+              plan.items.map((item) => {
+                const Icon =
+                  item.kind === "appointment"
+                    ? CalendarDays
+                    : item.kind === "email"
+                      ? Mail
+                      : ListTodo;
+                return (
+                  <button
+                    type="button"
+                    className={styles.dayPlanRow}
+                    data-kind={item.kind}
+                    data-urgency={item.urgency}
+                    key={item.id}
+                    onClick={() => onOpen(item)}
+                  >
+                    <time>{item.scheduled_for ? time(item.scheduled_for) : "Later"}</time>
+                    <span className={styles.dayPlanIcon} aria-hidden="true">
+                      <Icon size={16} strokeWidth={1.8} />
+                    </span>
+                    <span className={styles.dayPlanBody}>
+                      <strong>{item.title}</strong>
+                      <small>
+                        {item.reason}
+                        {item.detail ? ` · ${item.detail}` : ""}
+                      </small>
+                    </span>
+                    <ChevronRight className={styles.rowChevron} size={16} aria-hidden="true" />
+                  </button>
+                );
+              })
+            ) : (
+              <div className={styles.dayPlanEmpty}>
+                Nothing needs to be scheduled from the information Pepper can verify.
+              </div>
+            )}
+          </div>
+
+          <footer className={styles.dayPlanSources}>
+            <span>{plan.counts.tasks} task priorities</span>
+            <span>{plan.counts.appointments} appointments</span>
+            <span>
+              {plan.email.status === "connected"
+                ? `${plan.email.scanned} recent emails checked privately`
+                : "Email was not included"}
+            </span>
+            <time>Updated {time(plan.generated_at)}</time>
+          </footer>
+        </>
+      ) : (
+        <div className={styles.dayPlanPrompt}>
+          <span><ListTodo size={15} aria-hidden="true" /> Open tasks</span>
+          <span><CalendarDays size={15} aria-hidden="true" /> Appointments</span>
+          <span><Mail size={15} aria-hidden="true" /> {emailConnected ? "Private email signals" : "Connect email to include it"}</span>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -4459,7 +4758,7 @@ function ConnectionsPage({
       title: "Google email",
       identifier: gmail?.metadata?.email || "Gmail or Google Workspace",
       summary: gmail?.connected
-        ? "Account linked. Email message scanning is not enabled in this beta."
+        ? "Account linked. Pepper checks recent priority messages only when this member requests a day plan."
         : canConnectEmail
           ? "Connect the personal, school, or work Google account you use most."
           : "Email connections are available from adult and teen profiles.",
@@ -4478,13 +4777,14 @@ function ConnectionsPage({
       owner: displayName(member),
       privacy: "Private source",
       coverage: displayName(member),
-      lastActivity: gmail?.connected ? "Account linked" : "No verified activity yet",
+      lastActivity: gmail?.connected ? connectionActivity(gmail.last_synced_at) : "No verified activity yet",
       reads: [
         "Google account identity for the connected member",
-        "No inbox messages are read in this beta",
+        "Subject, sender, and short snippet from recent unread or important messages when Plan my day is requested",
       ],
       automatic: [
-        "Nothing is marked handled without a canonical One Brain change",
+        "Rank likely email commitments alongside this member's tasks and appointments",
+        "Do not create a task or mark anything handled from email alone",
       ],
       approval: [
         "Sending email or sharing private content",
@@ -4492,7 +4792,7 @@ function ConnectionsPage({
       ],
       sharing:
         "Private by default. Only permission-safe family actions may leave the member's private context.",
-      feeds: ["Connection status only"],
+      feeds: ["Private day plan"],
       action: gmail?.connected
         ? undefined
         : gmail?.configured && canConnectEmail
@@ -5012,14 +5312,150 @@ function workPrioritySummary(tasks: FamilyTask[]) {
     : "Work is clear.";
 }
 
+type TaskMode = "work" | "personal" | "chores";
+
+function TasksPage({
+  state,
+  chores,
+  isPending,
+  onOpen,
+  onCreateChore,
+  onCreatePersonalTask,
+  onToggle,
+}: {
+  state: PepperState;
+  chores: FamilyTask[];
+  isPending: (key: string) => boolean;
+  onOpen: (task: FamilyTask) => void;
+  onCreateChore: (draft: ChoreDraft) => Promise<boolean>;
+  onCreatePersonalTask: (draft: PersonalTaskDraft) => Promise<boolean>;
+  onToggle: (task: FamilyTask) => void;
+}) {
+  const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+  const [mode, setMode] = useState<TaskMode>(actorIsAdult ? "work" : "personal");
+  const [personalComposerOpen, setPersonalComposerOpen] = useState(false);
+  const allTasks = Array.from(
+    new Map(
+      [...(state.familyTasks || []), ...(state.privateTasks || [])].map((task) => [task.id, task]),
+    ).values(),
+  );
+  const personalTasks = allTasks
+    .filter(
+      (task) =>
+        !isWorkTask(task) &&
+        !isChore(task) &&
+        (task.visibility === "private" || task.owner_member_id === state.member.id),
+    )
+    .sort(compareWorkTasks);
+  const activePersonal = personalTasks.filter(
+    (task) => !["completed", "canceled"].includes(task.status),
+  );
+  const handledPersonal = personalTasks.filter((task) =>
+    ["completed", "canceled"].includes(task.status),
+  );
+  const modes: Array<[TaskMode, string]> = [
+    ...(actorIsAdult ? [["work", "Work"] as [TaskMode, string]] : []),
+    ["personal", actorIsAdult ? "Personal" : "My tasks"],
+    ["chores", "Chores"],
+  ];
+
+  return (
+    <>
+      <section className={`${styles.hero} ${styles.taskHubHero}`}>
+        <div className={styles.eyebrow}>{displayName(state.member)} · Responsibilities</div>
+        <h1>Tasks</h1>
+        <p>Work, personal to-dos, and chores each stay in their proper place.</p>
+      </section>
+
+      <div className={styles.taskModeTabs} role="tablist" aria-label="Task list">
+        {modes.map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={mode === value}
+            className={mode === value ? styles.taskModeActive : styles.taskMode}
+            onClick={() => setMode(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "work" && actorIsAdult ? (
+        <WorkPage tasks={allTasks} state={state} onOpen={onOpen} showHero={false} />
+      ) : null}
+
+      {mode === "personal" ? (
+        <section className={styles.taskHubSection}>
+          <header className={styles.taskHubHeader}>
+            <div>
+              <span className={styles.sectionLabel}>My list</span>
+              <h2>{activePersonal.length ? `${activePersonal.length} open` : "You are clear"}</h2>
+            </div>
+            <button type="button" className={styles.textButton} onClick={() => setPersonalComposerOpen(true)}>
+              <Plus size={15} aria-hidden="true" /> Add to-do
+            </button>
+          </header>
+          <div className={styles.taskHubList}>
+            {activePersonal.length ? activePersonal.map((task) => (
+              <TaskActionRow
+                key={task.id}
+                task={task}
+                state={state}
+                onOpen={() => onOpen(task)}
+              />
+            )) : <div className={styles.quietEmpty}>No open personal tasks.</div>}
+          </div>
+          {handledPersonal.length ? (
+            <details className={styles.handledDetails}>
+              <summary>{handledPersonal.length} completed or canceled</summary>
+              {handledPersonal.map((task) => (
+                <TaskActionRow key={task.id} task={task} state={state} onOpen={() => onOpen(task)} />
+              ))}
+            </details>
+          ) : null}
+        </section>
+      ) : null}
+
+      {mode === "chores" ? (
+        <ChoresPage
+          chores={chores}
+          state={state}
+          createBusy={isPending("chore:create")}
+          isItemBusy={(id) => isPending(`item:${id}`)}
+          onCreate={onCreateChore}
+          onOpen={onOpen}
+          onToggle={onToggle}
+          showHero={false}
+          canCreate={actorIsAdult}
+        />
+      ) : null}
+
+      {personalComposerOpen ? (
+        <PersonalTaskComposer
+          busy={isPending("personal-task:create")}
+          onClose={() => setPersonalComposerOpen(false)}
+          onCreate={async (draft) => {
+            const created = await onCreatePersonalTask(draft);
+            if (created) setPersonalComposerOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function WorkPage({
   tasks,
   state,
   onOpen,
+  showHero = true,
 }: {
   tasks: FamilyTask[];
   state: PepperState;
   onOpen: (task: FamilyTask) => void;
+  showHero?: boolean;
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const workTasks = Array.from(
@@ -5040,11 +5476,13 @@ function WorkPage({
 
   return (
     <>
-      <section className={`${styles.hero} ${styles.workHero}`}>
-        <div className={styles.eyebrow}>C.W. Warren</div>
-        <h1>Work</h1>
-        <p>{workPrioritySummary(active)}</p>
-      </section>
+      {showHero ? (
+        <section className={`${styles.hero} ${styles.workHero}`}>
+          <div className={styles.eyebrow}>C.W. Warren</div>
+          <h1>Work</h1>
+          <p>{workPrioritySummary(active)}</p>
+        </section>
+      ) : null}
 
       <div className={styles.workPriorityStack}>
         {grouped.length ? (
@@ -5168,6 +5606,8 @@ function ChoresPage({
   onCreate,
   onOpen,
   onToggle,
+  showHero = true,
+  canCreate = true,
 }: {
   chores: FamilyTask[];
   state: PepperState;
@@ -5176,6 +5616,8 @@ function ChoresPage({
   onCreate: (draft: ChoreDraft) => Promise<boolean>;
   onOpen: (task: FamilyTask) => void;
   onToggle: (task: FamilyTask) => void;
+  showHero?: boolean;
+  canCreate?: boolean;
 }) {
   const [filter, setFilter] = useState<ChoreFilter>("today");
   const [composerOpen, setComposerOpen] = useState(false);
@@ -5201,11 +5643,13 @@ function ChoresPage({
 
   return (
     <>
-      <section className={`${styles.hero} ${styles.choreHero}`}>
-        <div className={styles.eyebrow}>Family</div>
-        <h1>Family chores</h1>
-        <p>See every chore. Assign it once.</p>
-      </section>
+      {showHero ? (
+        <section className={`${styles.hero} ${styles.choreHero}`}>
+          <div className={styles.eyebrow}>Family</div>
+          <h1>Family chores</h1>
+          <p>See every chore. Assign it once.</p>
+        </section>
+      ) : null}
 
       <div className={styles.choreToolbar}>
         <div className={styles.choreFilters} role="tablist" aria-label="Chore range">
@@ -5249,14 +5693,16 @@ function ChoresPage({
         )}
       </section>
 
-      <button
-        type="button"
-        className={styles.choreAddButton}
-        onClick={() => setComposerOpen(true)}
-      >
-        <span><Plus size={20} aria-hidden="true" /> Add a chore</span>
-        <ChevronRight size={19} aria-hidden="true" />
-      </button>
+      {canCreate ? (
+        <button
+          type="button"
+          className={styles.choreAddButton}
+          onClick={() => setComposerOpen(true)}
+        >
+          <span><Plus size={20} aria-hidden="true" /> Add a chore</span>
+          <ChevronRight size={19} aria-hidden="true" />
+        </button>
+      ) : null}
 
       <div className={styles.choreSharedNote}>
         <Info size={18} aria-hidden="true" />
@@ -5281,7 +5727,7 @@ function ChoresPage({
         </details>
       ) : null}
 
-      {composerOpen ? (
+      {composerOpen && canCreate ? (
         <ChoreComposer
           members={state.members}
           actor={state.member}
@@ -6947,7 +7393,7 @@ function ItemActionSheet({
           </form>
         ) : null}
 
-        {!editing && canAssign ? (
+        {!editing && canAssign && !item.deleted_at ? (
           <label className={styles.ownerSelect}>
             {eventItem ? "Driver" : "Owner"}
             <select
@@ -6969,12 +7415,14 @@ function ItemActionSheet({
 
         {!editing && canChangeStatus ? (
           <div className={styles.sheetActions}>
-            <button type="button" disabled={busy} onClick={() => setEditing(true)}>
-              <Pencil size={17} /> {taskItem ? "Edit task" : eventEditorLabel}
-            </button>
+            {!item.deleted_at ? (
+              <button type="button" disabled={busy} onClick={() => setEditing(true)}>
+                <Pencil size={17} /> {taskItem ? "Edit task" : eventEditorLabel}
+              </button>
+            ) : null}
             {handled ? (
-              <button type="button" disabled={busy} onClick={() => void runUpdate("reopen")}>
-                <RotateCcw size={17} /> {pendingOperation === "reopen" ? "Restoring…" : "Restore"}
+              <button type="button" disabled={busy} onClick={() => void runUpdate(item.deleted_at ? "restore" : "reopen")}>
+                <RotateCcw size={17} /> {["reopen", "restore"].includes(pendingOperation || "") ? "Restoring…" : "Restore"}
               </button>
             ) : (
               <>
@@ -6993,7 +7441,7 @@ function ItemActionSheet({
           <p className={styles.permissionNote}>An adult or the current owner can change this item.</p>
         ) : null}
 
-        {!editing && canChangeStatus ? (
+        {!editing && canChangeStatus && !item.deleted_at ? (
           confirmDelete ? (
             <div className={styles.deleteConfirmation} role="alert">
               <div>
@@ -7156,26 +7604,5 @@ function ConflictResolutionSheet({
         ) : null}
       </section>
     </div>
-  );
-}
-
-function CheckRow({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className={styles.checkRow}>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <span>{label}</span>
-    </label>
   );
 }

@@ -13,10 +13,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Pepper · Family Concierge",
+  title: "Pepper · Your Day, Organized",
   applicationName: "Pepper",
   description:
-    "A calm family concierge for schedules, responsibilities, and the things that need follow-through.",
+    "Pepper brings together email, school events, chores, tasks, and appointments into a daily flow ordered by importance.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,

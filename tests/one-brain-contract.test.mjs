@@ -4,8 +4,10 @@ import test from 'node:test'
 import {
   buildPlan,
   classifyPiece,
+  dateFromText,
   delegatedIntent,
   isComplexTrainingPlan,
+  questionIntent,
   replyForPlan,
   splitCapture,
 } from '../supabase/functions/pepper-tell-v2/logic.ts'
@@ -82,6 +84,102 @@ test('existing delegated-task and simple V5.1 intents remain recognized', () => 
   assert.equal(classifyPiece('Elle is getting Chloe at 5 pm', '2026-08-24').type, 'ride.assign')
 })
 
+test('Tell Pepper routes explicit tasks and needs instead of shelving them', () => {
+  assert.deepEqual(classifyPiece('Add new work task - review Spectrum billing', '2026-09-10'), {
+    type: 'task',
+    title: 'Review Spectrum billing',
+    private: true,
+    category: 'work',
+    ownerSlug: null,
+  })
+  assert.deepEqual(classifyPiece('Need: replace Chloe\'s running shoes', '2026-09-10'), {
+    type: 'task',
+    title: "Replace Chloe's running shoes",
+    private: true,
+    category: 'need',
+    ownerSlug: null,
+  })
+  assert.deepEqual(classifyPiece('What time is Lyra rehearsal?', '2026-09-10'), {
+    type: 'question',
+    query: {
+      type: 'schedule',
+      date: '2026-09-10',
+      dateLabel: 'today',
+      personSlug: 'lyra',
+    },
+  })
+})
+
+test('Ask Pepper recognizes useful family-state questions without turning them into work', () => {
+  assert.deepEqual(questionIntent('What are we having for dinner tomorrow?', '2026-09-10'), {
+    type: 'meal',
+    date: '2026-09-11',
+    dateLabel: 'tomorrow',
+  })
+  assert.deepEqual(questionIntent('Who is picking up Chloe today?', '2026-09-10'), {
+    type: 'ride',
+    date: '2026-09-10',
+    dateLabel: 'today',
+    personSlug: 'chloe',
+  })
+  assert.deepEqual(questionIntent('What chores does Posey have?', '2026-09-10'), {
+    type: 'chores',
+    personSlug: 'posey',
+  })
+  assert.deepEqual(questionIntent('What are my work priorities?', '2026-09-10'), {
+    type: 'work',
+  })
+  assert.deepEqual(questionIntent('Who has the front seat today?', '2026-09-10'), {
+    type: 'front_seat',
+    date: '2026-09-10',
+    dateLabel: 'today',
+  })
+  assert.deepEqual(questionIntent('How many steps do I have?', '2026-09-10'), {
+    type: 'health',
+  })
+})
+
+test('polite Pepper commands remain actions even when phrased as questions', () => {
+  assert.equal(questionIntent('Could you add milk to groceries?', '2026-09-10'), null)
+  assert.deepEqual(classifyPiece('Could you add milk to groceries?', '2026-09-10'), {
+    type: 'grocery',
+    item: 'milk',
+  })
+})
+
+test('Tell Pepper parses household events and requests missing event details', () => {
+  assert.equal(dateFromText('next Thursday at 5 pm', '2026-09-10')?.date, '2026-09-17')
+  assert.deepEqual(classifyPiece('Add event: Lyra rehearsal tomorrow at 5 pm', '2026-09-10'), {
+    type: 'event.create',
+    title: 'Lyra rehearsal',
+    personSlug: 'lyra',
+    time: '2026-09-12T00:00:00.000Z',
+    private: false,
+  })
+  assert.deepEqual(classifyPiece('Dan Eriksen arrives to visit', '2026-09-10'), {
+    type: 'ambiguous',
+    text: 'Dan Eriksen arrives to visit',
+  })
+})
+
+test('natural dinner updates are promoted into the meal plan', () => {
+  assert.deepEqual(
+    classifyPiece('Tonight we are having leftovers you can update the plan', '2026-09-10'),
+    { type: 'meal', mealName: 'Leftovers', time: null },
+  )
+})
+
+test('capture task categories are persisted through canonical source routing', async () => {
+  const migration = await readFile(
+    new URL('../supabase/migrations/20260910193000_route_pepper_capture_tasks.sql', import.meta.url),
+    'utf8',
+  )
+  assert.match(migration, /pepper_capture_work/)
+  assert.match(migration, /new\.area := 'Work'/)
+  assert.doesNotMatch(migration, /pepper_capture_question/)
+  assert.match(migration, /pepper_capture_event_follow_up/)
+})
+
 test('current API routes tell and member review actions through the transactional function', async () => {
   const [tell, api, legacyApi] = await Promise.all([
     readFile(tellPath, 'utf8'),
@@ -91,6 +189,14 @@ test('current API routes tell and member review actions through the transactiona
   assert.match(tell, /private\.apply_capture_plan/)
   assert.match(tell, /private\.list_capture_reviews/)
   assert.match(tell, /private\.resolve_capture_review/)
+  assert.match(tell, /action === 'review_retry'/)
+  assert.match(tell, /clarification_text/)
+  assert.match(tell, /action === 'undo'/)
+  assert.match(tell, /undoCapture/)
+  assert.match(tell, /answeredQuestionResponse/)
+  assert.match(tell, /questionIntent\(text\)/)
+  assert.match(tell, /mode: 'answer'/)
+  assert.match(tell, /remaining_ambiguities/)
   assert.match(tell, /body\.resolution !== 'no_change_required'/)
   assert.match(tell, /\$\{sql\.json\(plan\)\}::jsonb/)
   assert.match(tell, /\$\{sql\.json\(reviewPlan\)\}::jsonb/)
@@ -98,6 +204,8 @@ test('current API routes tell and member review actions through the transactiona
   assert.doesNotMatch(tell, /JSON\.stringify\(body\.plan\)/)
   assert.doesNotMatch(tell, /pepper-family-beta-01/)
   assert.match(api, /action==='capture_reviews'/)
+  assert.match(api, /action==='capture_review_retry'/)
+  assert.match(api, /action==='capture_undo'/)
   assert.match(api, /action==='capture_review_resolve'/)
   assert.match(legacyApi, /from\('captures'\)[\s\S]*?\.eq\('member_id',m\.id\)/)
 })

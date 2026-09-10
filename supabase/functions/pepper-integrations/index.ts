@@ -25,6 +25,95 @@ async function digest(value:string){const bytes=await crypto.subtle.digest('SHA-
 async function challenge(value:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'')}
 function configured(){return Boolean(GOOGLE_CLIENT_ID&&GOOGLE_CLIENT_SECRET)}
 
+async function googleJson(url:string,init:RequestInit){
+  const response=await fetch(url,{...init,signal:AbortSignal.timeout(20000)})
+  const body=await response.json().catch(()=>({}))
+  if(!response.ok){
+    const detail=String(body?.error_description||body?.error?.message||body?.error||`Google returned ${response.status}`)
+    throw Object.assign(new Error(detail),{status:response.status===401?409:502})
+  }
+  return body
+}
+
+async function gmailAccessToken(connectionId:string){
+  if(!configured())throw Object.assign(new Error('Google email OAuth credentials are not configured.'),{status:503})
+  const rows=await sql<any[]>`
+    select v.decrypted_secret as refresh_token
+    from private.integration_tokens t
+    join vault.decrypted_secrets v on v.id=t.vault_secret_id
+    where t.connection_id=${connectionId}::uuid
+    limit 1
+  `
+  if(!rows[0]?.refresh_token)throw Object.assign(new Error('Reconnect Google email to restore private inbox planning.'),{status:409})
+  const body=new URLSearchParams({
+    refresh_token:String(rows[0].refresh_token),
+    client_id:GOOGLE_CLIENT_ID,
+    client_secret:GOOGLE_CLIENT_SECRET,
+    grant_type:'refresh_token',
+  })
+  const token=await googleJson('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body})
+  if(!token.access_token)throw Object.assign(new Error('Google did not return email access.'),{status:502})
+  return String(token.access_token)
+}
+
+function gmailHeader(message:any,name:string){
+  const headers=Array.isArray(message?.payload?.headers)?message.payload.headers:[]
+  return String(headers.find((header:any)=>String(header?.name||'').toLowerCase()===name.toLowerCase())?.value||'')
+    .replace(/\s+/g,' ')
+    .trim()
+}
+
+async function gmailDigest(member:any){
+  const rows=await sql<any[]>`
+    select id
+    from public.integration_connections
+    where household_id=${member.household_id}::uuid
+      and member_id=${member.id}::uuid
+      and provider='gmail'
+      and status='connected'
+    limit 1
+  `
+  const connection=rows[0]
+  if(!connection)return {status:'not_connected',scanned:0,messages:[]}
+  try{
+    const accessToken=await gmailAccessToken(connection.id)
+    const listUrl=new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages')
+    listUrl.searchParams.set('maxResults','20')
+    listUrl.searchParams.set('q','newer_than:7d {is:unread is:important} -category:promotions -category:social -category:forums')
+    const list=await googleJson(listUrl.toString(),{headers:{authorization:`Bearer ${accessToken}`}})
+    const refs=Array.isArray(list.messages)?list.messages.slice(0,20):[]
+    const messages=await Promise.all(refs.map(async(ref:any)=>{
+      const messageUrl=new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(String(ref.id||''))}`)
+      messageUrl.searchParams.set('format', 'metadata')
+      for(const name of ['Subject','From','Date'])messageUrl.searchParams.append('metadataHeaders',name)
+      const message=await googleJson(messageUrl.toString(),{headers:{authorization:`Bearer ${accessToken}`}})
+      const labels=Array.isArray(message.labelIds)?message.labelIds:[]
+      return {
+        id:String(message.id||ref.id||''),
+        thread_id:String(message.threadId||ref.threadId||''),
+        subject:gmailHeader(message,'Subject').slice(0,240)||'Email needing attention',
+        sender:gmailHeader(message,'From').slice(0,200)||null,
+        snippet:String(message.snippet||'').replace(/\s+/g,' ').trim().slice(0,320)||null,
+        received_at:message.internalDate?new Date(Number(message.internalDate)).toISOString():gmailHeader(message,'Date')||null,
+        unread:labels.includes('UNREAD'),
+        important:labels.includes('IMPORTANT'),
+      }
+    }))
+    await sql`
+      update public.integration_connections
+      set last_attempt_at=now(),last_synced_at=now(),last_error=null,
+        metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('last_digest_messages',${messages.length}),
+        updated_at=now()
+      where id=${connection.id}::uuid
+    `
+    return {status:'connected',scanned:messages.length,messages}
+  }catch(error){
+    const detail=error instanceof Error?error.message.slice(0,300):'Private inbox scan failed.'
+    await sql`update public.integration_connections set last_attempt_at=now(),last_error=${detail},updated_at=now() where id=${connection.id}::uuid`
+    throw error
+  }
+}
+
 async function memberFromSession(token:string){
   if(!UUID.test(token))return null
   const rows=await sql<any[]>`select m.id,m.household_id,m.slug,m.display_name,m.role from public.member_sessions s join public.household_members m on m.id=s.member_id where s.token=${token}::uuid and s.revoked_at is null and s.expires_at>now() limit 1`
@@ -83,6 +172,7 @@ Deno.serve(async(req:Request)=>{
   try{
     if(body.action==='status')return json(req,{ok:true,...await status(member)})
     if(body.action==='gmail_start')return json(req,{ok:true,authorization_url:await beginGmail(member,body.return_target)})
+    if(body.action==='gmail_digest')return json(req,{ok:true,...await gmailDigest(member)})
     if(body.action==='health_pair')return json(req,{ok:true,...await pairHealth(member,body.client)})
     return json(req,{error:'Unknown integration action.'},400)
   }catch(error){return json(req,{error:error instanceof Error?error.message:'Connection failed.'},Number((error as any)?.status||500))}

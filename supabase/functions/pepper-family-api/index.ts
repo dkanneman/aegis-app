@@ -1,5 +1,6 @@
 import postgres from 'npm:postgres@3.4.7'
 import {chooseMealWeek,uniqueGroceriesForWeek,wantsMealPlanRefresh} from './meal-planning.ts'
+import {buildDailyPlan} from './day-planning.ts'
 const sql=postgres(Deno.env.get('SUPABASE_DB_URL')!,{ssl:'require',prepare:false,max:1,idle_timeout:20,connect_timeout:10})
 const SUPABASE_URL=Deno.env.get('SUPABASE_URL')||''
 if(!SUPABASE_URL)throw new Error('SUPABASE_URL is not configured.')
@@ -601,18 +602,23 @@ async function updateFamilyItem(member:any,body:any){
   const itemId=String(body.id||'')
   const operation=String(body.operation||'')
   const ownerId=body.owner_member_id==null?'':String(body.owner_member_id)
+  const expectedUpdatedAt=body.expected_updated_at==null?'':String(body.expected_updated_at)
   if(!['task','event'].includes(itemType)||!UUID.test(itemId))throw Object.assign(new Error('Invalid family item.'),{status:400})
-  if(!['assign','edit','complete','cancel','delete','reopen'].includes(operation))throw Object.assign(new Error('Invalid update.'),{status:400})
+  if(!['assign','edit','complete','cancel','delete','reopen','restore'].includes(operation))throw Object.assign(new Error('Invalid update.'),{status:400})
   if(ownerId&&!UUID.test(ownerId))throw Object.assign(new Error('Invalid family member.'),{status:400})
+  if(expectedUpdatedAt&&Number.isNaN(Date.parse(expectedUpdatedAt)))throw Object.assign(new Error('Invalid item version.'),{status:400})
   return sql.begin(async (tx:any)=>{
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     if(itemType==='task'){
-      const rows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid and deleted_at is null for update`
+      const rows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null)) and updated_at=coalesce(nullif(${expectedUpdatedAt},'')::timestamptz,updated_at) for update`
       const item=rows[0]
-      if(!item)throw Object.assign(new Error('Task not found.'),{status:404})
+      if(!item)throw Object.assign(new Error(expectedUpdatedAt?'That task changed somewhere else. Refresh before changing it again.':'Task not found.'),{status:expectedUpdatedAt?409:404})
       const privateAllowed=item.visibility!=='private'||item.owner_member_id===member.id||item.creator_member_id===member.id
       if(!privateAllowed)throw Object.assign(new Error('That task is private.'),{status:403})
-      if(operation==='assign'){
+      if(operation==='restore'){
+        if(!adult(member)&&item.owner_member_id!==member.id&&item.creator_member_id!==member.id)throw Object.assign(new Error('You cannot restore that task.'),{status:403})
+        await tx`update public.tasks set status='open',deleted_at=null,deleted_by_member_id=null,completed_at=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      }else if(operation==='assign'){
         if(item.visibility==='private')throw Object.assign(new Error('Private tasks cannot be reassigned.'),{status:403})
         if(!adult(member))throw Object.assign(new Error('Only an adult can assign a family task.'),{status:403})
         if(ownerId){
@@ -644,18 +650,20 @@ async function updateFamilyItem(member:any,body:any){
         const status=operation==='complete'?'completed':operation==='cancel'?'canceled':'open'
         await tx`update public.tasks set status=${status},completed_at=case when ${operation}='complete' then now() else null end,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       }
-      const summary=operation==='assign'?`${item.title} was assigned.`:operation==='edit'?`${item.title} details were updated.`:operation==='delete'?`${item.title} was deleted from Pepper.`:`${item.title} was ${operation==='reopen'?'reopened':operation+'ed'}.`
+      const summary=operation==='assign'?`${item.title} was assigned.`:operation==='edit'?`${item.title} details were updated.`:operation==='delete'?`${item.title} was deleted from Pepper.`:`${item.title} was ${operation==='reopen'?'reopened':operation==='restore'?'restored':operation+'ed'}.`
       const auditType=operation==='edit'?'task_edit':operation==='delete'?'task_delete':`task_${operation}`
       await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${auditType},'task',${itemId}::uuid,${summary})`
       const updatedRows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,area,project,priority,classification,tags,notes,waiting_on,recurrence,completed_at,next_action,deleted_at,updated_at from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0]}
     }
-    const rows=await tx<any[]>`select id,title,owner_member_id,visibility,status,transport_owner_member_id from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid and deleted_at is null for update`
+    const rows=await tx<any[]>`select id,title,owner_member_id,visibility,status,transport_owner_member_id from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null)) and updated_at=coalesce(nullif(${expectedUpdatedAt},'')::timestamptz,updated_at) for update`
     const item=rows[0]
-    if(!item)throw Object.assign(new Error('Event not found.'),{status:404})
+    if(!item)throw Object.assign(new Error(expectedUpdatedAt?'That event changed somewhere else. Refresh before changing it again.':'Event not found.'),{status:expectedUpdatedAt?409:404})
     if(item.visibility==='private'&&item.owner_member_id!==member.id)throw Object.assign(new Error('That event is private.'),{status:403})
     if(!adult(member))throw Object.assign(new Error('Only an adult can change a family event.'),{status:403})
-    if(operation==='assign'){
+    if(operation==='restore'){
+      await tx`update public.events set status='confirmed',canonical_status_override=null,deleted_at=null,deleted_by_member_id=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+    }else if(operation==='assign'){
       if(!ownerId){
         await tx`update public.events set transport_owner_member_id=null,transport_status='unassigned',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       }else{
@@ -682,7 +690,7 @@ async function updateFamilyItem(member:any,body:any){
       else if(operation==='cancel')await tx`update public.events set status=${status},canonical_status_override='canceled',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       else await tx`update public.events set status=${status},canonical_status_override=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
     }
-    const summary=operation==='assign'?`${item.title} driver changed.`:operation==='edit'?`${item.title} appointment details were updated.`:operation==='delete'?`${item.title} was deleted from Pepper.`:`${item.title} was ${operation==='reopen'?'restored':operation+'ed'}.`
+    const summary=operation==='assign'?`${item.title} driver changed.`:operation==='edit'?`${item.title} appointment details were updated.`:operation==='delete'?`${item.title} was deleted from Pepper.`:`${item.title} was ${operation==='reopen'||operation==='restore'?'restored':operation+'ed'}.`
     const auditType=operation==='edit'?'event_edit':operation==='delete'?'event_delete':`event_${operation}`
     await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${auditType},'event',${itemId}::uuid,${summary})`
     await tx`select public.recompute_household_consequences(${member.household_id}::uuid)`
@@ -714,7 +722,65 @@ async function sectionState(member:any,section:string,headers:any,token:string){
   }
   throw Object.assign(new Error('Unknown Pepper section.'),{status:400})
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.2',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','personal_task_create','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+async function memberDayPlan(member:any,headers:any){
+  const today=dateLA()
+  const [bounds,tasks,events,email]=await Promise.all([
+    sql<any[]>`select now() as now,(${today}::date at time zone ${TZ}) as day_start,((${today}::date+1) at time zone ${TZ}) as day_end`,
+    sql<any[]>`
+      select id,title,status,due_at,priority,area,project,next_action,source
+      from public.tasks
+      where household_id=${member.household_id}::uuid
+        and deleted_at is null
+        and owner_member_id=${member.id}::uuid
+        and status in ('open','in_progress','on_hold')
+        and visibility in ('household','private')
+      order by updated_at desc
+      limit 160
+    `,
+    sql<any[]>`
+      select id,title,starts_at,ends_at,location,person_slug
+      from public.events
+      where household_id=${member.household_id}::uuid
+        and deleted_at is null
+        and status not in ('canceled','completed')
+        and starts_at>=(${today}::date at time zone ${TZ})
+        and starts_at<((${today}::date+1) at time zone ${TZ})
+        and (
+          owner_member_id=${member.id}::uuid
+          or person_slug=${member.slug}
+          or transport_owner_member_id=${member.id}::uuid
+          or (${adult(member)}::boolean and visibility='household')
+        )
+        and (visibility='household' or owner_member_id=${member.id}::uuid or person_slug=${member.slug})
+      order by starts_at
+      limit 80
+    `,
+    proxy(INTEGRATIONS,headers,{action:'gmail_digest'}),
+  ])
+  const clock=bounds[0]||{now:new Date().toISOString(),day_start:new Date().toISOString(),day_end:new Date(Date.now()+86400000).toISOString()}
+  const emailMessages=email.ok&&Array.isArray(email.data?.messages)?email.data.messages:[]
+  const plan=buildDailyPlan({
+    now:new Date(clock.now).toISOString(),
+    dayStart:new Date(clock.day_start).toISOString(),
+    dayEnd:new Date(clock.day_end).toISOString(),
+    timeZone:TZ,
+    tasks,
+    events,
+    emails:emailMessages,
+  })
+  return {
+    ok:true,
+    plan:{
+      ...plan,
+      email:{
+        status:email.ok?String(email.data?.status||'connected'):'unavailable',
+        scanned:Number(email.data?.scanned||0),
+        error:email.ok?null:String(email.data?.error||'Email could not be checked.'),
+      },
+    },
+  }
+}
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.4',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','day_plan','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','item_restore','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','personal_task_create','capture_undo','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 if(action==='pin_setup'){
   const setupToken=String(b.setup_token||'').trim()
@@ -741,7 +807,7 @@ if(action==='state'){
     state.preparation=prep.ok?prep.data:{now:[],watching:[]}
     state.rituals=rr.ok?rr.data:null
     state.frontSeat=frontSeat
-    state.apiVersion='2.2'
+    state.apiVersion='2.4'
     state.progressive=true
     return json(req,{state})
   }
@@ -755,12 +821,13 @@ if(action==='state'){
     state.horizon.readiness=[...additions,...existing]
     if(state.horizon.coverage)state.horizon.coverage.preparation_now=additions.length
   }
-  state.apiVersion='2.2';return json(req,{state})
+  state.apiVersion='2.4';return json(req,{state})
 }
 if(action==='section_state'){
   const section=String(b.section||'')
   return json(req,{section,state:await sectionState(member,section,headers,token)})
 }
+if(action==='day_plan'){return json(req,await memberDayPlan(member,headers))}
 if(action==='member_state'){return json(req,{state:await memberState(member,String(b.member_slug||''))})}
 if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}
 if(action==='member_setup_save'){return json(req,await saveMemberSetup(member,b))}
@@ -778,6 +845,8 @@ if(action==='conflict_resolve'){return json(req,await resolveConflict(member,b))
 if(action==='tell'&&wantsMealPlanRefresh(String(b.text||''))){const result=await generateMealPlan(member,{start_date:dateLA(),refresh:true,instruction:b.text});return json(req,{...result,reply:`I refreshed the next seven dinners and rebuilt the shopping list as ${result.grocery_count} unique items.`})}
 if(action==='tell'){const r=await proxy(TELL,headers,{action:'tell',text:b.text,source:b.source,idempotency_key:b.idempotency_key});return json(req,r.data,r.status)}
 if(action==='capture_reviews'){const r=await proxy(TELL,headers,{action:'review_list',limit:b.limit});return json(req,r.data,r.status)}
+if(action==='capture_review_retry'){const r=await proxy(TELL,headers,{action:'review_retry',capture_id:b.capture_id,clarification_text:b.clarification_text,idempotency_key:b.idempotency_key});return json(req,r.data,r.status)}
+if(action==='capture_undo'){const r=await proxy(TELL,headers,{action:'undo',capture_id:b.capture_id});return json(req,r.data,r.status)}
 if(action==='capture_review_resolve'){const r=await proxy(TELL,headers,{action:'review_resolve',capture_id:b.capture_id,idempotency_key:b.idempotency_key,resolution:b.resolution});return json(req,r.data,r.status)}
 if(['task','grocery','reflect'].includes(action)){const r=await proxy(TARGET,headers,b);return json(req,r.data,r.status)}
 if(action==='reflection_explore'){const r=await proxy(REFLECTIONS,headers,{action:'explore',insight_id:b.insight_id});return json(req,r.data,r.status)}

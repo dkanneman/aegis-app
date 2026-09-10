@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Pepper Family Concierge",
     short_name: "Pepper",
     description:
-      "A calm family concierge for schedules, responsibilities, and the things that need follow-through.",
+      "Pepper brings together email, school events, chores, tasks, and appointments into a daily flow ordered by importance.",
     start_url: "/pepper",
     scope: "/",
     display: "standalone",
