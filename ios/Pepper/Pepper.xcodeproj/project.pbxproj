@@ -13,6 +13,7 @@
 		A10000000000000000000004 /* PepperWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* PepperWebView.swift */; };
 		A10000000000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* Assets.xcassets */; };
 		A10000000000000000000006 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* PrivacyInfo.xcprivacy */; };
+		A10000000000000000000007 /* PepperBiometricStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* PepperBiometricStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +26,7 @@
 		A20000000000000000000007 /* Pepper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pepper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000009 /* Pepper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Pepper.entitlements; sourceTree = "<group>"; };
+		A20000000000000000000010 /* PepperBiometricStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PepperBiometricStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -53,6 +55,7 @@
 				A20000000000000000000002 /* PepperBrowserModel.swift */,
 				A20000000000000000000003 /* PepperConfiguration.swift */,
 				A20000000000000000000004 /* PepperWebView.swift */,
+				A20000000000000000000010 /* PepperBiometricStore.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
 				A20000000000000000000006 /* PrivacyInfo.xcprivacy */,
 				A20000000000000000000008 /* Info.plist */,
@@ -146,6 +149,7 @@
 				A10000000000000000000002 /* PepperBrowserModel.swift in Sources */,
 				A10000000000000000000003 /* PepperConfiguration.swift in Sources */,
 				A10000000000000000000004 /* PepperWebView.swift in Sources */,
+				A10000000000000000000007 /* PepperBiometricStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -196,7 +200,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = Pepper/Pepper.entitlements;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 6H88BCZW6P;
 				ENABLE_PREVIEWS = YES;
@@ -220,7 +224,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = Pepper/Pepper.entitlements;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 6H88BCZW6P;
 				ENABLE_PREVIEWS = NO;

@@ -105,11 +105,12 @@ Deno.serve(async (req: Request) => {
   if (error) return Response.json({ error: 'Could not load Pepper consequences.' }, { status: 500, headers: cors })
 
   const eventIds = [...new Set((findings || []).flatMap((x: any) => [x.event_id, x.related_event_id]).filter(Boolean))]
-  const [{ data: events }, { data: adults }] = await Promise.all([
+  const [{ data: events }, { data: adults }, { data: trustedDrivers }] = await Promise.all([
     eventIds.length
-      ? db.from('events').select('id,title,visibility,owner_member_id,person_slug,starts_at,ends_at,kind,location,status,transport_owner_member_id,transport_status,source,external_url,external_organizer_email,external_organizer_name').is('deleted_at', null).in('id', eventIds)
+      ? db.from('events').select('id,title,visibility,owner_member_id,person_slug,starts_at,ends_at,kind,location,status,transport_owner_member_id,trusted_driver_id,transport_status,source,external_url,external_organizer_email,external_organizer_name').is('deleted_at', null).in('id', eventIds)
       : Promise.resolve({ data: [] as any[] }),
     db.from('household_members').select('id,slug,display_name,role').eq('household_id', m.household_id).in('role', ['adult_admin','adult']),
+    db.from('trusted_drivers').select('id,display_name,relationship').eq('household_id', m.household_id).eq('active', true),
   ])
   const eventMap = new Map((events || []).map((e: any) => [e.id, e]))
   const adultSlugs = (adults || []).map((a: any) => a.slug)
@@ -150,6 +151,7 @@ Deno.serve(async (req: Request) => {
       const available = availableDrivers.map((a: any) => productName(a.display_name))
       summary = `${primary.title}${when ? ` · ${when}` : ''} needs a driver.`
       if (available.length) summary += ` ${names(available)} ${available.length === 1 ? 'looks' : 'look'} unbooked in Pepper at that time.`
+      if ((trustedDrivers || []).length) summary += ` Trusted drivers are also available to assign.`
     } else if (c.consequence_type === 'missing_required_adult' && primary) {
       const available = unbookedAdults(primary).map((a: any) => productName(a.display_name))
       summary = `${primary.title}${when ? ` · ${when}` : ''} needs an adult assigned.`
@@ -182,6 +184,7 @@ Deno.serve(async (req: Request) => {
         slug: adult.slug,
         display_name: productName(adult.display_name),
       })),
+      trusted_drivers: trustedDrivers || [],
     }]
   })
 

@@ -120,11 +120,20 @@ async function setupProfiles(member:any){
   `
   return Promise.all(profiles.map(async(profile:any)=>profileWithSignedPhoto(adult(member)||profile.member_id===member.id?profile:{...profile,medications:[]})))
 }
+async function trustedDriverState(member:any){
+  return sql<any[]>`
+    select id,display_name,relationship,active,created_at,updated_at
+    from public.trusted_drivers
+    where household_id=${member.household_id}::uuid
+      and active=true
+    order by lower(display_name),created_at
+  `
+}
 async function monthState(member:any){
   const start=dateLA(),end=addDays(start,30)
   return sql<any[]>`
     select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,
-      e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,
+      e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,
       e.transport_status,e.source,e.external_url,e.external_organizer_email,
       e.external_organizer_name
     from public.events e
@@ -149,8 +158,8 @@ async function memberState(member:any,targetSlug:string){
   const target=targets[0]
   if(!target)throw Object.assign(new Error('Family member not found.'),{status:404})
   const [events,appointments,tasks,profiles,schoolChanges,setup]=await Promise.all([
-    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.transport_status,e.source from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and e.starts_at<now()+interval '31 days' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) order by e.starts_at limit 120`,
-    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.transport_status,e.source from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) and (lower(coalesce(e.kind,''))='appointment' or lower(coalesce(e.title,'')) ~ '(^|[^a-z])dr([^a-z]|$)' or lower(concat_ws(' ',e.title,e.notes,e.location)) ~ '(^|[^a-z])(doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)') order by e.starts_at limit 160`,
+    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and e.starts_at<now()+interval '31 days' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) order by e.starts_at limit 120`,
+    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) and (lower(coalesce(e.kind,''))='appointment' or lower(coalesce(e.title,'')) ~ '(^|[^a-z])dr([^a-z]|$)' or lower(concat_ws(' ',e.title,e.notes,e.location)) ~ '(^|[^a-z])(doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)') order by e.starts_at limit 160`,
     sql<any[]>`select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,t.due_at,t.source,t.updated_at,t.created_at,t.area,t.project,t.priority,t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action from public.tasks t where t.household_id=${member.household_id}::uuid and t.deleted_at is null and (t.owner_member_id=${target.id}::uuid or ((lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.display_name).toLowerCase()}%`} or lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.slug).toLowerCase()}%`}) and lower(coalesce(t.area,'')) in ('health','kids') and lower(concat_ws(' ',t.title,t.project,t.notes,t.classification,array_to_string(t.tags,' '))) ~ '(^|[^a-z])(dr|doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)')) and (t.visibility='household' or t.owner_member_id=${member.id}::uuid or t.creator_member_id=${member.id}::uuid) order by case t.status when 'open' then 0 when 'in_progress' then 1 when 'on_hold' then 2 when 'completed' then 3 else 4 end,t.due_at nulls last,t.updated_at desc limit 160`,
     sql<any[]>`select p.id,p.academic_year,p.school_name,p.district_name,p.grade_label,p.timezone,p.family_arrival_target_local::text,p.first_bell_local::text,p.normal_dismissal_local::text,p.first_day::text,p.last_day::text,p.source_label,p.source_url,p.source_checked_on::text from private.school_profiles p where p.household_id=${member.household_id}::uuid and p.student_member_id=${target.id}::uuid order by p.last_day desc limit 1`,
     sql<any[]>`select schedule_date::text,schedule_kind,schedule_title,day_starts_at,dismissal_at,precedence,resolution_level,source_label,source_url from private.resolve_school_schedule(${member.household_id}::uuid,(now() at time zone 'America/Los_Angeles')::date,((now() at time zone 'America/Los_Angeles')::date+interval '31 days')::date) where person_slug=${target.slug} and resolution_level='dated_exception' and transportation_impact=true order by schedule_date limit 6`,
@@ -597,15 +606,58 @@ async function resolveConflict(member:any,body:any){
   })
   return {ok:true,...result}
 }
+async function saveTrustedDriver(member:any,body:any){
+  if(!adult(member))throw Object.assign(new Error('Only an adult can manage trusted drivers.'),{status:403})
+  const driverId=body.trusted_driver_id==null?'':String(body.trusted_driver_id)
+  const displayName=String(body.display_name||'').trim().slice(0,100)
+  const relationship=String(body.relationship||'').trim().slice(0,100)
+  if(driverId&&!UUID.test(driverId))throw Object.assign(new Error('Invalid trusted driver.'),{status:400})
+  if(!displayName)throw Object.assign(new Error('Give this trusted driver a name.'),{status:400})
+  return sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    const duplicates=await tx<any[]>`select id from public.trusted_drivers where household_id=${member.household_id}::uuid and active=true and lower(btrim(display_name))=lower(btrim(${displayName})) and id is distinct from nullif(${driverId},'')::uuid limit 1`
+    if(duplicates[0])throw Object.assign(new Error('That trusted driver is already listed.'),{status:409})
+    let rows:any[]
+    if(driverId){
+      rows=await tx<any[]>`update public.trusted_drivers set display_name=${displayName},relationship=nullif(${relationship},''),active=true,updated_at=now() where id=${driverId}::uuid and household_id=${member.household_id}::uuid returning id,display_name,relationship,active,created_at,updated_at`
+      if(!rows[0])throw Object.assign(new Error('Trusted driver not found.'),{status:404})
+    }else{
+      rows=await tx<any[]>`insert into public.trusted_drivers(household_id,display_name,relationship,created_by_member_id) values(${member.household_id}::uuid,${displayName},nullif(${relationship},''),${member.id}::uuid) returning id,display_name,relationship,active,created_at,updated_at`
+    }
+    const driver=rows[0]
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'trusted_driver_saved','trusted_driver',${driver.id},${`${driver.display_name} is available for family ride assignments.`})`
+    return {ok:true,trusted_driver:driver}
+  })
+}
+async function removeTrustedDriver(member:any,body:any){
+  if(!adult(member))throw Object.assign(new Error('Only an adult can manage trusted drivers.'),{status:403})
+  const driverId=String(body.trusted_driver_id||'')
+  if(!UUID.test(driverId))throw Object.assign(new Error('Invalid trusted driver.'),{status:400})
+  return sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    const rows=await tx<any[]>`select id,display_name from public.trusted_drivers where id=${driverId}::uuid and household_id=${member.household_id}::uuid and active=true for update`
+    const driver=rows[0]
+    if(!driver)throw Object.assign(new Error('Trusted driver not found.'),{status:404})
+    const assignments=await tx<any[]>`select id,title from public.events where household_id=${member.household_id}::uuid and trusted_driver_id=${driverId}::uuid and deleted_at is null and status in ('tentative','confirmed') and starts_at>=now()-interval '2 hours' order by starts_at limit 1`
+    if(assignments[0])throw Object.assign(new Error(`Reassign ${assignments[0].title} before removing ${driver.display_name}.`),{status:409})
+    await tx`update public.trusted_drivers set active=false,updated_at=now() where id=${driverId}::uuid and household_id=${member.household_id}::uuid`
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'trusted_driver_removed','trusted_driver',${driverId},${`${driver.display_name} was removed from new ride assignments.`})`
+    return {ok:true,id:driverId}
+  })
+}
 async function updateFamilyItem(member:any,body:any){
   const itemType=String(body.item_type||'')
   const itemId=String(body.id||'')
   const operation=String(body.operation||'')
   const ownerId=body.owner_member_id==null?'':String(body.owner_member_id)
+  const trustedDriverId=body.trusted_driver_id==null?'':String(body.trusted_driver_id)
   const expectedUpdatedAt=body.expected_updated_at==null?'':String(body.expected_updated_at)
   if(!['task','event'].includes(itemType)||!UUID.test(itemId))throw Object.assign(new Error('Invalid family item.'),{status:400})
   if(!['assign','edit','complete','cancel','delete','reopen','restore'].includes(operation))throw Object.assign(new Error('Invalid update.'),{status:400})
   if(ownerId&&!UUID.test(ownerId))throw Object.assign(new Error('Invalid family member.'),{status:400})
+  if(trustedDriverId&&!UUID.test(trustedDriverId))throw Object.assign(new Error('Invalid trusted driver.'),{status:400})
+  if(ownerId&&trustedDriverId)throw Object.assign(new Error('Choose one driver for this ride.'),{status:400})
+  if(itemType==='task'&&trustedDriverId)throw Object.assign(new Error('A trusted driver can only be assigned to a ride.'),{status:400})
   if(expectedUpdatedAt&&Number.isNaN(Date.parse(expectedUpdatedAt)))throw Object.assign(new Error('Invalid item version.'),{status:400})
   return sql.begin(async (tx:any)=>{
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
@@ -656,7 +708,7 @@ async function updateFamilyItem(member:any,body:any){
       const updatedRows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,area,project,priority,classification,tags,notes,waiting_on,recurrence,completed_at,next_action,deleted_at,updated_at from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0]}
     }
-    const rows=await tx<any[]>`select id,title,owner_member_id,visibility,status,transport_owner_member_id from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null)) and updated_at=coalesce(nullif(${expectedUpdatedAt},'')::timestamptz,updated_at) for update`
+    const rows=await tx<any[]>`select id,title,owner_member_id,visibility,status,transport_owner_member_id,trusted_driver_id from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null)) and updated_at=coalesce(nullif(${expectedUpdatedAt},'')::timestamptz,updated_at) for update`
     const item=rows[0]
     if(!item)throw Object.assign(new Error(expectedUpdatedAt?'That event changed somewhere else. Refresh before changing it again.':'Event not found.'),{status:expectedUpdatedAt?409:404})
     if(item.visibility==='private'&&item.owner_member_id!==member.id)throw Object.assign(new Error('That event is private.'),{status:403})
@@ -664,12 +716,16 @@ async function updateFamilyItem(member:any,body:any){
     if(operation==='restore'){
       await tx`update public.events set status='confirmed',canonical_status_override=null,deleted_at=null,deleted_by_member_id=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
     }else if(operation==='assign'){
-      if(!ownerId){
-        await tx`update public.events set transport_owner_member_id=null,transport_status='unassigned',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-      }else{
+      if(ownerId){
         const drivers=await tx<any[]>`select id from public.household_members where id=${ownerId}::uuid and household_id=${member.household_id}::uuid and role in ('adult_admin','adult') limit 1`
         if(!drivers[0])throw Object.assign(new Error('Choose an adult driver in this household.'),{status:400})
-        await tx`update public.events set transport_owner_member_id=${ownerId}::uuid,transport_status='assigned',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+        await tx`update public.events set transport_owner_member_id=${ownerId}::uuid,trusted_driver_id=null,transport_status='confirmed',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      }else if(trustedDriverId){
+        const drivers=await tx<any[]>`select id from public.trusted_drivers where id=${trustedDriverId}::uuid and household_id=${member.household_id}::uuid and active=true limit 1`
+        if(!drivers[0])throw Object.assign(new Error('Choose an active trusted driver for this household.'),{status:400})
+        await tx`update public.events set transport_owner_member_id=null,trusted_driver_id=${trustedDriverId}::uuid,transport_status='confirmed',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      }else{
+        await tx`update public.events set transport_owner_member_id=null,trusted_driver_id=null,transport_status='unassigned',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       }
     }else if(operation==='edit'){
       const title=String(body.title||'').trim().slice(0,240)
@@ -686,7 +742,7 @@ async function updateFamilyItem(member:any,body:any){
       await tx`update public.events set status='canceled',canonical_status_override='canceled',deleted_at=now(),deleted_by_member_id=${member.id}::uuid,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
     }else{
       const status=operation==='complete'?'completed':operation==='cancel'?'canceled':'confirmed'
-      if(operation==='complete')await tx`update public.events set status=${status},canonical_status_override='completed',transport_status=case when transport_owner_member_id is null then transport_status else 'completed' end,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      if(operation==='complete')await tx`update public.events set status=${status},canonical_status_override='completed',transport_status=case when transport_owner_member_id is null and trusted_driver_id is null then transport_status else 'completed' end,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       else if(operation==='cancel')await tx`update public.events set status=${status},canonical_status_override='canceled',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       else await tx`update public.events set status=${status},canonical_status_override=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
     }
@@ -694,8 +750,14 @@ async function updateFamilyItem(member:any,body:any){
     const auditType=operation==='edit'?'event_edit':operation==='delete'?'event_delete':`event_${operation}`
     await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${auditType},'event',${itemId}::uuid,${summary})`
     await tx`select public.recompute_household_consequences(${member.household_id}::uuid)`
-    const updatedRows=await tx<any[]>`select id,title,person_slug,starts_at,ends_at,location,status,visibility,owner_member_id,kind,transport_owner_member_id,transport_status,source,notes,canonical_status_override,canonical_content_override,deleted_at,updated_at from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-    return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0]}
+    let transportConsequenceResolved:any=null
+    if(operation==='assign'&&(ownerId||trustedDriverId)){
+      const unresolved=await tx<any[]>`select id from public.consequences where household_id=${member.household_id}::uuid and event_id=${itemId}::uuid and consequence_type='missing_transport' and status='open' limit 1`
+      if(unresolved[0])throw Object.assign(new Error('Pepper could not resolve the ride after assigning that driver.'),{status:409})
+      transportConsequenceResolved=true
+    }
+    const updatedRows=await tx<any[]>`select id,title,person_slug,starts_at,ends_at,location,status,visibility,owner_member_id,kind,transport_owner_member_id,trusted_driver_id,transport_status,source,notes,canonical_status_override,canonical_content_override,deleted_at,updated_at from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+    return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0],transport_consequence_resolved:transportConsequenceResolved}
   })
 }
 async function sectionState(member:any,section:string,headers:any,token:string){
@@ -704,7 +766,10 @@ async function sectionState(member:any,section:string,headers:any,token:string){
     const mealPlan=await mealState(member)
     return {meals:mealPlan.meals,groceries:mealPlan.groceries,mealNeeds:mealPlan.mealNeeds}
   }
-  if(section==='family')return {memberProfiles:await setupProfiles(member)}
+  if(section==='family'){
+    const [memberProfiles,trustedDrivers]=await Promise.all([setupProfiles(member),trustedDriverState(member)])
+    return {memberProfiles,trustedDrivers}
+  }
   if(section==='connections'){
     const [calendarResult,integrations]=await Promise.all([
       proxy(CALENDAR,headers,{action:'status',session_token:token}),
@@ -724,10 +789,10 @@ async function sectionState(member:any,section:string,headers:any,token:string){
 }
 async function memberDayPlan(member:any,headers:any){
   const today=dateLA()
-  const [bounds,tasks,events,email]=await Promise.all([
+  const [bounds,tasks,events,meals,email]=await Promise.all([
     sql<any[]>`select now() as now,(${today}::date at time zone ${TZ}) as day_start,((${today}::date+1) at time zone ${TZ}) as day_end`,
     sql<any[]>`
-      select id,title,status,due_at,priority,area,project,next_action,source
+      select id,title,status,due_at,priority,area,project,classification,tags,next_action,source
       from public.tasks
       where household_id=${member.household_id}::uuid
         and deleted_at is null
@@ -738,11 +803,12 @@ async function memberDayPlan(member:any,headers:any){
       limit 160
     `,
     sql<any[]>`
-      select id,title,starts_at,ends_at,location,person_slug
+      select id,title,starts_at,ends_at,location,person_slug,kind
       from public.events
       where household_id=${member.household_id}::uuid
         and deleted_at is null
         and status not in ('canceled','completed')
+        and lower(coalesce(kind,''))<>'meal'
         and starts_at>=(${today}::date at time zone ${TZ})
         and starts_at<((${today}::date+1) at time zone ${TZ})
         and (
@@ -755,6 +821,17 @@ async function memberDayPlan(member:any,headers:any){
       order by starts_at
       limit 80
     `,
+    sql<any[]>`
+      select mp.id,mp.meal_name,
+        coalesce(mp.eat_at,(mp.meal_date + time '18:30') at time zone ${TZ}) as eat_at,
+        owner.display_name as owner_name
+      from public.meal_plan mp
+      left join public.household_members owner on owner.id=mp.owner_member_id
+      where mp.household_id=${member.household_id}::uuid
+        and mp.meal_date=${today}::date
+      order by mp.updated_at desc
+      limit 1
+    `,
     proxy(INTEGRATIONS,headers,{action:'gmail_digest'}),
   ])
   const clock=bounds[0]||{now:new Date().toISOString(),day_start:new Date().toISOString(),day_end:new Date(Date.now()+86400000).toISOString()}
@@ -766,6 +843,7 @@ async function memberDayPlan(member:any,headers:any){
     timeZone:TZ,
     tasks,
     events,
+    meals,
     emails:emailMessages,
   })
   return {
@@ -780,7 +858,7 @@ async function memberDayPlan(member:any,headers:any){
     },
   }
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.4',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','day_plan','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','item_restore','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','personal_task_create','capture_undo','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.6',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','day_plan','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','item_restore','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','trusted_driver_save','trusted_driver_remove','personal_task_create','capture_undo','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 if(action==='pin_setup'){
   const setupToken=String(b.setup_token||'').trim()
@@ -797,7 +875,7 @@ if(action==='account_delete'){return json(req,await deleteAccount(member,b))}
 const headers:any={'content-type':'application/json','x-pepper-session':token,apikey:SUPABASE_ANON_KEY,authorization:`Bearer ${SUPABASE_ANON_KEY}`}
 if(action==='state'){
   const progressive=b.progressive===true
-  const [core,prep,cr,ir,rr,xr,frontSeat]=await Promise.all([proxy(TARGET,headers,{action:'state'}),proxy(PREPARATION,headers,{action:'list'}),proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'}),frontSeatState(member)])
+  const [core,prep,cr,ir,rr,xr,frontSeat,trustedDrivers]=await Promise.all([proxy(TARGET,headers,{action:'state'}),proxy(PREPARATION,headers,{action:'list'}),proxy(CONSEQUENCES,headers,{}),proxy(REFLECTIONS,headers,{action:'weekly'}),proxy(RITUALS,headers,{action:'get'}),proxy(INTEGRATIONS,headers,{action:'status'}),frontSeatState(member),trustedDriverState(member)])
   if(!core.ok)return json(req,core.data,core.status)
   if(progressive){
     const state=core.data?.state||{}
@@ -807,13 +885,14 @@ if(action==='state'){
     state.preparation=prep.ok?prep.data:{now:[],watching:[]}
     state.rituals=rr.ok?rr.data:null
     state.frontSeat=frontSeat
-    state.apiVersion='2.4'
+    state.trustedDrivers=trustedDrivers
+    state.apiVersion='2.6'
     state.progressive=true
     return json(req,{state})
   }
   const [hr,calendarResult,chores,mealPlan,memberProfiles,monthEvents]=await Promise.all([proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),choreState(member),mealState(member),setupProfiles(member),monthState(member)])
   const csr=calendarResult.ok?calendarResult.data:{...await calendarState(member),configured:false,last_error:calendarResult.data?.error||'Calendar service is unavailable.'}
-  const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;state.meals=mealPlan.meals;state.groceries=mealPlan.groceries;state.mealNeeds=mealPlan.mealNeeds;state.memberProfiles=memberProfiles;state.frontSeat=frontSeat;state.monthEvents=monthEvents;
+  const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;state.meals=mealPlan.meals;state.groceries=mealPlan.groceries;state.mealNeeds=mealPlan.mealNeeds;state.memberProfiles=memberProfiles;state.frontSeat=frontSeat;state.trustedDrivers=trustedDrivers;state.monthEvents=monthEvents;
   if(state.horizon&&prep.ok&&Array.isArray(prep.data?.now)){
     const existing=Array.isArray(state.horizon.readiness)?state.horizon.readiness:[]
     const fingerprints=new Set(existing.map((x:any)=>`${x.type}|${x.title}|${x.summary}`))
@@ -821,7 +900,7 @@ if(action==='state'){
     state.horizon.readiness=[...additions,...existing]
     if(state.horizon.coverage)state.horizon.coverage.preparation_now=additions.length
   }
-  state.apiVersion='2.4';return json(req,{state})
+  state.apiVersion='2.6';return json(req,{state})
 }
 if(action==='section_state'){
   const section=String(b.section||'')
@@ -833,6 +912,8 @@ if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}
 if(action==='member_setup_save'){return json(req,await saveMemberSetup(member,b))}
 if(action==='member_photo_save'){return json(req,await saveMemberPhoto(member,b))}
 if(action==='member_photo_remove'){return json(req,await removeMemberPhoto(member,b))}
+if(action==='trusted_driver_save'){return json(req,await saveTrustedDriver(member,b))}
+if(action==='trusted_driver_remove'){return json(req,await removeTrustedDriver(member,b))}
 if(action==='personal_task_create'){return json(req,await createPersonalTask(member,b))}
 if(action==='chore_create'){return json(req,await createChore(member,b))}
 if(action==='front_seat_update'){return json(req,await updateFrontSeat(member,b))}

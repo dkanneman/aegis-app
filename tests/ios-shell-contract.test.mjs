@@ -7,6 +7,16 @@ const infoPlist = new URL("../ios/Pepper/Pepper/Info.plist", import.meta.url);
 const configuration = new URL("../ios/Pepper/Pepper/PepperConfiguration.swift", import.meta.url);
 const privacyManifest = new URL("../ios/Pepper/Pepper/PrivacyInfo.xcprivacy", import.meta.url);
 const webView = new URL("../ios/Pepper/Pepper/PepperWebView.swift", import.meta.url);
+const browserModel = new URL(
+  "../ios/Pepper/Pepper/PepperBrowserModel.swift",
+  import.meta.url,
+);
+const biometricStore = new URL(
+  "../ios/Pepper/Pepper/PepperBiometricStore.swift",
+  import.meta.url,
+);
+const app = new URL("../ios/Pepper/Pepper/PepperApp.swift", import.meta.url);
+const pepperClient = new URL("../app/pepper/pepper-client.tsx", import.meta.url);
 const entitlements = new URL("../ios/Pepper/Pepper/Pepper.entitlements", import.meta.url);
 const appIcon = new URL(
   "../ios/Pepper/Pepper/Assets.xcassets/AppIcon.appiconset/Pepper-AppIcon-1024.png",
@@ -74,4 +84,46 @@ test("the App Store icon is a 1024px PNG", async () => {
   assert.deepEqual(icon.subarray(0, 8), pngSignature);
   assert.equal(icon.readUInt32BE(16), 1024);
   assert.equal(icon.readUInt32BE(20), 1024);
+});
+
+test("Face ID protects a device-only Pepper session with PIN fallback", async () => {
+  const [
+    projectText,
+    plistText,
+    webViewText,
+    browserText,
+    storeText,
+    appText,
+    clientText,
+  ] = await Promise.all([
+    readFile(project, "utf8"),
+    readFile(infoPlist, "utf8"),
+    readFile(webView, "utf8"),
+    readFile(browserModel, "utf8"),
+    readFile(biometricStore, "utf8"),
+    readFile(app, "utf8"),
+    readFile(pepperClient, "utf8"),
+  ]);
+
+  assert.match(projectText, /PepperBiometricStore\.swift in Sources/);
+  assert.match(plistText, /<key>NSFaceIDUsageDescription<\/key>/);
+  assert.match(storeText, /import LocalAuthentication/);
+  assert.match(storeText, /import Security/);
+  assert.match(storeText, /kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly/);
+  assert.match(storeText, /\.biometryCurrentSet/);
+  assert.match(storeText, /deviceOwnerAuthenticationWithBiometrics/);
+  assert.match(webViewText, /pepperBiometrics/);
+  assert.match(webViewText, /message\.frameInfo\.isMainFrame/);
+  assert.match(webViewText, /message\.frameInfo\.securityOrigin\.protocol == allowedScheme/);
+  assert.match(webViewText, /message\.frameInfo\.securityOrigin\.host == allowedHost/);
+  assert.match(browserText, /pepper:native-session/);
+  assert.match(browserText, /pepper:native-lock/);
+  assert.match(browserText, /localStorage\.removeItem\('pepper_family_session'\)/);
+  assert.match(appText, /Unlock with Face ID/);
+  assert.match(appText, /Use PIN instead/);
+  assert.match(appText, /case \.background:\s*browser\.lockForBackground\(\)/);
+  assert.match(clientText, /offerNativeFaceID\(/);
+  assert.match(clientText, /removeNativeFaceID\(\)/);
+  assert.match(clientText, /pepper:native-session/);
+  assert.match(clientText, /pepper:native-lock/);
 });

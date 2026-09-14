@@ -19,6 +19,10 @@ struct PepperWebView: UIViewRepresentable {
             context.coordinator,
             name: Coordinator.healthMessageName
         )
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Coordinator.biometricMessageName
+        )
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -40,13 +44,18 @@ struct PepperWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.healthMessageName
         )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Coordinator.biometricMessageName
+        )
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         static let healthMessageName = "pepperHealth"
+        static let biometricMessageName = "pepperBiometrics"
 
         private let browser: PepperBrowserModel
         private let allowedHost = PepperConfiguration.appURL.host
+        private let allowedScheme = PepperConfiguration.appURL.scheme
         private let healthStore = HKHealthStore()
 
         init(browser: PepperBrowserModel) {
@@ -54,13 +63,11 @@ struct PepperWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            browser.isLoading = true
-            browser.errorMessage = nil
+            browser.webViewDidStartNavigation()
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            browser.isLoading = false
-            browser.errorMessage = nil
+            browser.webViewDidFinishNavigation()
         }
 
         func webView(
@@ -85,13 +92,20 @@ struct PepperWebView: UIViewRepresentable {
                 return
             }
 
-            if navigationAction.targetFrame == nil, url.host == allowedHost {
+            if
+                navigationAction.targetFrame == nil,
+                url.scheme == allowedScheme,
+                url.host == allowedHost
+            {
                 webView.load(navigationAction.request)
                 decisionHandler(.cancel)
                 return
             }
 
-            if url.host == allowedHost || url.scheme == "about" {
+            if
+                (url.scheme == allowedScheme && url.host == allowedHost) ||
+                url.scheme == "about"
+            {
                 decisionHandler(.allow)
                 return
             }
@@ -119,8 +133,19 @@ struct PepperWebView: UIViewRepresentable {
             didReceive message: WKScriptMessage
         ) {
             guard
+                message.frameInfo.isMainFrame,
+                message.frameInfo.securityOrigin.protocol == allowedScheme,
+                message.frameInfo.securityOrigin.host == allowedHost,
+                let payload = message.body as? [String: Any]
+            else { return }
+
+            if message.name == Self.biometricMessageName {
+                handleBiometricMessage(payload)
+                return
+            }
+
+            guard
                 message.name == Self.healthMessageName,
-                let payload = message.body as? [String: Any],
                 let ingestURLText = payload["ingest_url"] as? String,
                 let ingestURL = URL(string: ingestURLText),
                 let pairingToken = payload["pairing_token"] as? String,
@@ -136,6 +161,21 @@ struct PepperWebView: UIViewRepresentable {
 
             Task { @MainActor [weak self] in
                 await self?.syncHealth(to: ingestURL, pairingToken: pairingToken)
+            }
+        }
+
+        private func handleBiometricMessage(_ payload: [String: Any]) {
+            switch payload["action"] as? String {
+            case "offer":
+                guard
+                    let sessionToken = payload["session_token"] as? String,
+                    let memberName = payload["member_name"] as? String
+                else { return }
+                browser.offerFaceID(sessionToken: sessionToken, memberName: memberName)
+            case "remove":
+                browser.removeFaceID()
+            default:
+                return
             }
         }
 

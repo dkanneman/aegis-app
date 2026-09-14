@@ -26,3 +26,15 @@ minutes when the member taps Connect or Refresh in Pepper. The shell sends those
 two approved totals to the existing member-scoped One Brain health ingest endpoint.
 Pepper does not request write access and does not expose health totals to other
 household profiles.
+
+## Face ID
+
+After a successful profile-and-PIN login, the iPhone app offers optional Face ID
+unlock for that profile on that device. Pepper stores the member session in the
+iOS Keychain with device-only, current-biometric-set protection and removes the
+web-persisted copy. Returning from the background locks the family view again.
+
+The member can cancel Face ID or choose **Use PIN instead** at any time. Choosing
+the PIN fallback, signing out, deleting the account, or receiving an expired
+session removes the Keychain credential. Pepper never receives or stores Face ID
+images or biometric templates; iOS only returns whether authentication succeeded.

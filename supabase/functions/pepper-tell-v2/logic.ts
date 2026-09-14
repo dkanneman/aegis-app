@@ -24,6 +24,37 @@ const WEEKDAYS = [
   'saturday',
 ]
 
+const MONTHS = [
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
+]
+
+const MONTH_DATE_SOURCE = String.raw`\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?\b`
+const CLOCK_TIME_SOURCE = String.raw`\b(?:at\s+)?(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*(?:o['’]?clock\s*)?(a\.?m\.?|p\.?m\.?)\b`
+const FAMILY_MEMBER_SOURCE = 'danielle|elle|matt|lyra|chloe|posey'
+
+function validCalendarDate(year: number, month: number, day: number) {
+  const value = new Date(Date.UTC(year, month - 1, day))
+  return value.getUTCFullYear() === year &&
+    value.getUTCMonth() === month - 1 &&
+    value.getUTCDate() === day
+}
+
+function monthNumber(value: string) {
+  const normalized = value.toLowerCase().replace(/\.$/, '')
+  return MONTHS.findIndex((month) => month.startsWith(normalized.slice(0, 3))) + 1
+}
+
 export function dateFromText(text: string, today = localDate()) {
   if (/\btomorrow\b/i.test(text)) return { date: addDays(today, 1), label: 'tomorrow' }
   if (/\b(today|tonight)\b/i.test(text)) return { date: today, label: 'today' }
@@ -36,8 +67,27 @@ export function dateFromText(text: string, today = localDate()) {
     const year = numeric[3]
       ? Number(numeric[3]) < 100 ? 2000 + Number(numeric[3]) : Number(numeric[3])
       : Number(today.slice(0, 4))
-    const date = `${year}-${numeric[1].padStart(2, '0')}-${numeric[2].padStart(2, '0')}`
-    return { date, label: date }
+    const month = Number(numeric[1])
+    const day = Number(numeric[2])
+    if (validCalendarDate(year, month, day)) {
+      const date = `${year}-${numeric[1].padStart(2, '0')}-${numeric[2].padStart(2, '0')}`
+      return { date, label: date }
+    }
+  }
+
+  const named = text.match(new RegExp(MONTH_DATE_SOURCE, 'i'))
+  if (named) {
+    const month = monthNumber(named[1])
+    const day = Number(named[2])
+    let year = named[3] ? Number(named[3]) : Number(today.slice(0, 4))
+    if (!named[3]) {
+      const candidate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+      if (candidate < today) year += 1
+    }
+    if (validCalendarDate(year, month, day)) {
+      const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+      return { date, label: named[0] }
+    }
   }
 
   const weekday = text.match(/\b(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i)
@@ -57,18 +107,49 @@ export function dayBounds(date = localDate()) {
 }
 
 export function timeFromText(text: string, date = localDate()) {
-  const match = text.match(
-    /\b(?:at\s+)?(1[0-2]|0?[1-9])(?::([0-5]\d))\s*(am|pm)?\b|\b(?:at\s+)(1[0-2]|0?[1-9])\s*(am|pm)?\b|\b(1[0-2]|0?[1-9])\s*(am|pm)\b/i,
-  )
-  if (!match) return null
-  let hour = Number(match[1] || match[4] || match[6])
-  const minute = Number(match[2] || 0)
-  const period = (match[3] || match[5] || match[7] || '').toLowerCase()
+  const special = text.match(/\b(?:at\s+)?(noon|midnight)\b/i)
+  const match = text.match(new RegExp(CLOCK_TIME_SOURCE, 'i'))
+  if (!match && !special) return null
+  let hour = special
+    ? special[1].toLowerCase() === 'noon' ? 12 : 0
+    : Number(match?.[1])
+  const minute = Number(match?.[2] || 0)
+  const period = (match?.[3] || '').replace(/\./g, '').toLowerCase()
   if (period === 'pm' && hour < 12) hour += 12
   if (period === 'am' && hour === 12) hour = 0
-  return new Date(
-    `${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00-07:00`,
-  ).toISOString()
+
+  const [year, month, day] = date.split('-').map(Number)
+  const desired = Date.UTC(year, month - 1, day, hour, minute)
+  let utcValue = desired
+  const formatter = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
+    timeZone: TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  })
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(utcValue))
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, Number(part.value)]),
+    )
+    const represented = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+    )
+    const adjustment = desired - represented
+    utcValue += adjustment
+    if (adjustment === 0) break
+  }
+  return new Date(utcValue).toISOString()
 }
 
 export function formatTime(value: string) {
@@ -80,10 +161,46 @@ export function formatTime(value: string) {
 }
 
 export function splitCapture(text: string) {
-  return text
-    .split(/(?:\.|;|\band\b|\bthen\b)/i)
-    .map((part) => part.trim())
+  const protectedText = text.replace(
+    /\b(Dr|Mr|Mrs|Ms|Prof|Sr|Jr|St|Ave|Rd|Blvd)\./gi,
+    '$1__PEPPER_DOT__',
+  )
+  return protectedText
+    .split(/(?:[.;]+|\b(?:and\s+)?then\b|\band\s+(?=(?:add|create|schedule|assign|change|update|cancel|delete|complete|mark|set|move|order|buy|call|email|pick up|return|confirm|look into|find|book|pay|upload|review|send|get|bring)\b))/i)
+    .map((part) => part.replace(/__PEPPER_DOT__/g, '.').trim())
     .filter(Boolean)
+}
+
+function cleanEventTitle(piece: string) {
+  let title = piece
+    .replace(/^please\s+/i, '')
+    .replace(/^(?:(?:add|create)\s+(?:an?\s+)?(?:calendar\s+)?|new\s+)event\s*[-:–—]?\s*/i, '')
+    .replace(/^(?:add|create|schedule|put|make|book)\s+(?:an?\s+)?/i, '')
+    .replace(/\s+(?:on|to)\s+(?:(?:the|my)\s+)?calendar\b/gi, ' ')
+    .replace(/^(?:on|to)\s+(?:(?:the|my)\s+)?calendar\s*[-:–—]?\s*/i, '')
+    .replace(new RegExp(MONTH_DATE_SOURCE, 'ig'), ' ')
+    .replace(/\b20\d{2}-\d{2}-\d{2}\b/g, ' ')
+    .replace(/\b(?:0?[1-9]|1[0-2])\/(?:0?[1-9]|[12]\d|3[01])(?:\/(?:\d{2}|20\d{2}))?\b/g, ' ')
+    .replace(/\b(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, ' ')
+    .replace(/\b(?:today|tonight|tomorrow)\b/gi, ' ')
+    .replace(new RegExp(CLOCK_TIME_SOURCE, 'ig'), ' ')
+    .replace(/\b(?:at\s+)?(?:noon|midnight)\b/gi, ' ')
+    .replace(/\b(?:called|titled|named)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  title = title
+    .replace(
+      new RegExp(String.raw`^for\s+(${FAMILY_MEMBER_SOURCE})\s+(?:(?:on|at)\s+)?for\s+`, 'i'),
+      '$1 ',
+    )
+    .replace(new RegExp(String.raw`^for\s+(?=(?:${FAMILY_MEMBER_SOURCE})\b)`, 'i'), '')
+    .replace(/^(?:on|at)\s+|\s+(?:on|at)$/gi, '')
+    .replace(/^[\s:–—-]+|[\s:–—-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return title ? title.charAt(0).toUpperCase() + title.slice(1) : ''
 }
 
 export function dueDateFrom(text: string, today = localDate()) {
@@ -239,6 +356,7 @@ export type PieceIntent =
   }
   | { type: 'meal'; mealName: string; time: string | null }
   | { type: 'grocery'; item: string }
+  | { type: 'chore'; title: string; ownerSlug: string | null }
   | {
     type: 'task'
     title: string
@@ -258,6 +376,10 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
   const normalized = piece.trim().toLowerCase()
   const eventDate = dateFromText(piece, date)
   const time = timeFromText(piece, eventDate?.date || date)
+  const explicitEvent = /^(?:please\s+)?(?:(?:add|create)\s+(?:an?\s+)?(?:calendar\s+)?|new\s+)event\b/i.test(piece)
+  const calendarEvent = /^(?:please\s+)?(?:add|create|schedule|put|make|book)\b.*\b(?:on|to)\s+(?:(?:the|my)\s+)?calendar\b/i.test(piece)
+  const scheduleEvent = /^(?:please\s+)?schedule\b/i.test(piece)
+  const eventCommand = explicitEvent || calendarEvent || scheduleEvent
   const cancel = piece.match(
     /\b(lyra|chloe|posey|matt|elle)\b.*(?:doesn['’]?t have|does not have|skip(?:ping)?|cancel(?:ed|led)?|not going to|no)\s+(.+)/i,
   )
@@ -293,7 +415,7 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
     }
   }
 
-  if (normalized.includes('dinner') || /\b(?:we\s+(?:are|'re)\s+)?having\s+.+\b(?:tonight|update the plan)\b/i.test(piece)) {
+  if (!eventCommand && (normalized.includes('dinner') || /\b(?:we\s+(?:are|'re)\s+)?having\s+.+\b(?:tonight|update the plan)\b/i.test(piece))) {
     const match = piece.match(/dinner\s+(?:is|will be)?\s*(.*)/i)
       || piece.match(/(?:tonight\s+)?(?:we\s+(?:are|'re)\s+)?having\s+(.+)/i)
     const mealName = (match?.[1] || '')
@@ -317,6 +439,33 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
     }
   }
 
+  const assignedChore = piece.match(
+    /^(?:assign|give)\s+(danielle|elle|matt|lyra|chloe|posey)\s+(?:a\s+)?chore\s*[-:–—]?\s*(.+)$/i,
+  )
+  if (assignedChore) {
+    const title = assignedChore[2].trim()
+    return {
+      type: 'chore',
+      title: title.charAt(0).toUpperCase() + title.slice(1),
+      ownerSlug: assignedChore[1].toLowerCase(),
+    }
+  }
+
+  const chore = piece.match(
+    /^(?:(?:add|create)\s+(?:a\s+)?|new\s+)?chore(?:\s+(?:for|to)\s+(danielle|elle|matt|lyra|chloe|posey))?\s*[-:–—]?\s*(.+)$/i,
+  )
+  if (chore) {
+    const trailingOwner = chore[2].match(
+      /^(.+?)\s+(?:for|to)\s+(danielle|elle|matt|lyra|chloe|posey)$/i,
+    )
+    const title = (trailingOwner?.[1] || chore[2]).trim()
+    return {
+      type: 'chore',
+      title: title.charAt(0).toUpperCase() + title.slice(1),
+      ownerSlug: (chore[1] || trailingOwner?.[2] || '').toLowerCase() || null,
+    }
+  }
+
   const workTask = piece.match(
     /^add\s+(?:a\s+)?(?:new\s+)?work\s+(?:task|to-do|todo)\s*[-:–—]?\s*(.+)$/i,
   )
@@ -334,21 +483,10 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
   const question = questionIntent(piece, date)
   if (question) return { type: 'question', query: question }
 
-  const explicitEvent = /^(?:add\s+(?:an?\s+)?|new\s+)?event\b/i.test(piece)
   const eventLanguage = /\b(arrives?|visits?|comes? to visit|meeting|appointment|rehearsal|practice|game|concert|recital|performance|birthday party)\b/i.test(piece)
-  if (explicitEvent || eventLanguage) {
+  if (eventCommand || eventLanguage) {
     const person = piece.match(/\b(danielle|elle|matt|lyra|chloe|posey)\b/i)?.[1].toLowerCase() || null
-    let title = piece
-      .replace(/^(?:add\s+(?:an?\s+)?|new\s+)?event\s*[-:–—]?\s*/i, '')
-      .replace(/\b(?:today|tonight|tomorrow|next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, '')
-      .replace(/\b(?:today|tonight|tomorrow)\b/gi, '')
-      .replace(/\b20\d{2}-\d{2}-\d{2}\b/g, '')
-      .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, '')
-      .replace(/\b(?:at\s+)?(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*(?:am|pm)\b/gi, '')
-      .replace(/\s+/g, ' ')
-      .replace(/^[\s:–—-]+|[\s:–—-]+$/g, '')
-      .trim()
-    title = title.charAt(0).toUpperCase() + title.slice(1)
+    const title = cleanEventTitle(piece)
     if (time) {
       return {
         type: 'event.create',
@@ -386,7 +524,7 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
   }
 
   const prefixedTask = piece.match(
-    /^add\s+(?:a\s+)?(?:new\s+)?(?:(personal|family|household)\s+)?(?:task|to-do|todo)\s*[-:–—]?\s*(.+)$/i,
+    /^(?:add\s+(?:a\s+)?(?:new\s+)?|new\s+)(?:(personal|family|household)\s+)?(?:task|to-do|todo)\s*[-:–—]?\s*(.+)$/i,
   )
   if (prefixedTask) {
     const title = prefixedTask[2].trim()

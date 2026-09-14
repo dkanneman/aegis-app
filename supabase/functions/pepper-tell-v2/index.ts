@@ -774,6 +774,25 @@ async function interpretCapture(m: Member, text: string) {
       continue
     }
 
+    if (intent.type === 'chore') {
+      const namedOwner = intent.ownerSlug ? memberBySlug.get(intent.ownerSlug) : null
+      if (intent.ownerSlug && !namedOwner) { ambiguities.push(fact); continue }
+      if (namedOwner && !['adult_admin', 'adult'].includes(m.role) && namedOwner.id !== m.id) {
+        ambiguities.push(fact)
+        continue
+      }
+      const due = dueDateFrom(fact, today)
+      const owner = namedOwner || m
+      writes.push({
+        operation: 'task.create', record_id: planRecordId(), title: intent.title,
+        owner_member_id: owner.id, visibility: 'household', status: 'open',
+        due_at: due ? new Date(`${due.date}T17:00:00-07:00`).toISOString() : null,
+        source: 'pepper_chore', metadata: { type: 'chore_created' },
+      })
+      messages.push(`Added “${intent.title}” to ${owner.display_name}’s chores${due ? ` for ${due.label}` : ''}.`)
+      continue
+    }
+
     if (intent.type === 'task') {
       const namedOwner = intent.ownerSlug ? memberBySlug.get(intent.ownerSlug) : null
       if (intent.ownerSlug && !namedOwner) { ambiguities.push(fact); continue }

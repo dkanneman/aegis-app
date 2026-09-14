@@ -41,6 +41,8 @@
     <string>Pepper reads your daily steps and exercise minutes to create your private health summary. Pepper never writes to Apple Health.</string>
     <key>NSHealthUpdateUsageDescription</key>
     <string>Pepper never adds or changes Apple Health data. Apple requires this notice because Pepper uses HealthKit to read your steps and exercise minutes.</string>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Pepper uses Face ID to unlock your private family plan on this iPhone.</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>PepperBaseHost</key>

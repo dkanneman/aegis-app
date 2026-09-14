@@ -6,6 +6,8 @@ export type DayPlanTask = {
   priority?: string | null
   area?: string | null
   project?: string | null
+  classification?: string | null
+  tags?: string[] | null
   next_action?: string | null
   source?: string | null
 }
@@ -17,6 +19,14 @@ export type DayPlanEvent = {
   ends_at?: string | null
   location?: string | null
   person_slug?: string | null
+  kind?: string | null
+}
+
+export type DayPlanMeal = {
+  id: string
+  meal_name: string
+  eat_at: string
+  owner_name?: string | null
 }
 
 export type DayPlanEmail = {
@@ -33,14 +43,14 @@ export type DayPlanEmail = {
 export type DayPlanItem = {
   id: string
   record_id: string
-  kind: 'task' | 'appointment' | 'email'
+  kind: 'task' | 'chore' | 'event' | 'appointment' | 'meal' | 'email'
   title: string
   detail: string | null
   reason: string
   urgency: 'critical' | 'high' | 'planned' | 'fixed'
   scheduled_for: string | null
   ends_at: string | null
-  source: 'tasks' | 'calendar' | 'email'
+  source: 'tasks' | 'calendar' | 'meals' | 'email'
   external_url?: string | null
 }
 
@@ -51,7 +61,7 @@ export type DailyPlan = {
   summary: string
   items: DayPlanItem[]
   conflicts: string[]
-  counts: { tasks: number; appointments: number; emails: number }
+  counts: { tasks: number; chores: number; events: number; appointments: number; meals: number; emails: number }
 }
 
 type DayPlanInput = {
@@ -61,11 +71,13 @@ type DayPlanInput = {
   timeZone: string
   tasks: DayPlanTask[]
   events: DayPlanEvent[]
+  meals?: DayPlanMeal[]
   emails: DayPlanEmail[]
 }
 
 const MINUTE = 60_000
 const TASK_BLOCK = 45 * MINUTE
+const CHORE_BLOCK = 30 * MINUTE
 const EMAIL_BLOCK = 15 * MINUTE
 const EVENT_BUFFER = 10 * MINUTE
 
@@ -104,6 +116,14 @@ function taskPriorityScore(task: DayPlanTask, today: string, timeZone: string) {
   if (task.status === 'in_progress') score += 20
   if (/health|medical|school|family/i.test(String(task.area || ''))) score += 5
   return score
+}
+
+function isChoreTask(task: DayPlanTask) {
+  return task.source === 'pepper_chore'
+    || String(task.classification || '').toLowerCase() === 'chore'
+    || String(task.area || '').toLowerCase() === 'chores'
+    || String(task.project || '').toLowerCase() === 'family chores'
+    || (task.tags || []).some((tag) => ['chore', 'chores'].includes(String(tag).toLowerCase()))
 }
 
 function taskReason(task: DayPlanTask, today: string, timeZone: string) {
@@ -183,16 +203,36 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     })
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
 
-  const busy: BusyBlock[] = appointments.map((event) => ({
-    start: Date.parse(event.starts_at),
-    end: Math.max(Date.parse(event.ends_at || event.starts_at), Date.parse(event.starts_at) + 30 * MINUTE),
-  }))
+  const meals = (input.meals || [])
+    .filter((meal) => {
+      const start = Date.parse(meal.eat_at)
+      return start < dayEnd && start + 60 * MINUTE >= cursor
+    })
+    .sort((left, right) => Date.parse(left.eat_at) - Date.parse(right.eat_at))
 
-  const taskCandidates = input.tasks
+  const busy: BusyBlock[] = [
+    ...appointments.map((event) => ({
+      start: Date.parse(event.starts_at),
+      end: Math.max(Date.parse(event.ends_at || event.starts_at), Date.parse(event.starts_at) + 30 * MINUTE),
+    })),
+    ...meals.map((meal) => ({
+      start: Date.parse(meal.eat_at),
+      end: Date.parse(meal.eat_at) + 60 * MINUTE,
+    })),
+  ]
+
+  const activeTaskCandidates = input.tasks
     .filter((task) => ['open', 'in_progress'].includes(String(task.status || 'open')))
     .map((task) => ({ task, score: taskPriorityScore(task, today, input.timeZone) }))
     .sort((left, right) => right.score - left.score || left.task.title.localeCompare(right.task.title))
+
+  const taskCandidates = activeTaskCandidates
+    .filter(({ task }) => !isChoreTask(task))
     .slice(0, 5)
+
+  const choreCandidates = activeTaskCandidates
+    .filter(({ task }) => isChoreTask(task))
+    .slice(0, 2)
 
   const emailCandidates = input.emails
     .map((email) => ({ email, score: emailActionScore(email) }))
@@ -207,6 +247,12 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
       duration: TASK_BLOCK,
       candidate,
     })),
+    ...choreCandidates.map((candidate) => ({
+      kind: 'chore' as const,
+      score: candidate.score,
+      duration: CHORE_BLOCK,
+      candidate,
+    })),
     ...emailCandidates.map((candidate) => ({
       kind: 'email' as const,
       score: 25 + candidate.score * 8,
@@ -217,15 +263,17 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
 
   const flexibleItems: DayPlanItem[] = flexible.map((entry) => {
     const allocated = allocateBlock(busy, cursor, dayEnd, entry.duration)
-    if (entry.kind === 'task') {
+    if (entry.kind === 'task' || entry.kind === 'chore') {
       const { task, score } = entry.candidate as { task: DayPlanTask; score: number }
       return {
-        id: `task:${task.id}`,
+        id: `${entry.kind}:${task.id}`,
         record_id: task.id,
-        kind: 'task',
+        kind: entry.kind,
         title: task.title,
         detail: task.next_action || task.project || task.area || null,
-        reason: taskReason(task, today, input.timeZone),
+        reason: entry.kind === 'chore' && taskReason(task, today, input.timeZone) === 'Next useful open task'
+          ? 'Household responsibility'
+          : taskReason(task, today, input.timeZone),
         urgency: urgencyForTask(task, score),
         scheduled_for: allocated ? new Date(allocated).toISOString() : null,
         ends_at: allocated ? new Date(allocated + entry.duration).toISOString() : null,
@@ -248,44 +296,70 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     }
   })
 
-  const appointmentItems: DayPlanItem[] = appointments.map((event) => ({
-    id: `appointment:${event.id}`,
-    record_id: event.id,
-    kind: 'appointment',
-    title: event.title,
-    detail: event.location || null,
-    reason: `Fixed appointment at ${timeLabel(event.starts_at, input.timeZone)}`,
+  const fixedEventItems: DayPlanItem[] = appointments.map((event) => {
+    const kind = String(event.kind || '').toLowerCase() === 'appointment'
+      || /\b(?:appointment|doctor|dentist|orthodont|therapy|check[ -]?up)\b/i.test(event.title)
+      ? 'appointment' as const
+      : 'event' as const
+    return {
+      id: `${kind}:${event.id}`,
+      record_id: event.id,
+      kind,
+      title: event.title,
+      detail: event.location || null,
+      reason: `${kind === 'appointment' ? 'Appointment' : 'Fixed event'} at ${timeLabel(event.starts_at, input.timeZone)}`,
+      urgency: 'fixed',
+      scheduled_for: event.starts_at,
+      ends_at: event.ends_at || null,
+      source: 'calendar',
+    }
+  })
+
+  const mealItems: DayPlanItem[] = meals.map((meal) => ({
+    id: `meal:${meal.id}`,
+    record_id: meal.id,
+    kind: 'meal',
+    title: `Dinner · ${meal.meal_name}`,
+    detail: meal.owner_name ? `${meal.owner_name} is handling dinner` : null,
+    reason: `Family meal at ${timeLabel(meal.eat_at, input.timeZone)}`,
     urgency: 'fixed',
-    scheduled_for: event.starts_at,
-    ends_at: event.ends_at || null,
-    source: 'calendar',
+    scheduled_for: meal.eat_at,
+    ends_at: new Date(Date.parse(meal.eat_at) + 60 * MINUTE).toISOString(),
+    source: 'meals',
   }))
 
-  const items = [...flexibleItems, ...appointmentItems].sort((left, right) => {
+  const fixedItems = [...fixedEventItems, ...mealItems]
+  const items = [...flexibleItems, ...fixedItems].sort((left, right) => {
     const leftTime = left.scheduled_for ? Date.parse(left.scheduled_for) : dayEnd + 1
     const rightTime = right.scheduled_for ? Date.parse(right.scheduled_for) : dayEnd + 1
     return leftTime - rightTime || left.title.localeCompare(right.title)
   })
-  const nextAppointment = appointmentItems[0]
-  const firstPriority = flexibleItems.find((item) => item.kind !== 'appointment')
-  const headline = firstPriority && nextAppointment
-    ? `Start with ${firstPriority.title}; protect ${nextAppointment.title} at ${timeLabel(nextAppointment.scheduled_for!, input.timeZone)}.`
+  const nextFixed = [...fixedItems].sort((left, right) => Date.parse(left.scheduled_for || '') - Date.parse(right.scheduled_for || ''))[0]
+  const firstPriority = flexibleItems[0]
+  const headline = firstPriority && nextFixed
+    ? `Start with ${firstPriority.title}; protect ${nextFixed.title} at ${timeLabel(nextFixed.scheduled_for!, input.timeZone)}.`
     : firstPriority
       ? `Start with ${firstPriority.title}.`
-      : nextAppointment
-        ? `Your next fixed commitment is ${nextAppointment.title} at ${timeLabel(nextAppointment.scheduled_for!, input.timeZone)}.`
+      : nextFixed
+        ? `Your next fixed commitment is ${nextFixed.title} at ${timeLabel(nextFixed.scheduled_for!, input.timeZone)}.`
         : 'Your day is open from what Pepper can currently verify.'
+
+  const appointmentCount = fixedEventItems.filter((item) => item.kind === 'appointment').length
+  const eventCount = fixedEventItems.length - appointmentCount
 
   return {
     generated_at: input.now,
     date: today,
     headline,
-    summary: `${taskCandidates.length} task priorit${taskCandidates.length === 1 ? 'y' : 'ies'}, ${appointmentItems.length} appointment${appointmentItems.length === 1 ? '' : 's'}, and ${emailCandidates.length} email signal${emailCandidates.length === 1 ? '' : 's'} arranged for today.`,
+    summary: `${taskCandidates.length} task priorit${taskCandidates.length === 1 ? 'y' : 'ies'}, ${choreCandidates.length} chore${choreCandidates.length === 1 ? '' : 's'}, ${fixedEventItems.length} fixed event${fixedEventItems.length === 1 ? '' : 's'}, ${mealItems.length} meal${mealItems.length === 1 ? '' : 's'}, and ${emailCandidates.length} email signal${emailCandidates.length === 1 ? '' : 's'} arranged for today.`,
     items,
     conflicts: conflictLabels(appointments),
     counts: {
       tasks: taskCandidates.length,
-      appointments: appointmentItems.length,
+      chores: choreCandidates.length,
+      events: eventCount,
+      appointments: appointmentCount,
+      meals: mealItems.length,
       emails: emailCandidates.length,
     },
   }

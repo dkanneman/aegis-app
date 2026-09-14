@@ -61,6 +61,38 @@ test('day planning identifies actionable email without turning ordinary mail int
   assert.match(emailItems[0].reason, /email/i)
 })
 
+test('day planning distinguishes chores, events, appointments, and meals', () => {
+  const plan = buildDailyPlan({
+    now: '2026-09-10T15:00:00.000Z',
+    dayStart: '2026-09-10T07:00:00.000Z',
+    dayEnd: '2026-09-11T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [
+      { id: 'work', title: 'Send proposal', status: 'open', priority: 'P1', area: 'Work' },
+      { id: 'chore', title: 'Empty dishwasher', status: 'open', source: 'pepper_chore' },
+    ],
+    events: [
+      { id: 'school', title: 'School assembly', kind: 'event', starts_at: '2026-09-10T17:00:00.000Z' },
+      { id: 'dentist', title: 'Dentist appointment', kind: 'appointment', starts_at: '2026-09-10T19:00:00.000Z' },
+    ],
+    meals: [
+      { id: 'dinner', meal_name: 'Chicken rice bowls', eat_at: '2026-09-11T01:30:00.000Z', owner_name: 'Matt' },
+    ],
+    emails: [],
+  })
+
+  assert.deepEqual(
+    new Set(plan.items.map((item) => item.kind)),
+    new Set(['task', 'chore', 'event', 'appointment', 'meal']),
+  )
+  assert.equal(plan.counts.tasks, 1)
+  assert.equal(plan.counts.chores, 1)
+  assert.equal(plan.counts.events, 1)
+  assert.equal(plan.counts.appointments, 1)
+  assert.equal(plan.counts.meals, 1)
+  assert.match(plan.items.find((item) => item.kind === 'meal').detail, /Matt/)
+})
+
 test('overlapping appointments are surfaced as a day-plan conflict', () => {
   const plan = buildDailyPlan({
     now: '2026-09-10T15:00:00.000Z',
@@ -79,7 +111,7 @@ test('overlapping appointments are surfaced as a day-plan conflict', () => {
   assert.match(plan.conflicts[0], /School meeting.*Doctor appointment/)
 })
 
-test('daily planning is private, on demand, and available from Today and Ask Pepper', async () => {
+test('daily planning is private, live, and available from Today and Ask Pepper', async () => {
   const [api, integrations, client, css] = await Promise.all([
     readFile(apiPath, 'utf8'),
     readFile(integrationsPath, 'utf8'),
@@ -89,6 +121,8 @@ test('daily planning is private, on demand, and available from Today and Ask Pep
 
   assert.match(api, /action==='day_plan'/)
   assert.match(api, /'day_plan'/)
+  assert.match(api, /from public\.meal_plan mp/)
+  assert.match(api, /classification,tags,next_action,source/)
   assert.match(api, /gmail_digest/)
   assert.match(integrations, /body\.action==='gmail_digest'/)
   assert.match(integrations, /member_id=\$\{member\.id\}::uuid/)
@@ -101,5 +135,15 @@ test('daily planning is private, on demand, and available from Today and Ask Pep
   assert.match(client, /email, school events, chores, tasks/)
   assert.match(client, /daily flow in order of importance/)
   assert.match(client, /stay on top of everything and miss nothing/)
+  assert.match(client, /Today’s plan is reorganized/)
+  assert.match(client, /sendTell\(transcript, "voice"\)/)
+  assert.match(client, /refreshDayPlanAfterChange\(result\.token\)/)
+  assert.match(client, /isDayPlanRequest\(clean\)/)
+  assert.match(client, /refresh\|replan/)
+  assert.doesNotMatch(client, /preserveDayPlan/)
+  const refreshAfterChange = client.match(
+    /async function refreshDayPlanAfterChange[\s\S]*?\n  }/,
+  )?.[0] || ''
+  assert.doesNotMatch(refreshAfterChange, /setDayPlan\(null\)/)
   assert.match(css, /\.dayPlan/)
 })

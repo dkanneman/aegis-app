@@ -100,6 +100,7 @@ type FamilyEvent = {
   owner_member_id?: string | null;
   kind: string;
   transport_owner_member_id?: string | null;
+  trusted_driver_id?: string | null;
   transport_status?: string | null;
   source?: string | null;
   external_url?: string | null;
@@ -147,6 +148,7 @@ type ItemOperation =
 
 type ItemUpdate = {
   owner_member_id?: string | null;
+  trusted_driver_id?: string | null;
   title?: string;
   status?: "open" | "in_progress" | "on_hold";
   due_date?: string;
@@ -256,6 +258,13 @@ type FrontSeatState = {
   days: FrontSeatDay[];
   today: FrontSeatDay;
   can_manage: boolean;
+};
+
+type TrustedDriver = {
+  id: string;
+  display_name: string;
+  relationship?: string | null;
+  active?: boolean;
 };
 
 type Consequence = {
@@ -439,6 +448,7 @@ type PepperState = {
   meals?: MealPlanItem[];
   mealNeeds?: MealNeed[];
   memberProfiles?: MemberSetupProfile[];
+  trustedDrivers?: TrustedDriver[];
   frontSeat?: FrontSeatState | null;
   captures: Capture[];
   metrics?: Record<string, unknown>;
@@ -554,6 +564,28 @@ type NativeHealthMessageHandler = {
   }) => void;
 };
 
+type NativeBiometricMessageHandler = {
+  postMessage: (
+    payload:
+      | {
+          action: "offer";
+          session_token: string;
+          member_name: string;
+        }
+      | { action: "remove" },
+  ) => void;
+};
+
+type PepperNativeWindow = Window & {
+  __pepperNativeSession?: string;
+  webkit?: {
+    messageHandlers?: {
+      pepperHealth?: NativeHealthMessageHandler;
+      pepperBiometrics?: NativeBiometricMessageHandler;
+    };
+  };
+};
+
 type PepperAnswer = {
   title: string;
   summary: string;
@@ -582,14 +614,14 @@ type PepperExchange = {
 type DayPlanItem = {
   id: string;
   record_id: string;
-  kind: "task" | "appointment" | "email";
+  kind: "task" | "chore" | "event" | "appointment" | "meal" | "email";
   title: string;
   detail?: string | null;
   reason: string;
   urgency: "critical" | "high" | "planned" | "fixed";
   scheduled_for?: string | null;
   ends_at?: string | null;
-  source: "tasks" | "calendar" | "email";
+  source: "tasks" | "calendar" | "meals" | "email";
   external_url?: string | null;
 };
 
@@ -600,7 +632,14 @@ type DailyPlan = {
   summary: string;
   items: DayPlanItem[];
   conflicts: string[];
-  counts: { tasks: number; appointments: number; emails: number };
+  counts: {
+    tasks: number;
+    chores: number;
+    events: number;
+    appointments: number;
+    meals: number;
+    emails: number;
+  };
   email: {
     status: "connected" | "not_connected" | "unavailable";
     scanned: number;
@@ -610,12 +649,26 @@ type DailyPlan = {
 
 function nativeHealthMessageHandler() {
   if (typeof window === "undefined") return null;
-  const nativeWindow = window as Window & {
-    webkit?: {
-      messageHandlers?: { pepperHealth?: NativeHealthMessageHandler };
-    };
-  };
+  const nativeWindow = window as PepperNativeWindow;
   return nativeWindow.webkit?.messageHandlers?.pepperHealth || null;
+}
+
+function nativeBiometricMessageHandler() {
+  if (typeof window === "undefined") return null;
+  const nativeWindow = window as PepperNativeWindow;
+  return nativeWindow.webkit?.messageHandlers?.pepperBiometrics || null;
+}
+
+function offerNativeFaceID(sessionToken: string, memberName: string) {
+  nativeBiometricMessageHandler()?.postMessage({
+    action: "offer",
+    session_token: sessionToken,
+    member_name: memberName,
+  });
+}
+
+function removeNativeFaceID() {
+  nativeBiometricMessageHandler()?.postMessage({ action: "remove" });
 }
 
 function syncNativeHealth(setup: HealthSetup) {
@@ -876,6 +929,22 @@ function captureText(capture: Capture) {
   );
 }
 
+function isDayPlanRequest(value: string) {
+  const clean = value.trim();
+  return (
+    /\b(plan|organize|prioritize|structure|refresh|replan)\b.*\b(?:my |the )?(?:day|today|schedule|plan)\b/i.test(
+      clean,
+    ) ||
+    /\b(?:update|redo)\b.*\b(?:my |the )?(?:day|today|schedule|plan)\b/i.test(
+      clean,
+    ) ||
+    /\bwhat should i do (?:first|today)\b/i.test(clean) ||
+    /\b(?:show me|what does) (?:my |the )?(?:day|schedule)(?: look like)?\b/i.test(
+      clean,
+    )
+  );
+}
+
 function captureTime(capture: Capture) {
   const value =
     capture.created_at || capture.captured_at || capture.updated_at || "";
@@ -926,7 +995,7 @@ function routineSchoolTripKind(event: FamilyEvent) {
   if (
     event.source !== "routine" ||
     event.status !== "confirmed" ||
-    !event.transport_owner_member_id
+    (!event.transport_owner_member_id && !event.trusted_driver_id)
   ) {
     return null;
   }
@@ -1017,9 +1086,14 @@ function optimisticSelectedItem(
       ...(changes.location !== undefined ? { location: changes.location } : {}),
       ...(changes.notes !== undefined ? { notes: changes.notes } : {}),
       ...(changes.owner_member_id !== undefined
+        || changes.trusted_driver_id !== undefined
         ? {
-            transport_owner_member_id: changes.owner_member_id,
-            transport_status: changes.owner_member_id ? "assigned" : "unassigned",
+            transport_owner_member_id: changes.owner_member_id || null,
+            trusted_driver_id: changes.trusted_driver_id || null,
+            transport_status:
+              changes.owner_member_id || changes.trusted_driver_id
+                ? "confirmed"
+                : "unassigned",
           }
         : {}),
       ...(nextStatus ? { status: nextStatus } : {}),
@@ -1109,6 +1183,7 @@ function patchProfilePhoto(
 function patchPepperStateItem(
   current: PepperState,
   selected: SelectedItem,
+  options: { resolveTransport?: boolean } = {},
 ): PepperState {
   if (selected.type === "task") {
     const remove = Boolean(selected.item.deleted_at);
@@ -1138,6 +1213,66 @@ function patchPepperStateItem(
     monthEvents: remove
       ? patchItemList(current.monthEvents, selected.item, true)
       : upsertItemList(current.monthEvents, selected.item),
+    consequences:
+      options.resolveTransport &&
+      (selected.item.transport_owner_member_id || selected.item.trusted_driver_id)
+        ? current.consequences?.filter(
+            (consequence) =>
+              !(
+                consequence.type === "missing_transport" &&
+                consequence.event_id === selected.item.id
+              ),
+          )
+        : current.consequences,
+  };
+}
+
+function patchDailyPlanItem(
+  plan: DailyPlan | null,
+  selected: SelectedItem,
+  operation: ItemOperation,
+) {
+  if (!plan) return plan;
+  const existing = plan.items.find(
+    (item) => item.record_id === selected.item.id,
+  );
+  if (!existing) return plan;
+  if (["complete", "cancel", "delete"].includes(operation)) {
+    const countKey = existing.kind === "appointment"
+      ? "appointments"
+      : existing.kind === "event"
+        ? "events"
+        : existing.kind === "chore"
+          ? "chores"
+          : existing.kind === "task"
+            ? "tasks"
+            : "emails";
+    return {
+      ...plan,
+      items: plan.items.filter((item) => item.record_id !== selected.item.id),
+      counts: {
+        ...plan.counts,
+        [countKey]: Math.max(0, plan.counts[countKey] - 1),
+      },
+    };
+  }
+  if (operation !== "edit") return plan;
+  return {
+    ...plan,
+    items: plan.items.map((item) =>
+      item.record_id !== selected.item.id
+        ? item
+        : {
+            ...item,
+            title: selected.item.title,
+            ...(selected.type === "event"
+              ? {
+                  scheduled_for: selected.item.starts_at,
+                  ends_at: selected.item.ends_at,
+                }
+              : {}),
+          },
+    ),
   };
 }
 
@@ -1197,6 +1332,7 @@ export function PepperClient() {
   const [pepperExchange, setPepperExchange] = useState<PepperExchange | null>(null);
   const [dayPlan, setDayPlan] = useState<DailyPlan | null>(null);
   const [dayPlanBusy, setDayPlanBusy] = useState(false);
+  const lastDayPlanRefreshAt = useRef(0);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [tell, setTell] = useState("");
   const [reflection, setReflection] = useState("");
@@ -1278,7 +1414,6 @@ export function PepperClient() {
       setState((current) =>
         current ? { ...current, ...result.state } : result.state,
       );
-      setDayPlan(null);
       if (result.state?.progressive !== true) {
         setLoadedSections(new Set(LAZY_SECTIONS));
       }
@@ -1288,6 +1423,7 @@ export function PepperClient() {
         error instanceof Error ? error.message : "Pepper could not load.";
       if (/unlock|session/i.test(text)) {
         localStorage.removeItem("pepper_family_session");
+        removeNativeFaceID();
         setToken("");
         setState(null);
         setLoadedSections(new Set());
@@ -1297,6 +1433,26 @@ export function PepperClient() {
       setMessage(text);
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function refreshDayPlanFromServer(session = token) {
+    if (!session) return null;
+    const result = await call({ action: "day_plan" }, session);
+    if (!result.plan || !Array.isArray(result.plan.items)) {
+      throw new Error("Pepper could not verify a complete day plan.");
+    }
+    const plan = result.plan as DailyPlan;
+    setDayPlan(plan);
+    lastDayPlanRefreshAt.current = Date.now();
+    return plan;
+  }
+
+  async function refreshDayPlanAfterChange(session = token) {
+    try {
+      return await refreshDayPlanFromServer(session);
+    } catch {
+      return null;
     }
   }
 
@@ -1406,8 +1562,23 @@ export function PepperClient() {
         );
       }
       const saved = { type: item.type, item: result.item } as SelectedItem;
+      const assignedDriver =
+        saved.type === "event" &&
+        operation === "assign" &&
+        Boolean(
+          saved.item.transport_owner_member_id || saved.item.trusted_driver_id,
+        );
+      if (assignedDriver && result.transport_consequence_resolved !== true) {
+        throw new Error(
+          "Pepper could not verify that this driver assignment resolved the ride. Please try again.",
+        );
+      }
       setState((current) =>
-        current ? patchPepperStateItem(current, saved) : current,
+        current
+          ? patchPepperStateItem(current, saved, {
+              resolveTransport: assignedDriver,
+            })
+          : current,
       );
       setMemberState((current) =>
         current ? patchMemberStateItem(current, saved) : current,
@@ -1433,8 +1604,11 @@ export function PepperClient() {
         setMessage("");
       }
       setSelectedItem(null);
-      setDayPlan(null);
-      if (item.type === "event") void load();
+      setDayPlan((current) => patchDailyPlanItem(current, saved, operation));
+      if (item.type === "event") {
+        void load(token);
+      }
+      void refreshDayPlanAfterChange(token);
       return { ok: true };
     } catch (error) {
       setState((current) =>
@@ -1468,7 +1642,10 @@ export function PepperClient() {
           reply: result.reply || "Undone. Pepper restored the previous plan.",
           undoable: false,
         });
-        void load();
+        void Promise.all([
+          load(token),
+          refreshDayPlanAfterChange(token),
+        ]);
         return;
       }
 
@@ -1482,6 +1659,9 @@ export function PepperClient() {
             before.type === "event"
               ? before.item.transport_owner_member_id || null
               : before.item.owner_member_id || null,
+          ...(before.type === "event"
+            ? { trusted_driver_id: before.item.trusted_driver_id || null }
+            : {}),
         };
       } else if (operation === "edit") {
         reverseOperation = "edit";
@@ -1574,7 +1754,10 @@ export function PepperClient() {
       );
       setMessage("Conflict resolved. Pepper updated the family plan.");
       setConflictResolution(null);
-      void load();
+      void Promise.all([
+        load(token),
+        refreshDayPlanAfterChange(token),
+      ]);
       return true;
     } catch (error) {
       setMessage(
@@ -1615,6 +1798,7 @@ export function PepperClient() {
           : current,
       );
       setMessage("Chore added. Pepper updated everyone’s plan.");
+      void refreshDayPlanAfterChange(token);
       return true;
     } catch (error) {
       setMessage(
@@ -1677,6 +1861,7 @@ export function PepperClient() {
           : current,
       );
       setMessage("Meal saved. Pepper updated the weekly plan.");
+      void refreshDayPlanAfterChange(token);
       return true;
     } catch (error) {
       setMessage(
@@ -1867,6 +2052,7 @@ export function PepperClient() {
         `Week refreshed from ${result.needs_considered || 0} saved family meal ${result.needs_considered === 1 ? "need" : "needs"}, with ${result.grocery_count || 0} unique groceries. Review meals and assign cooking or shopping.`,
       );
       await loadSection("meals", true);
+      void refreshDayPlanAfterChange(token);
       return true;
     } catch (error) {
       setMessage(
@@ -1905,6 +2091,7 @@ export function PepperClient() {
           : current,
       );
       setMessage("Added to your private to-do list.");
+      void refreshDayPlanAfterChange(token);
       return true;
     } catch (error) {
       setMessage(
@@ -1972,6 +2159,79 @@ export function PepperClient() {
         error instanceof Error
           ? error.message
           : "Pepper could not save that family member.",
+      );
+      return false;
+    } finally {
+      setActionPending(pendingKey, false);
+    }
+  }
+
+  async function saveTrustedDriver(driver: {
+    id?: string;
+    displayName: string;
+    relationship: string;
+  }) {
+    const pendingKey = `trusted-driver:${driver.id || "new"}`;
+    setActionPending(pendingKey, true);
+    try {
+      const result = await call({
+        action: "trusted_driver_save",
+        trusted_driver_id: driver.id || null,
+        display_name: driver.displayName,
+        relationship: driver.relationship,
+      });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              trustedDrivers: upsertItemList(
+                current.trustedDrivers,
+                result.trusted_driver as TrustedDriver,
+              ),
+            }
+          : current,
+      );
+      setMessage(
+        `${result.trusted_driver.display_name} is available for ride assignments.`,
+      );
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not save that trusted driver.",
+      );
+      return false;
+    } finally {
+      setActionPending(pendingKey, false);
+    }
+  }
+
+  async function removeTrustedDriver(driverId: string) {
+    const pendingKey = `trusted-driver:${driverId}`;
+    setActionPending(pendingKey, true);
+    try {
+      await call({
+        action: "trusted_driver_remove",
+        trusted_driver_id: driverId,
+      });
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              trustedDrivers: current.trustedDrivers?.filter(
+                (driver) => driver.id !== driverId,
+              ),
+            }
+          : current,
+      );
+      setMessage("Trusted driver removed from new ride assignments.");
+      return true;
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not remove that trusted driver.",
       );
       return false;
     } finally {
@@ -2132,22 +2392,64 @@ export function PepperClient() {
   }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem("pepper_family_session") || "";
+    let activeSession = "";
+    const restoreSession = (session: string) => {
+      if (!session || session === activeSession) return;
+      activeSession = session;
+      setToken(session);
+      void Promise.all([load(session), refreshDayPlanAfterChange(session)]);
+    };
+    const lockNativeSession = () => {
+      activeSession = "";
+      localStorage.removeItem("pepper_family_session");
+      setToken("");
+      setState(null);
+      setDayPlan(null);
+      setSelectedItem(null);
+      setPepperExchange(null);
+      setLoadedSections(new Set());
+      setLoadingSections(new Set());
+      sectionRequests.current = {};
+    };
+    const onNativeSession = (event: Event) => {
+      const session = String(
+        (event as CustomEvent<{ token?: string }>).detail?.token || "",
+      );
+      restoreSession(session);
+    };
+    const onNativeLock = () => lockNativeSession();
+    const onBiometricResult = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      if (detail?.message) setMessage(detail.message);
+    };
+
+    window.addEventListener("pepper:native-session", onNativeSession);
+    window.addEventListener("pepper:native-lock", onNativeLock);
+    window.addEventListener("pepper:biometric-result", onBiometricResult);
+
+    const nativeSession = (window as PepperNativeWindow).__pepperNativeSession || "";
+    const saved = nativeSession || localStorage.getItem("pepper_family_session") || "";
     const timer = window.setTimeout(() => {
-      if (saved) {
-        setToken(saved);
-        void load(saved);
-        return;
-      }
+      restoreSession(saved);
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pepper:native-session", onNativeSession);
+      window.removeEventListener("pepper:native-lock", onNativeLock);
+      window.removeEventListener("pepper:biometric-result", onBiometricResult);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!token) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load(token);
+      if (document.visibilityState === "visible") {
+        void load(token);
+        if (Date.now() - lastDayPlanRefreshAt.current >= 5 * 60_000) {
+          void refreshDayPlanAfterChange(token);
+        }
+      }
     }, 60_000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2285,7 +2587,14 @@ export function PepperClient() {
       localStorage.setItem("pepper_family_session", result.token);
       setToken(result.token);
       setPin("");
-      await load(result.token);
+      await Promise.all([
+        load(result.token),
+        refreshDayPlanAfterChange(result.token),
+      ]);
+      offerNativeFaceID(
+        result.token,
+        String(result.member?.display_name || identity),
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Login failed.");
     } finally {
@@ -2313,7 +2622,11 @@ export function PepperClient() {
       setPinSetup(null);
       setNewPin("");
       setConfirmPin("");
-      await load(result.token);
+      await Promise.all([
+        load(result.token),
+        refreshDayPlanAfterChange(result.token),
+      ]);
+      offerNativeFaceID(result.token, pinSetup.displayName);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "PIN setup failed.");
     } finally {
@@ -2335,6 +2648,7 @@ export function PepperClient() {
     } catch {
       // Local sign-out should still work.
     }
+    removeNativeFaceID();
     localStorage.removeItem("pepper_family_session");
     setToken("");
     setState(null);
@@ -2354,6 +2668,7 @@ export function PepperClient() {
     setActionPending(pendingKey, true);
     try {
       await call({ action: "account_delete", confirmation });
+      removeNativeFaceID();
       localStorage.removeItem("pepper_family_session");
       setToken("");
       setState(null);
@@ -2381,8 +2696,12 @@ export function PepperClient() {
       }
       return;
     }
+    if (item.kind === "meal") {
+      setView("meals");
+      return;
+    }
     if (!state) return;
-    if (item.kind === "task") {
+    if (item.kind === "task" || item.kind === "chore") {
       const task = [...state.familyTasks, ...state.privateTasks].find(
         (candidate) => candidate.id === item.record_id,
       );
@@ -2406,14 +2725,10 @@ export function PepperClient() {
     if (dayPlanBusy) return;
     setDayPlanBusy(true);
     if (fromAsk) setBusy(true);
-    setMessage("Pepper is organizing tasks, email, and appointments…");
+    setMessage("Pepper is organizing tasks, chores, meals, email, and appointments…");
     try {
-      const result = await call({ action: "day_plan" });
-      if (!result.plan || !Array.isArray(result.plan.items)) {
-        throw new Error("Pepper could not verify a complete day plan.");
-      }
-      const plan = result.plan as DailyPlan;
-      setDayPlan(plan);
+      const plan = await refreshDayPlanFromServer(token);
+      if (!plan) throw new Error("Pepper could not verify a complete day plan.");
       setTell("");
       setView("today");
       setRitualOpen(null);
@@ -2446,7 +2761,7 @@ export function PepperClient() {
     }
   }
 
-  async function sendTell(text = tell) {
+  async function sendTell(text = tell, source: "text" | "voice" = "text") {
     const clean = text.trim();
     if (!clean) return;
     const clarificationContext =
@@ -2455,8 +2770,7 @@ export function PepperClient() {
         : null;
     if (
       !clarificationContext &&
-      (/\b(plan|organize|prioritize|structure)\b.*\b(?:my |the )?(?:day|today)\b/i.test(clean) ||
-        /\bwhat should i do (?:first|today)\b/i.test(clean))
+      isDayPlanRequest(clean)
     ) {
       await generateDayPlan(true, clean);
       return;
@@ -2475,7 +2789,7 @@ export function PepperClient() {
           : {
               action: "tell",
               text: clean,
-              source: "text",
+              source,
               idempotency_key: crypto.randomUUID(),
             },
       );
@@ -2486,16 +2800,23 @@ export function PepperClient() {
           ? "clarification"
           : "action";
       const captureId = result.captureId || result.capture_id || clarificationContext?.captureId;
+      const refreshedPlan = mode === "action"
+        ? (await Promise.all([
+            load(token),
+            refreshDayPlanAfterChange(token),
+          ]))[1]
+        : null;
+      const baseReply =
+        result.reply ||
+        (mode === "answer"
+          ? "Pepper found an answer."
+          : mode === "clarification"
+            ? "Pepper needs one detail before changing the plan."
+            : "Updated.");
       setPepperExchange({
         prompt: clarificationContext?.prompt || clean,
         mode,
-        reply:
-          result.reply ||
-          (mode === "answer"
-            ? "Pepper found an answer."
-            : mode === "clarification"
-              ? "Pepper needs one detail before changing the plan."
-              : "Updated."),
+        reply: refreshedPlan ? `${baseReply} Today’s plan is reorganized.` : baseReply,
         answer: result.answer,
         captureId,
         clarification: result.clarification,
@@ -2505,7 +2826,6 @@ export function PepperClient() {
           : undefined,
       });
       setMessage("");
-      if (mode !== "answer" && mode !== "clarification") void load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Pepper hit an error.");
     } finally {
@@ -2529,10 +2849,17 @@ export function PepperClient() {
           ? "clarification"
           : "action";
       const captureId = result.captureId || result.capture_id || String(capture.id);
+      const refreshedPlan = mode === "action"
+        ? (await Promise.all([
+            load(token),
+            refreshDayPlanAfterChange(token),
+          ]))[1]
+        : null;
+      const baseReply = result.reply || (mode === "clarification" ? "Pepper needs one detail." : "Pepper reprocessed that update.");
       setPepperExchange({
         prompt: captureText(capture),
         mode,
-        reply: result.reply || (mode === "clarification" ? "Pepper needs one detail." : "Pepper reprocessed that update."),
+        reply: refreshedPlan ? `${baseReply} Today’s plan is reorganized.` : baseReply,
         answer: result.answer,
         captureId,
         clarification: result.clarification,
@@ -2541,7 +2868,7 @@ export function PepperClient() {
       });
       setMessage("");
       if (result.status === "applied" || result.status === "answered") setInboxOpen(false);
-      if (mode !== "clarification") void load();
+      if (mode === "answer") void load(token);
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Pepper could not retry that update.",
@@ -2611,7 +2938,11 @@ export function PepperClient() {
     try {
       setMessage("Pepper is refreshing your calendar…");
       await call({ action: "calendar_sync" });
-      await Promise.all([load(), loadSection("connections", true)]);
+      await Promise.all([
+        load(token),
+        loadSection("connections", true),
+        refreshDayPlanAfterChange(token),
+      ]);
       setMessage("Calendar refreshed.");
     } catch (error) {
       setMessage(
@@ -2685,7 +3016,7 @@ export function PepperClient() {
     recognition.onresult = (event) => {
       const transcript = event.results?.[0]?.[0]?.transcript || "";
       setTell(transcript);
-      void sendTell(transcript);
+      void sendTell(transcript, "voice");
     };
     recognition.onerror = () =>
       setMessage("Voice did not start. Use the iPhone keyboard microphone.");
@@ -2850,7 +3181,12 @@ export function PepperClient() {
               title={lastSyncedAt ? `Last updated ${lastSyncedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Refresh Pepper"}
               aria-label={syncing ? "Pepper is syncing" : "Refresh Pepper"}
               disabled={syncing}
-              onClick={() => void load()}
+              onClick={() =>
+                void Promise.all([
+                  load(token),
+                  refreshDayPlanAfterChange(token),
+                ])
+              }
             >
               <RefreshCw size={15} aria-hidden="true" />
               <span>{syncing ? "Syncing" : "Live"}</span>
@@ -3318,6 +3654,8 @@ export function PepperClient() {
               onSave={saveMemberSetup}
               onPhotoUpload={saveProfilePhoto}
               onPhotoRemove={removeProfilePhoto}
+              onSaveTrustedDriver={saveTrustedDriver}
+              onRemoveTrustedDriver={removeTrustedDriver}
             />
           ) : (
             <SectionLoading label="Opening family setup" active={loadingSections.has("family")} />
@@ -3603,10 +3941,14 @@ function DayPlanPanel({
             {plan.items.length ? (
               plan.items.map((item) => {
                 const Icon =
-                  item.kind === "appointment"
+                  item.kind === "appointment" || item.kind === "event"
                     ? CalendarDays
+                    : item.kind === "meal"
+                      ? Utensils
                     : item.kind === "email"
                       ? Mail
+                      : item.kind === "chore"
+                        ? Check
                       : ListTodo;
                 return (
                   <button
@@ -3641,7 +3983,10 @@ function DayPlanPanel({
 
           <footer className={styles.dayPlanSources}>
             <span>{plan.counts.tasks} task priorities</span>
+            <span>{plan.counts.chores || 0} chores</span>
+            <span>{plan.counts.events || 0} events</span>
             <span>{plan.counts.appointments} appointments</span>
+            <span>{plan.counts.meals || 0} meals</span>
             <span>
               {plan.email.status === "connected"
                 ? `${plan.email.scanned} recent emails checked privately`
@@ -3652,8 +3997,9 @@ function DayPlanPanel({
         </>
       ) : (
         <div className={styles.dayPlanPrompt}>
-          <span><ListTodo size={15} aria-hidden="true" /> Open tasks</span>
-          <span><CalendarDays size={15} aria-hidden="true" /> Appointments</span>
+          <span><ListTodo size={15} aria-hidden="true" /> Tasks and chores</span>
+          <span><CalendarDays size={15} aria-hidden="true" /> Events and appointments</span>
+          <span><Utensils size={15} aria-hidden="true" /> Today&apos;s meal</span>
           <span><Mail size={15} aria-hidden="true" /> {emailConnected ? "Private email signals" : "Connect email to include it"}</span>
         </div>
       )}
@@ -3672,6 +4018,17 @@ function SectionLoading({ label, active }: { label: string; active: boolean }) {
 
 function memberName(state: PepperState, id?: string | null) {
   return displayName(state.members?.find((member) => member.id === id));
+}
+
+function transportDriverName(state: PepperState, event: FamilyEvent) {
+  if (event.transport_owner_member_id) {
+    return memberName(state, event.transport_owner_member_id);
+  }
+  return (
+    state.trustedDrivers?.find(
+      (driver) => driver.id === event.trusted_driver_id,
+    )?.display_name || ""
+  );
 }
 
 type BriefTaskGroup = "work" | "theatre" | "school" | "chores" | "personal";
@@ -3831,7 +4188,7 @@ function MorningBriefPanel({
   const transportIssue = transportEvents.find(
     (event) =>
       event.transport_status === "unassigned" ||
-      !event.transport_owner_member_id,
+      (!event.transport_owner_member_id && !event.trusted_driver_id),
   );
   const todayMeal = (state.meals || []).find(
     (meal) => meal.meal_date === today,
@@ -3881,7 +4238,7 @@ function MorningBriefPanel({
           title: firstTransport.title,
           detail: transportIssue
             ? "A driver still needs to be assigned."
-            : `${memberName(state, firstTransport.transport_owner_member_id) || "Driver"} owns this ride.`,
+            : `${transportDriverName(state, firstTransport) || "Driver"} owns this ride.`,
           onOpen: () => onOpenItem({ type: "event", item: firstTransport }),
         }
       : {
@@ -3980,7 +4337,7 @@ function MorningBriefPanel({
                     <small>
                       {event.location || "Location not recorded"}
                       {event.transport_status
-                        ? ` · ${memberName(state, event.transport_owner_member_id) || "Needs a driver"}`
+                        ? ` · ${transportDriverName(state, event) || "Needs a driver"}`
                         : ""}
                     </small>
                   </span>
@@ -4397,7 +4754,7 @@ function SchoolTransportGroup({
   const drivers = Array.from(
     new Set(
       events
-        .map((event) => memberName(state, event.transport_owner_member_id))
+        .map((event) => transportDriverName(state, event))
         .filter(Boolean),
     ),
   );
@@ -4591,7 +4948,7 @@ function EventRow({
   onOpen?: () => void;
   showDate?: boolean;
 }) {
-  const driver = memberName(state, event.transport_owner_member_id);
+  const driver = transportDriverName(state, event);
   return (
     <button
       type="button"
@@ -4758,7 +5115,7 @@ function ConnectionsPage({
       title: "Google email",
       identifier: gmail?.metadata?.email || "Gmail or Google Workspace",
       summary: gmail?.connected
-        ? "Account linked. Pepper checks recent priority messages only when this member requests a day plan."
+        ? "Account linked. Pepper checks recent priority messages when this member’s day is organized or refreshed."
         : canConnectEmail
           ? "Connect the personal, school, or work Google account you use most."
           : "Email connections are available from adult and teen profiles.",
@@ -6527,6 +6884,8 @@ function FamilySetupPage({
   onSave,
   onPhotoUpload,
   onPhotoRemove,
+  onSaveTrustedDriver,
+  onRemoveTrustedDriver,
 }: {
   state: PepperState;
   isPending: (key: string) => boolean;
@@ -6534,6 +6893,12 @@ function FamilySetupPage({
   onSave: (draft: MemberSetupDraft) => Promise<boolean>;
   onPhotoUpload: (memberId: string, file: File) => Promise<boolean>;
   onPhotoRemove: (memberId: string) => Promise<boolean>;
+  onSaveTrustedDriver: (driver: {
+    id?: string;
+    displayName: string;
+    relationship: string;
+  }) => Promise<boolean>;
+  onRemoveTrustedDriver: (driverId: string) => Promise<boolean>;
 }) {
   const [selectedMemberId, setSelectedMemberId] = useState(
     state.members[0]?.id || "new",
@@ -6551,6 +6916,18 @@ function FamilySetupPage({
   const photoBusy = selectedMember
     ? isPending(`photo:${selectedMember.id}`)
     : false;
+  const [trustedDriverId, setTrustedDriverId] = useState("");
+  const [trustedDriverName, setTrustedDriverName] = useState("");
+  const [trustedDriverRelationship, setTrustedDriverRelationship] = useState("");
+  const trustedDriverBusy = isPending(
+    `trusted-driver:${trustedDriverId || "new"}`,
+  );
+
+  function clearTrustedDriverDraft() {
+    setTrustedDriverId("");
+    setTrustedDriverName("");
+    setTrustedDriverRelationship("");
+  }
 
   function chooseMember(memberId: string) {
     setSelectedMemberId(memberId);
@@ -6695,6 +7072,102 @@ function FamilySetupPage({
             </button>
           </div>
         </form>
+
+        <section className={styles.trustedDriverSection} aria-labelledby="trusted-drivers-title">
+          <div className={styles.trustedDriverHeading}>
+            <div>
+              <div className={styles.eyebrow}>Ride coverage</div>
+              <h2 id="trusted-drivers-title">Trusted drivers</h2>
+              <p>Add friends or relatives who may handle a family ride without giving them a Pepper account.</p>
+            </div>
+          </div>
+
+          {(state.trustedDrivers || []).length ? (
+            <div className={styles.trustedDriverList}>
+              {(state.trustedDrivers || []).map((driver) => (
+                <div className={styles.trustedDriverRow} key={driver.id}>
+                  <span>
+                    <strong>{driver.display_name}</strong>
+                    <small>{driver.relationship || "Trusted family driver"}</small>
+                  </span>
+                  <div>
+                    <button
+                      type="button"
+                      aria-label={`Edit ${driver.display_name}`}
+                      onClick={() => {
+                        setTrustedDriverId(driver.id);
+                        setTrustedDriverName(driver.display_name);
+                        setTrustedDriverRelationship(driver.relationship || "");
+                      }}
+                    >
+                      <Pencil size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${driver.display_name}`}
+                      disabled={isPending(`trusted-driver:${driver.id}`)}
+                      onClick={() =>
+                        void onRemoveTrustedDriver(driver.id).then((removed) => {
+                          if (removed && trustedDriverId === driver.id) {
+                            clearTrustedDriverDraft();
+                          }
+                        })
+                      }
+                    >
+                      <Trash2 size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <form
+            className={styles.trustedDriverForm}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const displayName = trustedDriverName.trim();
+              if (!displayName) return;
+              void onSaveTrustedDriver({
+                id: trustedDriverId || undefined,
+                displayName,
+                relationship: trustedDriverRelationship.trim(),
+              }).then((saved) => {
+                if (saved) clearTrustedDriverDraft();
+              });
+            }}
+          >
+            <label className={styles.choreField}>
+              Name
+              <input
+                value={trustedDriverName}
+                maxLength={100}
+                placeholder="Friend or relative"
+                onChange={(event) => setTrustedDriverName(event.target.value)}
+              />
+            </label>
+            <label className={styles.choreField}>
+              Relationship
+              <input
+                value={trustedDriverRelationship}
+                maxLength={100}
+                placeholder="Friend, grandparent, carpool"
+                onChange={(event) => setTrustedDriverRelationship(event.target.value)}
+              />
+            </label>
+            <div className={styles.trustedDriverActions}>
+              {trustedDriverId ? (
+                <button type="button" onClick={clearTrustedDriverDraft}>
+                  Cancel
+                </button>
+              ) : null}
+              <button type="submit" disabled={trustedDriverBusy || !trustedDriverName.trim()}>
+                <Plus size={16} aria-hidden="true" />
+                {trustedDriverBusy ? "Saving…" : trustedDriverId ? "Save driver" : "Add driver"}
+              </button>
+            </div>
+          </form>
+        </section>
       </section>
     </>
   );
@@ -7171,7 +7644,11 @@ function ItemActionSheet({
   );
   const [location, setLocation] = useState(eventItem?.location || "");
   const currentOwner = eventItem
-    ? eventItem.transport_owner_member_id || ""
+    ? eventItem.transport_owner_member_id
+      ? `member:${eventItem.transport_owner_member_id}`
+      : eventItem.trusted_driver_id
+        ? `trusted:${eventItem.trusted_driver_id}`
+        : ""
     : taskItem?.owner_member_id || "";
   const assignable = eventItem
     ? state.members.filter((member) => ["adult_admin", "adult"].includes(member.role))
@@ -7399,16 +7876,50 @@ function ItemActionSheet({
             <select
               value={currentOwner}
               disabled={busy}
-              onChange={(event) =>
-                void runUpdate("assign", { owner_member_id: event.target.value || null })
-              }
+              onChange={(event) => {
+                const value = event.target.value;
+                if (!eventItem) {
+                  void runUpdate("assign", { owner_member_id: value || null });
+                  return;
+                }
+                void runUpdate("assign", {
+                  owner_member_id: value.startsWith("member:")
+                    ? value.slice("member:".length)
+                    : null,
+                  trusted_driver_id: value.startsWith("trusted:")
+                    ? value.slice("trusted:".length)
+                    : null,
+                });
+              }}
             >
               <option value="">{eventItem ? "Needs a driver" : "Needs an owner"}</option>
-              {assignable.map((member) => (
-                <option value={member.id} key={member.id}>
-                  {displayName(member)}
-                </option>
-              ))}
+              {eventItem ? (
+                <>
+                  <optgroup label="Family adults">
+                    {assignable.map((member) => (
+                      <option value={`member:${member.id}`} key={member.id}>
+                        {displayName(member)}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {(state.trustedDrivers || []).length ? (
+                    <optgroup label="Trusted drivers">
+                      {(state.trustedDrivers || []).map((driver) => (
+                        <option value={`trusted:${driver.id}`} key={driver.id}>
+                          {driver.display_name}
+                          {driver.relationship ? ` · ${driver.relationship}` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                </>
+              ) : (
+                assignable.map((member) => (
+                  <option value={member.id} key={member.id}>
+                    {displayName(member)}
+                  </option>
+                ))
+              )}
             </select>
           </label>
         ) : null}

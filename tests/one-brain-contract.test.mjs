@@ -92,6 +92,18 @@ test('Tell Pepper routes explicit tasks and needs instead of shelving them', () 
     category: 'work',
     ownerSlug: null,
   })
+  assert.deepEqual(classifyPiece('New task: call the school office', '2026-09-10'), {
+    type: 'task',
+    title: 'Call the school office',
+    private: true,
+    category: 'task',
+    ownerSlug: null,
+  })
+  assert.deepEqual(classifyPiece('Add a chore: empty the dishwasher for Lyra', '2026-09-10'), {
+    type: 'chore',
+    title: 'Empty the dishwasher',
+    ownerSlug: 'lyra',
+  })
   assert.deepEqual(classifyPiece('Need: replace Chloe\'s running shoes', '2026-09-10'), {
     type: 'task',
     title: "Replace Chloe's running shoes",
@@ -162,6 +174,87 @@ test('Tell Pepper parses household events and requests missing event details', (
   })
 })
 
+test('Tell Pepper accepts natural calendar event language without losing dates or names', () => {
+  assert.deepEqual(
+    classifyPiece('Add an event for Lyra on September 18 at 5 PM for rehearsal', '2026-09-14'),
+    {
+      type: 'event.create',
+      title: 'Lyra rehearsal',
+      personSlug: 'lyra',
+      time: '2026-09-19T00:00:00.000Z',
+      private: false,
+    },
+  )
+  assert.deepEqual(
+    classifyPiece('Put Posey ballet on the calendar Friday at 4 PM', '2026-09-14'),
+    {
+      type: 'event.create',
+      title: 'Posey ballet',
+      personSlug: 'posey',
+      time: '2026-09-18T23:00:00.000Z',
+      private: false,
+    },
+  )
+  assert.deepEqual(
+    classifyPiece('Schedule Chloe dentist appointment October 2nd at 3 PM', '2026-09-14'),
+    {
+      type: 'event.create',
+      title: 'Chloe dentist appointment',
+      personSlug: 'chloe',
+      time: '2026-10-02T22:00:00.000Z',
+      private: false,
+    },
+  )
+})
+
+test('event capture keeps conjunctions together and uses the event command over meal inference', () => {
+  const text = 'Add event: Matt and Danielle dinner September 20 at 6:30 PM'
+  assert.deepEqual(splitCapture(text), [text])
+  assert.deepEqual(classifyPiece(text, '2026-09-14'), {
+    type: 'event.create',
+    title: 'Matt and Danielle dinner',
+    personSlug: 'matt',
+    time: '2026-09-21T01:30:00.000Z',
+    private: false,
+  })
+})
+
+test('event times honor Pacific daylight saving and ambiguous times request clarification', () => {
+  assert.deepEqual(classifyPiece('Add event: Family dinner November 9 at 4 PM', '2026-09-14'), {
+    type: 'event.create',
+    title: 'Family dinner',
+    personSlug: null,
+    time: '2026-11-10T00:00:00.000Z',
+    private: false,
+  })
+  assert.deepEqual(
+    classifyPiece('Add event: Lyra rehearsal Friday at 5', '2026-09-14'),
+    { type: 'ambiguous', text: 'Add event: Lyra rehearsal Friday at 5' },
+  )
+})
+
+test('event capture supports common commands and does not split abbreviated names', () => {
+  const appointment = 'Please create an event: Lyra Dr. Patel appointment September 22 at 2 PM'
+  assert.deepEqual(splitCapture(appointment), [appointment])
+  assert.deepEqual(classifyPiece(appointment, '2026-09-14'), {
+    type: 'event.create',
+    title: 'Lyra Dr. Patel appointment',
+    personSlug: 'lyra',
+    time: '2026-09-22T21:00:00.000Z',
+    private: false,
+  })
+  assert.deepEqual(
+    classifyPiece('Put Chloe practice on my calendar tomorrow at 4 PM', '2026-09-14'),
+    {
+      type: 'event.create',
+      title: 'Chloe practice',
+      personSlug: 'chloe',
+      time: '2026-09-15T23:00:00.000Z',
+      private: false,
+    },
+  )
+})
+
 test('natural dinner updates are promoted into the meal plan', () => {
   assert.deepEqual(
     classifyPiece('Tonight we are having leftovers you can update the plan', '2026-09-10'),
@@ -195,6 +288,7 @@ test('current API routes tell and member review actions through the transactiona
   assert.match(tell, /undoCapture/)
   assert.match(tell, /answeredQuestionResponse/)
   assert.match(tell, /questionIntent\(text\)/)
+  assert.match(tell, /source: 'pepper_chore'/)
   assert.match(tell, /mode: 'answer'/)
   assert.match(tell, /remaining_ambiguities/)
   assert.match(tell, /body\.resolution !== 'no_change_required'/)
