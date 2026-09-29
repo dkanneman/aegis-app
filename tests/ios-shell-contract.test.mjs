@@ -7,6 +7,14 @@ const infoPlist = new URL("../ios/Pepper/Pepper/Info.plist", import.meta.url);
 const configuration = new URL("../ios/Pepper/Pepper/PepperConfiguration.swift", import.meta.url);
 const privacyManifest = new URL("../ios/Pepper/Pepper/PrivacyInfo.xcprivacy", import.meta.url);
 const webView = new URL("../ios/Pepper/Pepper/PepperWebView.swift", import.meta.url);
+const healthBridgeStore = new URL(
+  "../ios/Pepper/Pepper/PepperHealthBridgeStore.swift",
+  import.meta.url,
+);
+const healthBridgeView = new URL(
+  "../ios/Pepper/Pepper/PepperHealthBridgeView.swift",
+  import.meta.url,
+);
 const browserModel = new URL(
   "../ios/Pepper/Pepper/PepperBrowserModel.swift",
   import.meta.url,
@@ -17,6 +25,10 @@ const biometricStore = new URL(
 );
 const app = new URL("../ios/Pepper/Pepper/PepperApp.swift", import.meta.url);
 const pepperClient = new URL("../app/pepper/pepper-client.tsx", import.meta.url);
+const pepperIntegrations = new URL(
+  "../supabase/functions/pepper-integrations/index.ts",
+  import.meta.url,
+);
 const entitlements = new URL("../ios/Pepper/Pepper/Pepper.entitlements", import.meta.url);
 const appIcon = new URL(
   "../ios/Pepper/Pepper/Assets.xcassets/AppIcon.appiconset/Pepper-AppIcon-1024.png",
@@ -34,8 +46,11 @@ test("the iOS shell targets the stable private beta without embedded credentials
   assert.match(projectText, /PRODUCT_BUNDLE_IDENTIFIER = com\.dkanneman\.pepper;/);
   assert.match(projectText, /PEPPER_BASE_HOST = "?pepper-family-beta\.vercel\.app"?;/);
   assert.match(projectText, /PEPPER_HEALTH_HOST = "?mfgyeolvfthxacrqwwtc\.supabase\.co"?;/);
+  assert.match(projectText, /PEPPER_SUPABASE_ANON_KEY = /);
   assert.match(plistText, /<key>PepperBaseHost<\/key>/);
+  assert.match(plistText, /<key>PepperSupabaseAnonKey<\/key>/);
   assert.doesNotMatch(releaseInputs, /_vercel_share|Family PIN|101315/i);
+  assert.doesNotMatch(releaseInputs, /service[_-]?role/i);
   assert.match(configurationText, /#if DEBUG[\s\S]*PEPPER_BASE_URL[\s\S]*#endif/);
   assert.match(configurationText, /url\.scheme == "https"/);
 });
@@ -55,26 +70,67 @@ test("the iOS privacy manifest does not claim tracking", async () => {
   assert.match(manifest, /<key>NSPrivacyTrackingDomains<\/key>\s*<array\/>/);
 });
 
-test("the iOS shell connects read-only Apple Health to the member-scoped ingest", async () => {
-  const [projectText, plistText, webViewText, entitlementText] = await Promise.all([
+test("the native SwiftUI Health Bridge owns read-only HealthKit and member-scoped ingest", async () => {
+  const [
+    projectText,
+    plistText,
+    webViewText,
+    storeText,
+    viewText,
+    appText,
+    browserText,
+    clientText,
+    integrationsText,
+    entitlementText,
+  ] = await Promise.all([
     readFile(project, "utf8"),
     readFile(infoPlist, "utf8"),
     readFile(webView, "utf8"),
+    readFile(healthBridgeStore, "utf8"),
+    readFile(healthBridgeView, "utf8"),
+    readFile(app, "utf8"),
+    readFile(browserModel, "utf8"),
+    readFile(pepperClient, "utf8"),
+    readFile(pepperIntegrations, "utf8"),
     readFile(entitlements, "utf8"),
   ]);
 
   assert.match(projectText, /CODE_SIGN_ENTITLEMENTS = Pepper\/Pepper\.entitlements;/);
+  assert.match(projectText, /PepperHealthBridgeStore\.swift in Sources/);
+  assert.match(projectText, /PepperHealthBridgeView\.swift in Sources/);
   assert.match(plistText, /<key>NSHealthShareUsageDescription<\/key>/);
   assert.match(plistText, /<key>NSHealthUpdateUsageDescription<\/key>/);
   assert.match(entitlementText, /<key>com\.apple\.developer\.healthkit<\/key>\s*<true\/>/);
-  assert.match(webViewText, /import HealthKit/);
-  assert.match(webViewText, /requestAuthorization\(toShare: \[\], read: types\)/);
-  assert.match(webViewText, /\.stepCount/);
-  assert.match(webViewText, /\.appleExerciseTime/);
-  assert.match(webViewText, /x-pepper-health-token/);
-  assert.match(webViewText, /pepper-health-ingest/);
-  assert.match(webViewText, /host == PepperConfiguration\.healthHost/);
-  assert.doesNotMatch(webViewText, /save\(|HKSampleQuery/);
+  assert.match(storeText, /import HealthKit/);
+  assert.match(storeText, /requestAuthorization\(toShare: \[\], read: types\)/);
+  assert.match(storeText, /\.stepCount/);
+  assert.match(storeText, /\.appleExerciseTime/);
+  assert.match(storeText, /x-pepper-session/);
+  assert.match(storeText, /x-pepper-health-token/);
+  assert.match(storeText, /pepper-family-api/);
+  assert.match(storeText, /pepper-health-ingest/);
+  assert.match(storeText, /host == PepperConfiguration\.healthHost/);
+  assert.match(storeText, /result\.memberID == member\.id/);
+  assert.match(storeText, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.doesNotMatch(storeText, /save\(|HKSampleQuery/);
+  assert.match(viewText, /struct PepperHealthBridgeView: View/);
+  assert.match(viewText, /Connect Apple Health|Sync now/);
+  assert.match(appText, /\.sheet\(isPresented: \$browser\.showsHealthBridge\)/);
+
+  assert.doesNotMatch(webViewText, /import HealthKit|HKHealthStore|HKStatisticsQuery/);
+  assert.doesNotMatch(webViewText, /x-pepper-health-token|pepper-health-ingest/);
+  assert.match(webViewText, /pepperCompanion/);
+  assert.match(webViewText, /open_health_bridge/);
+  assert.doesNotMatch(
+    clientText,
+    /pepperHealth|pepper:health-result|pairing_token|x-pepper-health-token|pepper-health-ingest/,
+  );
+  assert.match(clientText, /pepperCompanion/);
+  assert.match(clientText, /open_health_bridge/);
+  assert.match(clientText, /pepper:health-bridge-synced/);
+  assert.match(browserText, /pepper:health-bridge-synced/);
+  assert.match(integrationsText, /member_id:member\.id/);
+  assert.match(integrationsText, /member_name:member\.display_name/);
 });
 
 test("the App Store icon is a 1024px PNG", async () => {

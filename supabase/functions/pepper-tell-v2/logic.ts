@@ -1,3 +1,8 @@
+import {
+  parseAppointmentText,
+  type ParsedAppointment,
+} from '../_shared/appointment-intake.ts'
+
 export const TIME_ZONE = 'America/Los_Angeles'
 
 export function localDate(date = new Date()) {
@@ -64,11 +69,15 @@ export function dateFromText(text: string, today = localDate()) {
 
   const numeric = text.match(/\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])(?:\/(\d{2}|20\d{2}))?\b/)
   if (numeric) {
-    const year = numeric[3]
+    let year = numeric[3]
       ? Number(numeric[3]) < 100 ? 2000 + Number(numeric[3]) : Number(numeric[3])
       : Number(today.slice(0, 4))
     const month = Number(numeric[1])
     const day = Number(numeric[2])
+    if (!numeric[3]) {
+      const candidate = `${year}-${numeric[1].padStart(2, '0')}-${numeric[2].padStart(2, '0')}`
+      if (candidate < today) year += 1
+    }
     if (validCalendarDate(year, month, day)) {
       const date = `${year}-${numeric[1].padStart(2, '0')}-${numeric[2].padStart(2, '0')}`
       return { date, label: date }
@@ -100,10 +109,25 @@ export function dateFromText(text: string, today = localDate()) {
 }
 
 export function dayBounds(date = localDate()) {
-  const start = new Date(`${date}T00:00:00-07:00`)
-  const end = new Date(start)
-  end.setUTCDate(end.getUTCDate() + 1)
-  return [start.toISOString(), end.toISOString()]
+  return [timeFromText('midnight', date)!, timeFromText('midnight', addDays(date, 1))!]
+}
+
+export function coordinationTargets<T extends {
+  person_slug: string | null; title: string; starts_at: string; ends_at?: string | null
+}>(events: T[], intent: Extract<PieceIntent, { type: 'event.cancel' | 'ride.assign' | 'ride.unassign' }>, source: string, today: string): T[] {
+  // A broad household statement is not authorization to change every matching activity.
+  const date = dateFromText(source, today)
+  if (date && date.date !== today) return []
+  const matches = events.filter(event => {
+    if (event.person_slug !== intent.personSlug) return false
+    if (intent.type === 'event.cancel' && (!intent.titleWord || !event.title.toLowerCase().includes(intent.titleWord.toLowerCase()))) return false
+    if ('time' in intent && intent.time) {
+      const target = intent.type === 'ride.assign' ? event.ends_at || event.starts_at : event.starts_at
+      if (new Date(target).getTime() !== new Date(intent.time).getTime()) return false
+    }
+    return true
+  })
+  return matches.length === 1 ? matches : []
 }
 
 export function timeFromText(text: string, date = localDate()) {
@@ -171,6 +195,23 @@ export function splitCapture(text: string) {
     .filter(Boolean)
 }
 
+export function hasAppointmentLanguage(piece: string) {
+  return /\b(?:appointment|doctor|physician|dent(?:al|ist)|orthodont|physical\s+therapy|mental\s+health|therap(?:y|ist)|clinic|medical|check[ -]?up)\b/i.test(piece)
+    || /\bwith\s+[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){1,3},\s*(?:MD|DO|NP|PA-C|PA|DDS|DMD|PT|DPT|LCSW|LMFT|PsyD|PhD)\b/.test(piece)
+}
+
+export function isAppointmentPreparationPiece(piece: string) {
+  return /^(?:please\s+)?(?:arrive\b|fast\b|echeck\b|check[ -]?in\b|wear\b|avoid\b|(?:bring|take)\b.*\b(?:insurance|medication|meds|copay|id|forms?|referral|records?|list)\b|(?:follow|review)\b.*\b(?:instruction|preparation)\b)/i.test(piece.trim())
+}
+
+export function reviewRetryText(originalText: string, clarificationText: string) {
+  const original = originalText.trim()
+  const clarification = clarificationText.trim()
+  return clarification
+    ? `${original.replace(/[?.!]+$/u, '')} ${clarification}`
+    : original
+}
+
 function cleanEventTitle(piece: string) {
   let title = piece
     .replace(/^please\s+/i, '')
@@ -185,6 +226,7 @@ function cleanEventTitle(piece: string) {
     .replace(/\b(?:today|tonight|tomorrow)\b/gi, ' ')
     .replace(new RegExp(CLOCK_TIME_SOURCE, 'ig'), ' ')
     .replace(/\b(?:at\s+)?(?:noon|midnight)\b/gi, ' ')
+    .replace(/\b(?:PDT|PST|Pacific(?:\s+(?:Standard|Daylight))?\s+Time|America\/Los_Angeles)\b/gi, ' ')
     .replace(/\b(?:called|titled|named)\s+/i, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -308,6 +350,21 @@ export function questionIntent(
 
 export function clarificationFor(text: string, today = localDate()) {
   const clean = text.trim()
+  if (/\b(picking up|driving|taking|getting|cancel(?:ed|led)?)\b/i.test(clean)) {
+    return { question: 'Which activity and date should I change?', placeholder: 'Name the activity, person, date and time.' }
+  }
+  const unresolved = clean.match(/\b(date|time|timezone):\s*([^.]*)/i)
+  if (unresolved) {
+    const field = unresolved[1].toLowerCase()
+    return {
+      question: `I could not resolve the appointment ${field}: ${unresolved[2].trim()}. What should I use?`,
+      placeholder: field === 'date'
+        ? 'For example: September 19, 2026'
+        : field === 'time'
+          ? 'For example: 1:45 PM'
+          : 'For example: Pacific time',
+    }
+  }
   const eventLanguage = /\b(event|meeting|appointment|rehearsal|practice|game|concert|recital|performance|birthday party|arrives?|visits?|comes? to visit)\b/i.test(clean)
   if (eventLanguage) {
     const date = dateFromText(clean, today)
@@ -353,6 +410,7 @@ export type PieceIntent =
     personSlug: string | null
     time: string
     private: boolean
+    appointment?: ParsedAppointment
   }
   | { type: 'meal'; mealName: string; time: string | null }
   | { type: 'grocery'; item: string }
@@ -365,13 +423,25 @@ export type PieceIntent =
     ownerSlug: string | null
   }
   | { type: 'question'; query: PepperQuestionIntent }
-  | { type: 'ambiguous'; text: string }
+  | { type: 'ambiguous'; text: string; unresolvedFields?: string[] }
 
-export function classifyPiece(piece: string, date = localDate()): PieceIntent {
+export function classifyPiece(piece: string, date = localDate(), members?: Array<{ slug: string; display_name: string }>): PieceIntent {
   const politeCommand = piece.match(
     /^(?:can|could|would)\s+you\s+(?:please\s+)?((?:add|create|schedule|assign|change|update|cancel|delete|complete|mark|set|move)\b.+?)\??$/i,
   )
-  if (politeCommand) return classifyPiece(politeCommand[1], date)
+  if (politeCommand) return classifyPiece(politeCommand[1], date, members)
+
+  const aliases = new Map<string, string | null>()
+  for (const member of members || []) {
+    for (const name of [member.slug, member.display_name, member.display_name.split(/\s+/)[0]]) {
+      const key = name.toLowerCase()
+      aliases.set(key, aliases.has(key) && aliases.get(key) !== member.slug ? null : member.slug)
+    }
+  }
+  const names = members
+    ? [...aliases.keys()].sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') || '(?!)'
+    : FAMILY_MEMBER_SOURCE
+  const slug = (name: string) => members ? aliases.get(name.toLowerCase()) : name.toLowerCase()
 
   const normalized = piece.trim().toLowerCase()
   const eventDate = dateFromText(piece, date)
@@ -380,38 +450,39 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
   const calendarEvent = /^(?:please\s+)?(?:add|create|schedule|put|make|book)\b.*\b(?:on|to)\s+(?:(?:the|my)\s+)?calendar\b/i.test(piece)
   const scheduleEvent = /^(?:please\s+)?schedule\b/i.test(piece)
   const eventCommand = explicitEvent || calendarEvent || scheduleEvent
-  const cancel = piece.match(
-    /\b(lyra|chloe|posey|matt|elle)\b.*(?:doesn['’]?t have|does not have|skip(?:ping)?|cancel(?:ed|led)?|not going to|no)\s+(.+)/i,
-  )
+  const possessiveCancel = piece.match(new RegExp(`^(${names})['’]s\\s+(.+?)\\s+(?:is|was)\\s+cancel(?:ed|led)(?:\\s+(?:today|tonight))?[.!]?$`, 'i'))
+  const cancel = possessiveCancel || piece.match(new RegExp(`\\b(${names})\\b.*(?:doesn['’]?t have|does not have|skip(?:ping)?|cancel(?:ed|led)?|not going to|no)\\s+(.+)`, 'i'))
   if (cancel) {
+    const person = slug(cancel[1])
+    if (!person) return { type: 'ambiguous', text: piece, unresolvedFields: ['person'] }
     return {
       type: 'event.cancel',
-      personSlug: cancel[1].toLowerCase(),
-      titleWord: cancel[2].replace(/today|tonight/gi, '').trim().split(/\s+/)[0],
+      personSlug: person,
+      titleWord: cancel[2].replace(/\b(today|tonight)\b/gi, '').replace(/[.!]$/, '').trim(),
       time,
     }
   }
 
-  const ride = piece.match(
-    /\b(elle|matt|lyra|chloe|posey)\b.*(?:getting|picking up|driving|taking)\s+(lyra|chloe|posey)\b/i,
-  )
+  const ride = piece.match(new RegExp(`^(${names})\\s+(?:is\\s+)?(?:getting|picking up|driving|taking)\\s+(${names})\\b`, 'i'))
   if (ride) {
+    const driver = slug(ride[1]), person = slug(ride[2])
+    if (!driver || !person) return { type: 'ambiguous', text: piece, unresolvedFields: ['person or driver'] }
     return {
       type: 'ride.assign',
-      driverSlug: ride[1].toLowerCase(),
-      personSlug: ride[2].toLowerCase(),
+      driverSlug: driver,
+      personSlug: person,
       time,
     }
   }
 
-  const unassign = piece.match(
-    /\b(elle|matt|lyra|chloe|posey)\b.*(?:can['’]?t|cannot|can not).*\b(lyra|chloe|posey)\b/i,
-  )
+  const unassign = piece.match(new RegExp(`^(${names})\\b.*(?:can['’]?t|cannot|can not).*\\b(${names})\\b`, 'i'))
   if (unassign) {
+    const driver = slug(unassign[1]), person = slug(unassign[2])
+    if (!driver || !person) return { type: 'ambiguous', text: piece, unresolvedFields: ['person or driver'] }
     return {
       type: 'ride.unassign',
-      driverSlug: unassign[1].toLowerCase(),
-      personSlug: unassign[2].toLowerCase(),
+      driverSlug: driver,
+      personSlug: person,
     }
   }
 
@@ -421,6 +492,7 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
     const mealName = (match?.[1] || '')
       .replace(/\s+(?:for dinner\b.*|you can update the plan\b.*|please update the plan\b.*)$/i, '')
       .replace(/\bat\s+\d.*$/i, '')
+      .replace(/\s+tonight[.!]?$/i, '')
       .trim()
     return {
       type: 'meal',
@@ -483,17 +555,27 @@ export function classifyPiece(piece: string, date = localDate()): PieceIntent {
   const question = questionIntent(piece, date)
   if (question) return { type: 'question', query: question }
 
-  const eventLanguage = /\b(arrives?|visits?|comes? to visit|meeting|appointment|rehearsal|practice|game|concert|recital|performance|birthday party)\b/i.test(piece)
-  if (eventCommand || eventLanguage) {
-    const person = piece.match(/\b(danielle|elle|matt|lyra|chloe|posey)\b/i)?.[1].toLowerCase() || null
+  const appointmentLanguage = hasAppointmentLanguage(piece)
+  const eventLanguage = /\b(arrives?|visits?|comes? to visit|meeting|appointment|rehearsal|practice|game|concert|recital|performance|birthday party|physical\s+therapy|mental\s+health|therap(?:y|ist))\b/i.test(piece)
+  if (eventCommand || eventLanguage || appointmentLanguage) {
+    const appointment = appointmentLanguage
+      ? parseAppointmentText(piece, { today: date, timeZone: TIME_ZONE })
+      : null
+    if (appointment?.status === 'needs_review') {
+      return { type: 'ambiguous', text: piece, unresolvedFields: appointment.unresolvedFields }
+    }
+    const personMatch = piece.match(/\b(danielle|elle|matt|lyra|chloe|posey)\b/i)?.[1].toLowerCase() || null
+    const person = appointment?.patientSlug || (personMatch === 'danielle' ? 'elle' : personMatch)
     const title = cleanEventTitle(piece)
-    if (time) {
+    const eventTime = appointment?.startsAt || time
+    if (eventTime) {
       return {
         type: 'event.create',
         title: title || 'Family event',
         personSlug: person,
-        time,
+        time: eventTime,
         private: !person && !/\b(family|visit|arriv)/i.test(piece),
+        ...(appointment ? { appointment } : {}),
       }
     }
     return { type: 'ambiguous', text: piece }
@@ -577,6 +659,9 @@ export function buildPlan(
 }
 
 export function replyForPlan(outcome: string, messages: string[]) {
+  if (outcome === 'needs_review') {
+    return 'I saved your request for review. No changes have been made to the plan.'
+  }
   if (messages.length === 0) {
     return 'I saved that exactly as you said it. I could not safely change structured state yet, so it is waiting in Pepper Inbox.'
   }
@@ -585,4 +670,15 @@ export function replyForPlan(outcome: string, messages: string[]) {
       ? ' I saved the rest in Pepper Inbox so nothing is lost.'
       : ''
   }`
+}
+
+export const ADULT_CALENDAR_REVIEW_REQUIRED = 'An active family adult must approve this shared Calendar change.'
+
+export function calendarProposalResponse() {
+  return {
+    mode: 'review',
+    reply: 'Your proposal is saved and awaiting review by a family adult. No calendar event has been added, changed, or canceled.',
+    clarification: undefined,
+    undoable: false,
+  }
 }

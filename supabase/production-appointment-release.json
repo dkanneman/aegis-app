@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "productionProjectRef": "mfgyeolvfthxacrqwwtc",
+  "canonicalBootstrap": {
+    "productionLedgerVersion": "20260814230412",
+    "productionMigrationName": "pepper_family_beta_sessions_seed",
+    "localSchemaSource": "supabase/migrations/20260814230412_pepper_family_beta_runtime_schema.sql",
+    "productionAction": "already_applied_do_not_reapply",
+    "equivalence": "schema_only_catalog_reconstruction_private_seed_omitted",
+    "freshBootstrap": "apply_canonical_migrations_in_version_order",
+    "productionShapedReconstruction": "use_same_canonical_chain_with_reviewed_version_mappings",
+    "productionShapedBuilder": "supabase/tests/build_production_shaped_migrations.sh",
+    "containsPrivateSeedData": false
+  },
+  "calendarAuthorization": {
+    "calendarScope": "https://www.googleapis.com/auth/calendar.app.created",
+    "identityScopes": ["openid", "email"],
+    "creationMethod": "google_calendars_insert_v1",
+    "calendarName": "Pepper Family",
+    "destinationSource": "stored_calendars_insert_response_id",
+    "metadataValidation": "calendars_get_exact_stored_id_marker_data_owner_and_oidc_identity",
+    "activationProbe": "direct_event_create_read_delete_absence_verification",
+    "externalSandboxVerificationRequired": true
+  },
+  "householdCalendarContributions": {
+    "identitySource": "server_resolved_pepper_member_session",
+    "writeRoles": ["adult_admin", "adult"],
+    "childBehavior": "proposal_needs_review_no_external_write",
+    "teenBehavior": "proposal_needs_review_no_external_write",
+    "authorizationBoundary": "active_member_and_event_and_connection_same_household",
+    "mutationEvidence": "immutable_deterministic_action_record",
+    "optimisticConcurrency": "expected_revision",
+    "oauthTokenExposure": "server_only",
+    "eventAttendees": "disabled",
+    "externalSandboxVerificationRequired": true
+  },
+  "logicalMappings": [
+    {
+      "localVersion": "20260915164500",
+      "productionVersion": "20260915203426",
+      "name": "harden_appointment_intake_and_bridge",
+      "productionAction": "map_without_reapply",
+      "equivalence": "structurally_equivalent_at_2026-09-16_preflight"
+    },
+    {
+      "localVersion": "20260915175808",
+      "productionVersion": "20260915203431",
+      "name": "prioritize_daily_plan_tasks",
+      "productionAction": "map_without_reapply",
+      "equivalence": "structurally_equivalent_at_2026-09-16_preflight"
+    }
+  ],
+  "productionOrder": [
+    {
+      "version": "20260915203426",
+      "source": "20260915164500_harden_appointment_intake_and_bridge.sql",
+      "action": "already_applied_do_not_reapply"
+    },
+    {
+      "version": "20260915203431",
+      "source": "20260915175808_prioritize_daily_plan_tasks.sql",
+      "action": "already_applied_do_not_reapply"
+    },
+    {
+      "version": "20260916120000",
+      "source": "20260916120000_sync_published_appointments.sql",
+      "action": "apply_after_preflight_and_backup"
+    },
+    {
+      "version": "20260916150000",
+      "source": "20260916150000_production_appointment_delivery.sql",
+      "action": "apply_after_20260916120000"
+    },
+    {
+      "version": "20260917211929",
+      "source": "20260917211929_authorize_household_calendar_contributions.sql",
+      "action": "apply_after_20260916150000_after_new_preflight_and_backup"
+    },
+    {
+      "version": "20260928230029",
+      "source": "20260928230029_persist_calendar_oauth_return_target.sql",
+      "action": "apply_after_20260917211929_before_calendar_runtime"
+    },
+    {
+      "version": "20260929002346",
+      "source": "20260929002346_materialize_recurring_chore_occurrences.sql",
+      "action": "apply_after_20260928230029_before_family_runtime_after_separate_review"
+    },
+    {
+      "version": "20260929173234",
+      "source": "20260929173234_bind_calendar_oauth_initiator_session.sql",
+      "action": "apply_after_20260917211929_before_calendar_runtime_invalidate_unbound_states"
+    },
+    {
+      "version": "20260929191406",
+      "source": "20260929191406_review_child_calendar_proposals.sql",
+      "action": "apply_after_20260929173234_before_family_and_tell_runtime_after_separate_review"
+    },
+    {
+      "version": "20260929225018",
+      "source": "20260929225018_reconcile_transport_schema_prerequisite.sql",
+      "action": "apply_before_event_writes_after_restored_hosted_schema_runtime_regression"
+    }
+  ],
+  "excludedFromProduction": [
+    {
+      "version": "20260916143000",
+      "source": "20260916143000_fail_closed_aegis_sandbox_delivery.sql",
+      "reason": "sandbox_only"
+    }
+  ],
+  "requiredPreflight": "supabase/tests/appointment_release_preflight.sql",
+  "requiredLocalOAuthGate": "supabase/tests/calendar_oauth_database.test.mjs",
+  "requiredLocalAuthorizationGate": "supabase/tests/calendar_oauth_authorization.test.mjs",
+  "requiredHostedSchemaTransportGate": "supabase/tests/transport_prerequisite_verify.sql",
+  "guardedRollback": "supabase/tests/appointment_release_production_rollback.sql",
+  "destructivePreviewRollback": "supabase/tests/appointment_release_rollback.sql"
+}

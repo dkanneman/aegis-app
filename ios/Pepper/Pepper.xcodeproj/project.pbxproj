@@ -14,6 +14,8 @@
 		A10000000000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* Assets.xcassets */; };
 		A10000000000000000000006 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* PrivacyInfo.xcprivacy */; };
 		A10000000000000000000007 /* PepperBiometricStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* PepperBiometricStore.swift */; };
+		A10000000000000000000008 /* PepperHealthBridgeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* PepperHealthBridgeStore.swift */; };
+		A10000000000000000000009 /* PepperHealthBridgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* PepperHealthBridgeView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,6 +29,8 @@
 		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000009 /* Pepper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Pepper.entitlements; sourceTree = "<group>"; };
 		A20000000000000000000010 /* PepperBiometricStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PepperBiometricStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* PepperHealthBridgeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PepperHealthBridgeStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* PepperHealthBridgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PepperHealthBridgeView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,6 +60,8 @@
 				A20000000000000000000003 /* PepperConfiguration.swift */,
 				A20000000000000000000004 /* PepperWebView.swift */,
 				A20000000000000000000010 /* PepperBiometricStore.swift */,
+				A20000000000000000000011 /* PepperHealthBridgeStore.swift */,
+				A20000000000000000000012 /* PepperHealthBridgeView.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
 				A20000000000000000000006 /* PrivacyInfo.xcprivacy */,
 				A20000000000000000000008 /* Info.plist */,
@@ -150,6 +156,8 @@
 				A10000000000000000000003 /* PepperConfiguration.swift in Sources */,
 				A10000000000000000000004 /* PepperWebView.swift in Sources */,
 				A10000000000000000000007 /* PepperBiometricStore.swift in Sources */,
+				A10000000000000000000008 /* PepperHealthBridgeStore.swift in Sources */,
+				A10000000000000000000009 /* PepperHealthBridgeView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -200,7 +208,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = Pepper/Pepper.entitlements;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 6H88BCZW6P;
 				ENABLE_PREVIEWS = YES;
@@ -209,6 +217,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PEPPER_BASE_HOST = "pepper-family-beta.vercel.app";
 				PEPPER_HEALTH_HOST = "mfgyeolvfthxacrqwwtc.supabase.co";
+				PEPPER_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mZ3llb2x2ZnRoeGFjcnF3d3RjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgxNDMyMDAsImV4cCI6MjEwMzcxOTIwMH0.uW9_dqKw8txaJxb7ysxMS0b0-nMmxg6XCk41Bhc4e9o";
 				PRODUCT_BUNDLE_IDENTIFIER = com.dkanneman.pepper;
 				PRODUCT_NAME = Pepper;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -224,7 +233,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = Pepper/Pepper.entitlements;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 6H88BCZW6P;
 				ENABLE_PREVIEWS = NO;
@@ -233,6 +242,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PEPPER_BASE_HOST = "pepper-family-beta.vercel.app";
 				PEPPER_HEALTH_HOST = "mfgyeolvfthxacrqwwtc.supabase.co";
+				PEPPER_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mZ3llb2x2ZnRoeGFjcnF3d3RjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgxNDMyMDAsImV4cCI6MjEwMzcxOTIwMH0.uW9_dqKw8txaJxb7ysxMS0b0-nMmxg6XCk41Bhc4e9o";
 				PRODUCT_BUNDLE_IDENTIFIER = com.dkanneman.pepper;
 				PRODUCT_NAME = Pepper;
 				SWIFT_EMIT_LOC_STRINGS = YES;

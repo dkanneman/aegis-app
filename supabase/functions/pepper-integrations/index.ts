@@ -160,7 +160,7 @@ async function pairHealth(member:any,client:unknown){
     await tx`insert into private.health_ingest_tokens(household_id,member_id,token_hash,label) values(${member.household_id}::uuid,${member.id}::uuid,${tokenHash},${label})`
     await tx`insert into public.integration_connections(household_id,member_id,provider,status,access_scope,last_attempt_at,metadata) values(${member.household_id}::uuid,${member.id}::uuid,'apple_health','pending','steps active_minutes',now(),jsonb_build_object('client',${nativeIOS?'native_ios':'shortcut'}::text)) on conflict(household_id,member_id,provider) do update set status='pending',last_attempt_at=now(),last_error=null,metadata=excluded.metadata,updated_at=now()`
   })
-  return {pairing_token:token,publishable_key:SUPABASE_ANON_KEY,ingest_url:`${SUPABASE_URL}/functions/v1/pepper-health-ingest`,status:'pending',requires:nativeIOS?'Pepper iPhone HealthKit permission':'Apple Health Shortcut'}
+  return {pairing_token:token,publishable_key:SUPABASE_ANON_KEY,ingest_url:`${SUPABASE_URL}/functions/v1/pepper-health-ingest`,member_id:member.id,member_name:member.display_name,status:'pending',requires:nativeIOS?'Pepper iPhone HealthKit permission':'Apple Health Shortcut'}
 }
 
 Deno.serve(async(req:Request)=>{

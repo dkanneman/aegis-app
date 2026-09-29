@@ -47,8 +47,10 @@
     <false/>
     <key>PepperBaseHost</key>
     <string>$(PEPPER_BASE_HOST)</string>
-    <key>PepperHealthHost</key>
-    <string>$(PEPPER_HEALTH_HOST)</string>
+	<key>PepperHealthHost</key>
+	<string>$(PEPPER_HEALTH_HOST)</string>
+	<key>PepperSupabaseAnonKey</key>
+	<string>$(PEPPER_SUPABASE_ANON_KEY)</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

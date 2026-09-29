@@ -4,38 +4,208 @@ import test from 'node:test'
 
 import {
   buildDailyPlan,
+  dailyPlanActionPatch,
   emailActionScore,
+  rankDayPlanTasks,
 } from '../supabase/functions/pepper-family-api/day-planning.ts'
 
 const apiPath = new URL('../supabase/functions/pepper-family-api/index.ts', import.meta.url)
-const integrationsPath = new URL('../supabase/functions/pepper-integrations/index.ts', import.meta.url)
 const clientPath = new URL('../app/pepper/pepper-client.tsx', import.meta.url)
 const cssPath = new URL('../app/pepper/pepper.module.css', import.meta.url)
+const priorityMigrationPath = new URL('../supabase/migrations/20260915175808_prioritize_daily_plan_tasks.sql', import.meta.url)
 
-test('day planning ranks active work around fixed appointments and excludes held work', () => {
+test('day planning ranks current hard-deadline payroll above an old manuscript task', () => {
   const plan = buildDailyPlan({
-    now: '2026-09-10T15:00:00.000Z',
-    dayStart: '2026-09-10T07:00:00.000Z',
-    dayEnd: '2026-09-11T07:00:00.000Z',
+    now: '2026-09-15T15:00:00.000Z',
+    dayStart: '2026-09-15T07:00:00.000Z',
+    dayEnd: '2026-09-16T07:00:00.000Z',
     timeZone: 'America/Los_Angeles',
     tasks: [
-      { id: 'due', title: 'Send the framing bid', status: 'open', priority: 'P1', due_at: '2026-09-10T23:59:00.000Z', area: 'Work' },
-      { id: 'critical', title: 'Prepare payroll', status: 'open', priority: 'P0', due_at: '2026-09-11T23:59:00.000Z', area: 'Work' },
-      { id: 'old', title: 'Return school form', status: 'open', priority: 'P3', due_at: '2026-09-09T23:59:00.000Z', area: 'Family' },
-      { id: 'held', title: 'Jelinda bid', status: 'on_hold', priority: 'P0', due_at: '2026-09-10T23:59:00.000Z', area: 'Work' },
+      { id: 'payroll', title: 'Run payroll today', status: 'open', importance: 'critical', urgency: 'today', deadline_type: 'hard', due_at: '2026-09-15T23:59:00.000Z', due_date_confidence: 1, area: 'Work', estimated_minutes: 45 },
+      { id: 'manuscript', title: 'MC-023 - Locate manuscript drafts', status: 'open', priority: 'P1', importance: 'high', urgency: 'flexible', deadline_type: 'soft', due_at: '2026-07-31T23:59:00.000Z', due_date_confidence: 0.45, area: 'Personal', project: 'Manuscript', estimated_minutes: 90 },
+      { id: 'held', title: 'Jelinda bid', status: 'on_hold', importance: 'critical', urgency: 'today', deadline_type: 'hard', due_at: '2026-09-15T23:59:00.000Z', due_date_confidence: 1, area: 'Work', blocked: true, next_action: 'Wait for further notice' },
     ],
     events: [
-      { id: 'appointment', title: 'Dentist', starts_at: '2026-09-10T17:00:00.000Z', ends_at: '2026-09-10T18:00:00.000Z', location: 'Camarillo' },
+      { id: 'appointment', title: 'Dentist', starts_at: '2026-09-15T17:00:00.000Z', ends_at: '2026-09-15T18:00:00.000Z', location: 'Camarillo' },
     ],
     emails: [],
   })
 
   const taskItems = plan.items.filter((item) => item.kind === 'task')
-  assert.equal(taskItems[0].record_id, 'due')
+  assert.equal(taskItems[0].record_id, 'payroll')
   assert.equal(taskItems.some((item) => item.record_id === 'held'), false)
   assert.equal(plan.items.some((item) => item.kind === 'appointment' && item.record_id === 'appointment'), true)
-  assert.match(taskItems[0].reason, /due today/i)
+  assert.match(taskItems[0].reason, /payroll|hard deadline today/i)
+  assert.doesNotMatch(taskItems[0].reason, /overdue and still open/i)
   assert.ok(taskItems[0].scheduled_for)
+})
+
+test('overdue status alone cannot create top priority', () => {
+  const ranked = rankDayPlanTasks([
+    { id: 'old', title: 'Old imported manuscript task', status: 'open', importance: 'high', urgency: 'flexible', deadline_type: 'soft', due_at: '2026-06-01T23:59:00.000Z', due_date_confidence: 0.4, project: 'Manuscript' },
+    { id: 'current', title: 'Submit current safety filing', status: 'open', importance: 'high', urgency: 'today', deadline_type: 'hard', due_at: '2026-09-15T23:59:00.000Z', due_date_confidence: 1, area: 'Safety' },
+  ], {
+    now: '2026-09-15T15:00:00.000Z',
+    today: '2026-09-15',
+    timeZone: 'America/Los_Angeles',
+  })
+
+  assert.equal(ranked[0].task.id, 'current')
+  assert.ok(ranked[0].score > ranked[1].score)
+  assert.ok(ranked[1].score <= 45)
+})
+
+test('combined legacy priority labels map to importance without relying on overdue state', () => {
+  const [ranked] = rankDayPlanTasks([
+    { id: 'legacy', title: 'Current strategic task', status: 'open', priority: 'High/P1', urgency: 'flexible' },
+  ], {
+    now: '2026-09-15T15:00:00.000Z',
+    today: '2026-09-15',
+    timeZone: 'America/Los_Angeles',
+  })
+  assert.equal(ranked.importance, 'high')
+  assert.equal(ranked.score, 30)
+})
+
+test('routine filing does not become a legal consequence', () => {
+  const [ranked] = rankDayPlanTasks([
+    { id: 'routine', title: 'Routine filing', status: 'open', importance: 'normal', urgency: 'flexible' },
+  ], {
+    now: '2026-09-15T15:00:00.000Z',
+    today: '2026-09-15',
+    timeZone: 'America/Los_Angeles',
+  })
+  assert.equal(ranked.rankGroup, 5)
+  assert.equal(ranked.score, 20)
+  assert.doesNotMatch(ranked.reason, /legal/i)
+})
+
+test('dismissed tasks stay out for the local day and return tomorrow', () => {
+  const input = {
+    now: '2026-09-15T15:00:00.000Z',
+    dayStart: '2026-09-15T07:00:00.000Z',
+    dayEnd: '2026-09-16T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [{ id: 'dismissed', title: 'Not today', status: 'open', importance: 'critical', urgency: 'today', dismissed_for_date: '2026-09-15' }],
+    events: [],
+    emails: [],
+  }
+  assert.equal(buildDailyPlan(input).items.some((item) => item.record_id === 'dismissed'), false)
+  assert.equal(buildDailyPlan({ ...input, now: '2026-09-16T15:00:00.000Z', dayStart: '2026-09-16T07:00:00.000Z', dayEnd: '2026-09-17T07:00:00.000Z' }).items.some((item) => item.record_id === 'dismissed'), true)
+})
+
+test('snoozed tasks return only after the snooze expires', () => {
+  const base = {
+    dayStart: '2026-09-15T07:00:00.000Z',
+    dayEnd: '2026-09-16T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    events: [],
+    emails: [],
+  }
+  const task = { id: 'snoozed', title: 'Call vendor', status: 'open', importance: 'high', urgency: 'today', snoozed_until: '2026-09-15T17:00:00.000Z' }
+  assert.equal(buildDailyPlan({ ...base, now: '2026-09-15T15:00:00.000Z', tasks: [task] }).items.some((item) => item.record_id === 'snoozed'), false)
+  assert.equal(buildDailyPlan({ ...base, now: '2026-09-15T18:00:00.000Z', tasks: [task] }).items.some((item) => item.record_id === 'snoozed'), true)
+})
+
+test('return to task list changes only today planning state', () => {
+  const patch = dailyPlanActionPatch('return_to_list', {
+    today: '2026-09-15',
+    now: '2026-09-15T15:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+  })
+  assert.deepEqual(patch, {
+    dismissed_for_date: '2026-09-15',
+    daily_plan_state: 'returned',
+    manually_pinned: false,
+  })
+  assert.equal('status' in patch, false)
+  assert.equal('deleted_at' in patch, false)
+  assert.equal('due_at' in patch, false)
+})
+
+test('waiting and non-actionable blocked tasks are excluded', () => {
+  const plan = buildDailyPlan({
+    now: '2026-09-15T15:00:00.000Z',
+    dayStart: '2026-09-15T07:00:00.000Z',
+    dayEnd: '2026-09-16T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [
+      { id: 'waiting', title: 'Waiting for a callback', status: 'open', importance: 'critical', urgency: 'today', waiting_on: 'Vendor' },
+      { id: 'blocked', title: 'Blocked task', status: 'open', importance: 'critical', urgency: 'today', blocked: true, next_action: '' },
+      { id: 'held', title: 'Jelinda bid', status: 'on_hold', importance: 'critical', urgency: 'today', blocked: true, next_action: 'Wait for further notice' },
+      { id: 'followup', title: 'Follow up now', status: 'open', importance: 'high', urgency: 'today', waiting_on: 'Vendor', waiting_follow_up_at: '2026-09-15T14:00:00.000Z' },
+    ],
+    events: [],
+    emails: [],
+  })
+  const ids = plan.items.map((item) => item.record_id)
+  assert.equal(ids.includes('waiting'), false)
+  assert.equal(ids.includes('blocked'), false)
+  assert.equal(ids.includes('held'), false)
+  assert.equal(ids.includes('followup'), true)
+})
+
+test('manual pins override normal scoring', () => {
+  const ranked = rankDayPlanTasks([
+    { id: 'critical', title: 'Critical work', status: 'open', importance: 'critical', urgency: 'today' },
+    { id: 'pinned', title: 'Chosen by user', status: 'open', importance: 'normal', urgency: 'flexible', manually_pinned: true },
+  ], { now: '2026-09-15T15:00:00.000Z', today: '2026-09-15', timeZone: 'America/Los_Angeles' })
+  assert.equal(ranked[0].task.id, 'pinned')
+  assert.equal(ranked[0].score >= 100, true)
+  assert.equal(ranked[0].reason, 'User pinned')
+})
+
+test('repeated refreshes are idempotent', () => {
+  const input = {
+    now: '2026-09-15T15:00:00.000Z',
+    dayStart: '2026-09-15T07:00:00.000Z',
+    dayEnd: '2026-09-16T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [{ id: 'one', title: 'One task', status: 'open', importance: 'high', urgency: 'today', estimated_minutes: 30 }],
+    events: [],
+    emails: [],
+  }
+  assert.deepEqual(buildDailyPlan(input), buildDailyPlan(input))
+})
+
+test('one project cannot flood the plan', () => {
+  const projects = ['Manuscript', 'Chapter 1', 'Book revisions', 'Publishing', 'Manuscript']
+  const manuscript = Array.from({ length: 5 }, (_, index) => ({
+    id: `book-${index}`,
+    title: `Manuscript task ${index}`,
+    status: 'open',
+    importance: 'high',
+    urgency: 'this_week',
+    project: projects[index],
+    estimated_minutes: 30,
+  }))
+  const plan = buildDailyPlan({
+    now: '2026-09-15T15:00:00.000Z',
+    dayStart: '2026-09-15T07:00:00.000Z',
+    dayEnd: '2026-09-16T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [...manuscript, { id: 'payroll', title: 'Prepare payroll', status: 'open', importance: 'critical', urgency: 'today', project: 'Operations', estimated_minutes: 30 }],
+    events: [],
+    emails: [],
+  })
+  assert.ok(plan.items.filter((item) => item.kind === 'task' && /manuscript|chapter|book|publishing/i.test(item.project || '')).length <= 2)
+  assert.ok(plan.items.filter((item) => item.kind === 'task' && item.plan_tier === 'must_protect').length <= 3)
+})
+
+test('planner includes only work that fits available calendar time', () => {
+  const plan = buildDailyPlan({
+    now: '2026-09-15T15:00:00.000Z',
+    dayStart: '2026-09-15T07:00:00.000Z',
+    dayEnd: '2026-09-15T19:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: Array.from({ length: 6 }, (_, index) => ({ id: `task-${index}`, title: `Task ${index}`, status: 'open', importance: 'high', urgency: 'today', estimated_minutes: 60 })),
+    events: [{ id: 'fixed', title: 'Work commitment', starts_at: '2026-09-15T16:30:00.000Z', ends_at: '2026-09-15T18:30:00.000Z' }],
+    emails: [],
+  })
+  const tasks = plan.items.filter((item) => item.kind === 'task')
+  assert.equal(tasks.length, 1)
+  assert.ok(tasks.every((item) => item.scheduled_for && item.ends_at))
+  assert.ok(tasks.every((item) => Date.parse(item.ends_at) <= Date.parse('2026-09-15T19:00:00.000Z')))
 })
 
 test('day planning identifies actionable email without turning ordinary mail into work', () => {
@@ -108,35 +278,40 @@ test('overlapping appointments are surfaced as a day-plan conflict', () => {
   })
 
   assert.equal(plan.conflicts.length, 1)
-  assert.match(plan.conflicts[0], /School meeting.*Doctor appointment/)
+  assert.match(plan.conflicts[0], /Doctor appointment remains the priority/i)
+  assert.match(plan.conflicts[0], /coordinate school coverage for School meeting/i)
 })
 
 test('daily planning is private, live, and available from Today and Ask Pepper', async () => {
-  const [api, integrations, client, css] = await Promise.all([
+  const [api, client, css, migration] = await Promise.all([
     readFile(apiPath, 'utf8'),
-    readFile(integrationsPath, 'utf8'),
     readFile(clientPath, 'utf8'),
     readFile(cssPath, 'utf8'),
+    readFile(priorityMigrationPath, 'utf8'),
   ])
 
   assert.match(api, /action==='day_plan'/)
+  assert.match(api, /action==='day_plan_task_action'/)
   assert.match(api, /'day_plan'/)
   assert.match(api, /from public\.meal_plan mp/)
   assert.match(api, /classification,tags,next_action,source/)
-  assert.match(api, /gmail_digest/)
-  assert.match(integrations, /body\.action==='gmail_digest'/)
-  assert.match(integrations, /member_id=\$\{member\.id\}::uuid/)
-  assert.match(integrations, /vault\.decrypted_secrets/)
-  assert.match(integrations, /format',\s*'metadata'/)
+  assert.match(api, /emails:\[\]/)
   assert.match(client, /Plan my day/)
   assert.match(client, /Pepper's promise/)
   assert.match(client, /Your day, organized/)
+  assert.match(client, /Do today \/ Pin/)
+  assert.match(client, /Return to task list/)
+  assert.match(client, /Snooze until tomorrow/)
+  assert.match(client, /Waiting on someone/)
   assert.match(client, /organize|prioritize/i)
   assert.match(client, /email, school events, chores, tasks/)
   assert.match(client, /daily flow in order of importance/)
   assert.match(client, /stay on top of everything and miss nothing/)
   assert.match(client, /Today’s plan is reorganized/)
-  assert.match(client, /sendTell\(transcript, "voice"\)/)
+  assert.doesNotMatch(client, /sendTell\(transcript, "voice"\)/)
+  assert.match(client, /recognition\.interimResults = false/)
+  assert.match(client, /Review your message, then send it/)
+  assert.match(client, /idempotency_key: requestKey/)
   assert.match(client, /refreshDayPlanAfterChange\(result\.token\)/)
   assert.match(client, /isDayPlanRequest\(clean\)/)
   assert.match(client, /refresh\|replan/)
@@ -146,4 +321,12 @@ test('daily planning is private, live, and available from Today and Ask Pepper',
   )?.[0] || ''
   assert.doesNotMatch(refreshAfterChange, /setDayPlan\(null\)/)
   assert.match(css, /\.dayPlan/)
+  for (const column of ['importance', 'urgency', 'deadline_type', 'due_date_confidence', 'waiting_follow_up_at', 'blocked', 'snoozed_until', 'dismissed_for_date', 'manually_pinned', 'daily_plan_state', 'priority_score', 'priority_reason']) {
+    assert.match(migration, new RegExp(`add column if not exists ${column}`))
+  }
+  assert.match(migration, /Legacy source priority retained/)
+  assert.match(migration, /private\.task_priority_review_queue/)
+  assert.match(migration, /if tg_op = 'INSERT' then/)
+  assert.match(migration, /normalized_priority ~ .*\(p1\|high\).* then 'high'/)
+  assert.doesNotMatch(migration, /set\s+priority\s*=/i)
 })

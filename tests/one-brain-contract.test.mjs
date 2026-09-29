@@ -195,16 +195,12 @@ test('Tell Pepper accepts natural calendar event language without losing dates o
       private: false,
     },
   )
-  assert.deepEqual(
-    classifyPiece('Schedule Chloe dentist appointment October 2nd at 3 PM', '2026-09-14'),
-    {
-      type: 'event.create',
-      title: 'Chloe dentist appointment',
-      personSlug: 'chloe',
-      time: '2026-10-02T22:00:00.000Z',
-      private: false,
-    },
-  )
+  const dentist = classifyPiece('Schedule Chloe dentist appointment October 2nd at 3 PM', '2026-09-14')
+  assert.equal(dentist.type, 'event.create')
+  assert.equal(dentist.title, 'Chloe dentist appointment')
+  assert.equal(dentist.personSlug, 'chloe')
+  assert.equal(dentist.time, '2026-10-02T15:00:00-07:00')
+  assert.equal(dentist.appointment?.appointmentType, 'dental')
 })
 
 test('event capture keeps conjunctions together and uses the event command over meal inference', () => {
@@ -236,13 +232,13 @@ test('event times honor Pacific daylight saving and ambiguous times request clar
 test('event capture supports common commands and does not split abbreviated names', () => {
   const appointment = 'Please create an event: Lyra Dr. Patel appointment September 22 at 2 PM'
   assert.deepEqual(splitCapture(appointment), [appointment])
-  assert.deepEqual(classifyPiece(appointment, '2026-09-14'), {
-    type: 'event.create',
-    title: 'Lyra Dr. Patel appointment',
-    personSlug: 'lyra',
-    time: '2026-09-22T21:00:00.000Z',
-    private: false,
-  })
+  const parsedAppointment = classifyPiece(appointment, '2026-09-14')
+  assert.equal(parsedAppointment.type, 'event.create')
+  assert.equal(parsedAppointment.title, 'Lyra Dr. Patel appointment')
+  assert.equal(parsedAppointment.personSlug, 'lyra')
+  assert.equal(parsedAppointment.time, '2026-09-22T14:00:00-07:00')
+  assert.equal(parsedAppointment.appointment?.clinician, 'Dr. Patel')
+  assert.equal(parsedAppointment.appointment?.appointmentType, 'doctor')
   assert.deepEqual(
     classifyPiece('Put Chloe practice on my calendar tomorrow at 4 PM', '2026-09-14'),
     {

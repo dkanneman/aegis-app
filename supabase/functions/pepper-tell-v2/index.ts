@@ -1,7 +1,10 @@
 import postgres from 'npm:postgres@3.4.7'
 import {
   buildPlan,
+  ADULT_CALENDAR_REVIEW_REQUIRED,
+  calendarProposalResponse,
   classifyPiece,
+  coordinationTargets,
   clarificationFor,
   cleanDelegatedAction,
   dayBounds,
@@ -12,17 +15,39 @@ import {
   localDate,
   questionIntent,
   replyForPlan,
+  reviewRetryText,
   splitCapture,
+  isAppointmentPreparationPiece,
   type PepperQuestionIntent,
 } from './logic.ts'
+import {
+  appointmentDedupeKey,
+  appointmentEventId,
+  parseAppointmentText,
+  type ParsedAppointment,
+} from '../_shared/appointment-intake.ts'
+import {
+  eventsOverlap,
+  medicalCoordinationPriority,
+  medicalCoordinationTaskTitle,
+  type SchedulingEvent,
+} from '../_shared/medical-scheduling.ts'
+import {
+  calendarMutationActionKey,
+  calendarMutationKind,
+  isAdultHouseholdRole,
+} from '../_shared/calendar-contribution.ts'
 
+const DATABASE_SSL = Deno.env.get('PEPPER_DB_SSL') === 'disable' ? false : 'require'
 const sql = postgres(Deno.env.get('SUPABASE_DB_URL')!, {
-  ssl: 'require',
+  ssl: DATABASE_SSL,
   prepare: false,
   max: 1,
   idle_timeout: 20,
   connect_timeout: 10,
 })
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || ''
+const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -38,6 +63,9 @@ type Member = {
   slug: string
   display_name: string
   role: string
+  session_id: string
+  active: boolean
+  removed_at: string | null
 }
 
 type EventRow = {
@@ -45,7 +73,9 @@ type EventRow = {
   title: string
   person_slug: string | null
   starts_at: string
+  ends_at: string | null
   kind: string
+  source: string | null
   transport_owner_member_id: string | null
 }
 
@@ -53,6 +83,31 @@ type FamilyMemberRow = {
   id: string
   slug: string
   display_name: string
+  role: string
+}
+
+type AppointmentBridgeItem = {
+  eventId: string
+  dedupeKey: string
+  title: string
+  patientMemberId: string | null
+  appointment: ParsedAppointment
+}
+
+type AppointmentEventRow = {
+  id: string
+  title: string
+  person_slug: string | null
+  starts_at: string
+  appointment_type: ParsedAppointment['appointmentType'] | null
+  clinician_name: string | null
+  patient_member_id: string | null
+  facility_name: string | null
+  location: string | null
+  preparation_instructions: string | null
+  original_source_text: string | null
+  source_timezone: string | null
+  dedupe_key: string | null
 }
 
 type MealRow = { id: string }
@@ -76,6 +131,9 @@ function json(body: unknown, status = 200) {
 
 function publicFailureMessage(error: unknown) {
   const message = error instanceof Error ? error.message : ''
+  if (/appointment bridge failed/i.test(message)) {
+    return 'The appointment was saved in Pepper, but calendar delivery is still pending. Retry the same update to resume synchronization.'
+  }
   if (
     /aegis_sync_status|sharing_scope|capture_plan|apply_capture_plan|record_capture_apply_failure/i.test(message)
     || /column .* does not exist|relation .* does not exist|function .* does not exist/i.test(message)
@@ -89,10 +147,11 @@ async function member(req: Request): Promise<Member | null> {
   const token = req.headers.get('x-pepper-session') || ''
   if (!UUID.test(token)) return null
   const rows = await sql<Member[]>`
-    select m.id,m.household_id,m.slug,m.display_name,m.role
+    select m.id,m.household_id,m.slug,m.display_name,m.role,m.active,m.removed_at,s.session_id
     from public.member_sessions s
     join public.household_members m on m.id=s.member_id
     where s.token=${token}::uuid and s.revoked_at is null and s.expires_at>now()
+      and m.active=true and m.removed_at is null
     limit 1
   `
   return rows[0] || null
@@ -127,7 +186,7 @@ function memberForSlug(members: FamilyMemberRow[], slug: string | null) {
 
 async function answerQuestion(m: Member, query: PepperQuestionIntent): Promise<Answer> {
   const members = await sql<FamilyMemberRow[]>`
-    select id,slug,display_name
+    select id,slug,display_name,role
     from public.household_members
     where household_id=${m.household_id}::uuid
   `
@@ -349,6 +408,7 @@ async function undoCapture(m: Member, captureId: string) {
       where id=${captureId}::uuid
         and household_id=${m.household_id}::uuid
         and member_id=${m.id}::uuid
+        and calendar_proposal is null
       for update
     `
     const capture = captures[0]
@@ -387,7 +447,13 @@ async function undoCapture(m: Member, captureId: string) {
         throw Object.assign(new Error('Pepper could not verify the original change.'), { status: 409 })
       }
       const expectedUpdatedAt = stateText(change.after_state, 'updated_at')
-      if (!expectedUpdatedAt) {
+      const expectedRevision = change.entity_type === 'event'
+        ? Number(change.after_state.revision)
+        : null
+      if (change.entity_type === 'event' && (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1)) {
+        throw Object.assign(new Error('Pepper could not verify the original event revision.'), { status: 409 })
+      }
+      if (change.entity_type !== 'event' && !expectedUpdatedAt) {
         throw Object.assign(new Error('Pepper could not verify the original change time.'), { status: 409 })
       }
       let reversed: { id: string }[] = []
@@ -421,6 +487,22 @@ async function undoCapture(m: Member, captureId: string) {
               returning id
             `
       } else if (change.entity_type === 'event') {
+        const mutationAction = change.before_state ? 'update' : 'cancel'
+        const actionKey = calendarMutationActionKey({
+          eventId:change.entity_id,
+          action:mutationAction,
+          actorMemberId:m.id,
+          sessionId:m.session_id,
+          requestId:`undo:${captureId}:${change.entity_id}`,
+        })
+        const actionRows = await tx<{ id: string }[]>`
+          select private.pepper_record_calendar_event_mutation(
+            ${m.household_id}::uuid,${change.entity_id}::uuid,${m.id}::uuid,
+            ${m.session_id}::uuid,${mutationAction},${actionKey},
+            ${expectedRevision}::bigint,${expectedRevision}::bigint,${Number(expectedRevision)+1}::bigint,
+            ${tx.json({capture_id:captureId,operation:'undo',record_id:change.entity_id})}::jsonb
+          ) as id
+        `
         reversed = change.before_state
           ? await tx<{ id: string }[]>`
               update public.events set
@@ -438,19 +520,27 @@ async function undoCapture(m: Member, captureId: string) {
                 source=${stateText(change.before_state, 'source')},
                 deleted_at=${stateText(change.before_state, 'deleted_at')}::timestamptz,
                 deleted_by_member_id=${stateText(change.before_state, 'deleted_by_member_id')}::uuid,
+                last_modified_by_member_id=${m.id}::uuid,
+                last_modified_session_id=${m.session_id}::uuid,
+                last_calendar_action_id=${actionRows[0].id}::uuid,
+                revision=revision+1,
                 updated_at=now()
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and revision=${expectedRevision}::bigint
               returning id
             `
           : await tx<{ id: string }[]>`
               update public.events set status='canceled',canonical_status_override='canceled',
-                deleted_at=now(),deleted_by_member_id=${m.id}::uuid,updated_at=now()
+                deleted_at=now(),deleted_by_member_id=${m.id}::uuid,
+                last_modified_by_member_id=${m.id}::uuid,
+                last_modified_session_id=${m.session_id}::uuid,
+                last_calendar_action_id=${actionRows[0].id}::uuid,
+                revision=revision+1,updated_at=now()
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
                 and deleted_at is null
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and revision=${expectedRevision}::bigint
               returning id
             `
       } else if (change.entity_type === 'grocery') {
@@ -599,21 +689,436 @@ async function applyPlan(captureId: string, m: Member, idempotencyKey: string, p
   throw lastError
 }
 
+async function invokeAppointmentBridge(captureId: string, item: AppointmentBridgeItem) {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    throw new Error('Appointment bridge service credentials are not configured.')
+  }
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/aegis-bridge-worker`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      action: 'appointment.sync',
+      capture_id: captureId,
+      event_id: item.eventId,
+      dedupe_key: item.dedupeKey,
+      normalized_appointment: {
+        event_id: item.eventId,
+        title: item.title,
+        starts_at: item.appointment.startsAt,
+        timezone: item.appointment.timeZone,
+        appointment_type: item.appointment.appointmentType,
+        clinician: item.appointment.clinician,
+        patient_member_id: item.patientMemberId,
+        patient_slug: item.appointment.patientSlug,
+        facility: item.appointment.facility,
+        location: item.appointment.location,
+        preparation_instructions: item.appointment.preparationInstructions,
+        original_source_text: item.appointment.originalText,
+        date_source: item.appointment.dateSource,
+        time_source: item.appointment.timeSource,
+        timezone_source: item.appointment.timezoneSource,
+        scheduling_priority: 100,
+      },
+    }),
+    signal: AbortSignal.timeout(20_000),
+  })
+  const responseText = await response.text()
+  if (!response.ok) {
+    let detail = responseText
+    try { detail = String(JSON.parse(responseText)?.error || responseText) } catch { /* use response text */ }
+    throw new Error(`Appointment bridge failed: ${detail.slice(0, 300)}`)
+  }
+  return responseText ? JSON.parse(responseText) : { ok: true }
+}
+
+async function syncAppointmentBridges(
+  captureId: string,
+  member: Member,
+  appointments: AppointmentBridgeItem[],
+) {
+  if (!appointments.length) return []
+  await sql.begin(async (transaction) => {
+    for (const item of appointments) {
+      const appointment = item.appointment
+      await transaction`
+        update public.events set
+          appointment_type=${appointment.appointmentType},
+          clinician_name=${appointment.clinician},
+          patient_member_id=${item.patientMemberId}::uuid,
+          facility_name=${appointment.facility},
+          location=coalesce(${appointment.location},location),
+          preparation_instructions=${appointment.preparationInstructions},
+          original_source_text=${appointment.originalText},
+          source_timezone=${appointment.timeZone},
+          scheduling_priority=100,
+          dedupe_key=${item.dedupeKey},
+          sync_status='pending',
+          updated_at=now()
+        where id=${item.eventId}::uuid and household_id=${member.household_id}::uuid
+      `
+    }
+    await transaction`
+      update public.captures set
+        aegis_sync_status='captured',aegis_synced_at=null,aegis_sync_error=null,
+        aegis_last_attempt_at=now(),updated_at=now()
+      where id=${captureId}::uuid and household_id=${member.household_id}::uuid
+    `
+  })
+
+  try {
+    return await Promise.all(appointments.map((item) => invokeAppointmentBridge(captureId, item)))
+  } catch (error) {
+    await sql`
+      update public.captures set
+        aegis_sync_status='failed',aegis_sync_error=${String((error as Error).message).slice(0, 500)},
+        aegis_last_attempt_at=now(),updated_at=now()
+      where id=${captureId}::uuid and household_id=${member.household_id}::uuid
+    `
+    throw error
+  }
+}
+
+function appointmentDeliverySummary(results: Array<Record<string, unknown>>) {
+  if (!results.length) return {}
+  const complete = results.every((result) => result.delivery_state === 'synced' && result.ok === true)
+  return {
+    delivery_complete: complete,
+    delivery_notice: complete
+      ? 'Pepper, Google Calendar, and AEGIS are synchronized.'
+      : 'Saved in Pepper. Google Calendar or AEGIS delivery still needs attention.',
+  }
+}
+
+type AppliedEventChange = {
+  operation: string
+  entity_type: 'event'
+  record_id: string
+}
+
+function appliedEventChanges(appliedChanges: unknown[]): AppliedEventChange[] {
+  return appliedChanges.filter((change): change is AppliedEventChange => (
+    Boolean(change)
+    && typeof change === 'object'
+    && (change as Record<string, unknown>).entity_type === 'event'
+    && typeof (change as Record<string, unknown>).operation === 'string'
+    && UUID.test(String((change as Record<string, unknown>).record_id || ''))
+  ))
+}
+
+function requireAdultCalendarReview(member: Member, interpretation: Awaited<ReturnType<typeof interpretCapture>>) {
+  if (isAdultHouseholdRole(member.role)) return interpretation
+  const eventWrites = interpretation.writes.filter((write) => String(write.operation || '').startsWith('event.'))
+  if (!eventWrites.length) return interpretation
+  return {
+    ...interpretation,
+    writes: [],
+    appointments: [],
+    ambiguities: [
+      ...interpretation.ambiguities,
+      ADULT_CALENDAR_REVIEW_REQUIRED,
+    ],
+    messages: [
+      'I saved this as a proposal for a family adult to review.',
+    ],
+  }
+}
+
+async function saveCalendarProposal(captureId: string, actor: Member, interpretation: Awaited<ReturnType<typeof interpretCapture>>) {
+  if (!['child', 'teen'].includes(actor.role) || !interpretation.writes.some(w => String(w.operation).startsWith('event.'))) return
+  const revisions: Record<string, number> = {}
+  const preview: Record<string, unknown>[] = []
+  for (const write of interpretation.writes.filter(w => w.operation === 'event.create')) preview.push({ ...write, visibility:'household' })
+  for (const write of interpretation.writes.filter(w => w.operation === 'event.update')) {
+    const rows = await sql<Array<{ revision: number; title: string; starts_at: string; ends_at: string; location: string }>>`select revision,title,starts_at,ends_at,location from public.events
+      where id=${String(write.record_id)}::uuid and household_id=${actor.household_id}::uuid and visibility='household'`
+    if (!rows[0]) throw Object.assign(new Error('The proposed event is not shared with this household.'), { status: 403 })
+    revisions[String(write.record_id)] = Number(rows[0].revision)
+    preview.push({ ...rows[0], ...write })
+  }
+  const proposal = {
+    // A child/teen Calendar proposal is explicitly a shared-household request. The
+    // parent sees this scope before approving; private existing events stay denied.
+    plan: buildPlan(interpretation.facts, interpretation.writes.map(write => write.operation === 'event.create'
+      ? { ...write, visibility: 'household' } : write), interpretation.ambiguities, 'review_resolution'),
+    appointments: interpretation.appointments, revisions, preview,
+  }
+  await sql`update public.captures set calendar_proposal=${sql.json(proposal)}::jsonb,
+    proposal_decision='pending',sharing_scope='household'
+    where id=${captureId}::uuid and member_id=${actor.id}::uuid and calendar_proposal is null`
+}
+
+async function decideCalendarProposal(actor: Member, captureId: string, decision: string) {
+  if (!isAdultHouseholdRole(actor.role)) throw Object.assign(new Error('Only an active family adult can review this proposal.'), { status: 403 })
+  const committed = await sql.begin(async tx => {
+    const active = await tx`select m.id from public.household_members m join public.member_sessions s on s.member_id=m.id
+      where m.id=${actor.id}::uuid and m.household_id=${actor.household_id}::uuid and m.active and m.removed_at is null
+        and m.role in ('adult','adult_admin') and s.session_id=${actor.session_id}::uuid and s.revoked_at is null and s.expires_at>now()
+      for share of m,s`
+    if (!active.length) throw Object.assign(new Error('Unlock Pepper again to continue.'), { status: 401 })
+    const rows = await tx<Array<{ calendar_proposal: { plan: ReturnType<typeof buildPlan>; appointments: AppointmentBridgeItem[]; revisions: Record<string, number> }; proposal_decision: string; applied_changes: unknown[] }>>`
+      select c.calendar_proposal,c.proposal_decision,c.applied_changes from public.captures c
+      join public.household_members child on child.id=c.member_id and child.household_id=c.household_id and child.role in ('child','teen')
+      where c.id=${captureId}::uuid and c.household_id=${actor.household_id}::uuid
+        and c.sharing_scope='household' and c.calendar_proposal is not null for update of c`
+    const capture = rows[0]
+    if (!capture) throw Object.assign(new Error('Proposal not found.'), { status: 404 })
+    if (capture.proposal_decision !== 'pending') {
+      if (capture.proposal_decision !== decision) throw Object.assign(new Error('This proposal already has a different decision. Refresh the Inbox.'), { status: 409 })
+      return { decision, applied: capture.applied_changes || [], events: [], replay: true }
+    }
+    if (decision === 'declined') {
+      await tx`update public.captures set proposal_decision='declined',status='dismissed',aegis_sync_status='not_applicable',
+        reconciled_by_member_id=${actor.id}::uuid,reconciled_at=now(),updated_at=now() where id=${captureId}::uuid`
+      await tx`insert into public.audit_log(household_id,actor_member_id,capture_id,event_type,entity_type,entity_id,summary)
+        values(${actor.household_id}::uuid,${actor.id}::uuid,${captureId}::uuid,'proposal_declined','capture',${captureId},'Adult declined the minor calendar proposal. No calendar change.')`
+      return { decision, applied: [], events: [], replay: false }
+    }
+    const { plan, revisions } = capture.calendar_proposal
+    if (plan.outcome !== 'applied') throw Object.assign(new Error('This proposal has unresolved details and cannot safely be approved.'), { status: 422 })
+    for (const [id, revision] of Object.entries(revisions)) {
+      const events = await tx<{ revision: number }[]>`select revision from public.events where id=${id}::uuid
+        and household_id=${actor.household_id}::uuid and visibility='household' and deleted_at is null for update`
+      if (Number(events[0]?.revision) !== revision) throw Object.assign(new Error('The event changed since this proposal. Decline it and request an updated proposal.'), { status: 409 })
+    }
+    const result = await tx<{ result: { applied_changes: unknown[] } }[]>`select private.resolve_capture_review(
+      ${captureId}::uuid,${actor.id}::uuid,${`proposal:${captureId}`},${tx.json(plan)}::jsonb) as result`
+    const applied = result[0].result.applied_changes
+    const events = await recordAppliedCalendarMutations(captureId, actor, applied, tx)
+    await tx`update public.captures set proposal_decision='approved',updated_at=now() where id=${captureId}::uuid`
+    await tx`insert into public.audit_log(household_id,actor_member_id,capture_id,event_type,entity_type,entity_id,summary)
+      values(${actor.household_id}::uuid,${actor.id}::uuid,${captureId}::uuid,'proposal_approved','capture',${captureId},'Adult approved the minor calendar proposal; external delivery is separate.')`
+    return { decision, applied, events, replay: false }
+  })
+  // Canonical decision and attribution commit before external delivery. Replay reads
+  // current delivery state, never re-applies writes or attributes a second decision.
+  if (!committed.replay && decision === 'approved') {
+    await syncSharedCalendarEvents(captureId, committed.events)
+    const saved = await sql<{ calendar_proposal: { appointments: AppointmentBridgeItem[] } }[]>`select calendar_proposal from public.captures where id=${captureId}::uuid`
+    const appointments = mergeAppointmentBridgeItems(saved[0].calendar_proposal.appointments, await appointmentItemsForReplay(actor, committed.applied))
+    try { await syncAppointmentBridges(captureId, actor, appointments) } catch { /* persisted retry state; approval remains committed */ }
+  }
+  const ids = appliedEventChanges(committed.applied).map(c => c.record_id)
+  const states = ids.length ? await sql<Array<{ id: string; sync_status: string }>>`select id,sync_status from public.events
+    where household_id=${actor.household_id}::uuid and id=any(${ids}::uuid[])` : []
+  const complete = decision === 'approved' && states.length === ids.length && states.length > 0 && states.every(e => e.sync_status === 'synced')
+  return { ok: true, capture_id: captureId, proposal_decision: decision, status: decision === 'declined' ? 'dismissed' : 'applied',
+    mode: 'review', undoable: false, delivery_complete: complete,
+    reply: decision === 'declined' ? 'Proposal declined. No calendar event was changed.'
+      : complete ? 'Proposal approved. The calendar change is synchronized.' : 'Proposal approved and saved in Pepper. Calendar delivery is pending or needs attention.',
+    idempotent_replay: committed.replay }
+}
+
+async function recordAppliedCalendarMutations(
+  captureId: string,
+  member: Member,
+  appliedChanges: unknown[],
+  existingTransaction?: postgres.TransactionSql,
+) {
+  const changes = appliedEventChanges(appliedChanges)
+  if (!changes.length) return []
+  if (!isAdultHouseholdRole(member.role)) throw Object.assign(new Error('Only an active family adult can change the shared Calendar.'),{status:403})
+
+  const record = async (transaction: postgres.TransactionSql) => {
+    const recorded: Array<Record<string, unknown>> = []
+    for (const [index, change] of changes.entries()) {
+      const action = calendarMutationKind(change.operation)
+      const actionKey = calendarMutationActionKey({
+        eventId: change.record_id,
+        action,
+        actorMemberId: member.id,
+        sessionId: member.session_id,
+        requestId: `${captureId}:${index}`,
+      })
+      const prior = await transaction<Array<{ id: string }>>`
+        select id from private.calendar_event_mutation_requests where action_key=${actionKey} limit 1
+      `
+      if (prior[0]) {
+        const replay = await transaction<Array<Record<string, unknown>>>`
+          select id,household_id,visibility,appointment_type,external_event_id,status,last_calendar_action_id,revision
+          from public.events where id=${change.record_id}::uuid and household_id=${member.household_id}::uuid
+        `
+        if (replay[0]) recorded.push(replay[0])
+        continue
+      }
+
+      const beforeRows = await transaction<Array<Record<string, unknown>>>`
+        select id,household_id,visibility,appointment_type,external_event_id,status,
+          created_by_member_id,last_modified_by_member_id,revision
+        from public.events
+        where id=${change.record_id}::uuid and household_id=${member.household_id}::uuid
+        for update
+      `
+      const before = beforeRows[0]
+      if (!before) throw Object.assign(new Error('The shared event is not in this household.'),{status:403})
+      const beforeRevision = Number(before.revision || 1)
+      const afterRevision = action === 'create' ? beforeRevision : beforeRevision + 1
+      const actionRows = await transaction<Array<{ id: string }>>`
+        select private.pepper_record_calendar_event_mutation(
+          ${member.household_id}::uuid,${change.record_id}::uuid,${member.id}::uuid,
+          ${member.session_id}::uuid,${action},${actionKey},
+          ${beforeRevision}::bigint,${beforeRevision}::bigint,${afterRevision}::bigint,
+          ${transaction.json({capture_id:captureId,operation:change.operation,record_id:change.record_id})}::jsonb
+        ) as id
+      `
+      const afterRows = await transaction<Array<Record<string, unknown>>>`
+        update public.events set
+          created_by_member_id=coalesce(created_by_member_id,${member.id}::uuid),
+          last_modified_by_member_id=${member.id}::uuid,
+          last_modified_session_id=${member.session_id}::uuid,
+          last_calendar_action_id=${actionRows[0].id}::uuid,
+          revision=${afterRevision}::bigint
+        where id=${change.record_id}::uuid
+          and household_id=${member.household_id}::uuid
+          and revision=${beforeRevision}::bigint
+        returning id,household_id,visibility,appointment_type,external_event_id,status,revision,last_calendar_action_id
+      `
+      const after = afterRows[0]
+      if (!after) throw Object.assign(new Error('That event changed somewhere else. Refresh before changing it again.'),{status:409})
+      recorded.push(after)
+    }
+    return recorded
+  }
+  return existingTransaction ? record(existingTransaction) : sql.begin(record)
+}
+
+async function invokeCalendarPublisher(captureId: string, eventId: string) {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) throw new Error('Calendar publisher credentials are not configured.')
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/pepper-calendar`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${SERVICE_ROLE_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'publish_event', capture_id: captureId, event_id: eventId }),
+    signal: AbortSignal.timeout(20_000),
+  })
+  const text = await response.text()
+  let data: Record<string, unknown> = {}
+  try { data = text ? JSON.parse(text) : {} } catch { data = {} }
+  if (!response.ok) throw Object.assign(new Error(String(data.error || 'Calendar delivery failed.')),{status:response.status})
+  return data
+}
+
+async function syncSharedCalendarEvents(captureId: string, recordedEvents: Array<Record<string, unknown>>) {
+  const shared = recordedEvents.filter((event) => (
+    event.visibility === 'household'
+    && !event.appointment_type
+    && String(event.status || '') !== 'completed'
+  ))
+  if (!shared.length) return []
+  return Promise.all(shared.map(async event => {
+    try { return await invokeCalendarPublisher(captureId, String(event.id)) }
+    catch {
+      const reason = 'Saved in Pepper. Shared Calendar delivery failed and needs a retry.'
+      await sql`update public.events set sync_status='retry_required',last_sync_error=${reason},
+        sync_retry_at=now()+interval '15 minutes',updated_at=now()
+        where id=${String(event.id)}::uuid and household_id=${String(event.household_id)}::uuid`
+      return { ok: false, status: 'retry_required', event_id: event.id, retryable: true, error: reason }
+    }
+  }))
+}
+
+function sharedCalendarDeliverySummary(results: Array<Record<string, unknown>>) {
+  if (!results.length) return {}
+  const complete = results.every((result) => result.ok === true && result.status === 'synced')
+  return {
+    shared_calendar_delivery: results,
+    shared_calendar_complete: complete,
+    shared_calendar_notice: complete
+      ? 'The shared Pepper Calendar is synchronized.'
+      : 'Saved in Pepper. Shared Calendar delivery still needs attention.',
+  }
+}
+
+function localDateForInstant(startsAt: string, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-CA-u-ca-gregory-nu-latn', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(startsAt))
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+
+async function appointmentItemsForReplay(
+  member: Member,
+  appliedChanges: unknown[],
+): Promise<AppointmentBridgeItem[]> {
+  const appointmentRefs = appliedChanges.filter((change): change is Record<string, unknown> => (
+    Boolean(change)
+    && typeof change === 'object'
+    && (change as Record<string, unknown>).entity_type === 'event'
+    && UUID.test(String((change as Record<string, unknown>).record_id || ''))
+  ))
+  const items: AppointmentBridgeItem[] = []
+  for (const change of appointmentRefs) {
+    const eventId = String(change.record_id)
+    const rows = await sql<AppointmentEventRow[]>`
+      select id,title,person_slug,starts_at,appointment_type,clinician_name,
+        patient_member_id,facility_name,location,preparation_instructions,
+        original_source_text,source_timezone,dedupe_key
+      from public.events
+      where id=${eventId}::uuid
+        and household_id=${member.household_id}::uuid
+        and deleted_at is null
+      limit 1
+    `
+    const event = rows[0]
+    if (!event?.original_source_text || !event.dedupe_key || !event.appointment_type) continue
+    const timeZone = event.source_timezone || 'America/Los_Angeles'
+    const parsed = parseAppointmentText(event.original_source_text, {
+      today: localDateForInstant(event.starts_at, timeZone),
+      timeZone,
+    })
+    if (parsed.status !== 'parsed' || !parsed.startsAt) {
+      throw new Error(`Appointment bridge retry needs review: ${parsed.unresolvedFields.join('; ')}`)
+    }
+    items.push({
+      eventId: event.id,
+      dedupeKey: event.dedupe_key,
+      title: event.title,
+      patientMemberId: event.patient_member_id,
+      appointment: {
+        ...parsed,
+        startsAt: event.starts_at,
+        localDate: localDateForInstant(event.starts_at, timeZone),
+        appointmentType: event.appointment_type,
+        clinician: event.clinician_name || parsed.clinician,
+        patientSlug: event.person_slug || parsed.patientSlug,
+        facility: event.facility_name || parsed.facility,
+        location: event.location || parsed.location,
+        preparationInstructions: event.preparation_instructions || parsed.preparationInstructions,
+        originalText: event.original_source_text,
+      },
+    })
+  }
+  return items
+}
+
+function mergeAppointmentBridgeItems(...groups: AppointmentBridgeItem[][]) {
+  const byEvent = new Map<string, AppointmentBridgeItem>()
+  for (const item of groups.flat()) byEvent.set(item.eventId, item)
+  return [...byEvent.values()]
+}
+
 async function interpretCapture(m: Member, text: string) {
   const today = localDate()
   const [dayStart, dayEnd] = dayBounds(today)
   const [memberRows, eventRows, mealRows] = await Promise.all([
-    sql<{ id: string; slug: string; display_name: string }[]>`
-      select id,slug,display_name from public.household_members
+    sql<{ id: string; slug: string; display_name: string; role: string }[]>`
+      select id,slug,display_name,role from public.household_members
       where household_id=${m.household_id}::uuid
+        and active=true and removed_at is null
     `,
     sql<EventRow[]>`
-      select id,title,person_slug,starts_at,kind,transport_owner_member_id
+      select id,title,person_slug,starts_at,ends_at,kind,source,transport_owner_member_id
       from public.events
       where household_id=${m.household_id}::uuid
         and starts_at>=${dayStart}::timestamptz
         and starts_at<${dayEnd}::timestamptz
-        and status<>'canceled'
+        and status not in ('canceled','completed') and deleted_at is null
+        and (visibility='household' or owner_member_id=${m.id}::uuid)
       order by starts_at
     `,
     sql<{ id: string }[]>`
@@ -631,15 +1136,16 @@ async function interpretCapture(m: Member, text: string) {
   const writes: Record<string, unknown>[] = []
   const messages: string[] = []
   const ambiguities: string[] = []
+  const appointments: AppointmentBridgeItem[] = []
   if (isComplexTrainingPlan(text)) {
     const facts = splitCapture(text)
-    return { facts, writes, messages, ambiguities: facts }
+    return { facts, writes, messages, ambiguities: facts, appointments }
   }
   const delegated = delegatedIntent(text)
 
   if (delegated) {
     const subject = memberBySlug.get(delegated.subjectSlug)
-    if (!subject) return { facts: [text], writes, messages, ambiguities: [text] }
+    if (!subject) return { facts: [text], writes, messages, ambiguities: [text], appointments }
     const due = dueDateFrom(text, today)
     const title = cleanDelegatedAction(subject.display_name, delegated.action)
     writes.push({
@@ -658,17 +1164,19 @@ async function interpretCapture(m: Member, text: string) {
     messages.push(due
       ? `I added “${title}” to ${due.label}’s plan.`
       : `I added “${title}” to the family plan.`)
-    return { facts: [text], writes, messages, ambiguities }
+    return { facts: [text], writes, messages, ambiguities, appointments }
   }
 
   const facts = splitCapture(text)
-  for (const fact of facts) {
-    const intent = classifyPiece(fact, today)
+  const classifiedFacts = facts.map((fact) => ({ fact, intent: classifyPiece(fact, today, familyMembers) }))
+  const hasAppointment = classifiedFacts.some(({ intent }) => (
+    intent.type === 'event.create' && Boolean(intent.appointment)
+  ))
+  for (const { fact, intent } of classifiedFacts) {
+    if (hasAppointment && intent.type === 'task' && isAppointmentPreparationPiece(fact)) continue
 
     if (intent.type === 'event.cancel') {
-      const matches = todayEvents.filter((event: EventRow) =>
-        event.person_slug === intent.personSlug &&
-        event.title.toLowerCase().includes(intent.titleWord.toLowerCase()))
+      const matches = coordinationTargets(todayEvents, intent, fact, today)
       if (matches.length === 0) { ambiguities.push(fact); continue }
       for (const event of matches) {
         writes.push({
@@ -683,28 +1191,26 @@ async function interpretCapture(m: Member, text: string) {
 
     if (intent.type === 'ride.assign') {
       const driver = memberBySlug.get(intent.driverSlug)
-      const matches = todayEvents.filter((event: EventRow) => event.person_slug === intent.personSlug)
+      const matches = coordinationTargets(todayEvents, intent, fact, today)
       if (!driver || matches.length === 0) { ambiguities.push(fact); continue }
       for (const event of matches) {
         writes.push({
           operation: 'event.update', record_id: event.id,
           transport_owner_member_id: driver.id, transport_status: 'assigned',
-          ...(intent.time ? { starts_at: intent.time } : {}),
           metadata: { type: 'driver_assigned' },
           audit_event_type: 'driver_assigned',
           audit_summary: `${driver.display_name} assigned to ${intent.personSlug}.`,
         })
       }
       const person = intent.personSlug.charAt(0).toUpperCase() + intent.personSlug.slice(1)
-      messages.push(`${driver.display_name} is handling ${person}.`)
+      messages.push(`${driver.display_name} is assigned to ${person}'s ride. Acceptance is not yet confirmed.`)
       continue
     }
 
     if (intent.type === 'ride.unassign') {
       const driver = memberBySlug.get(intent.driverSlug)
-      const matches = todayEvents.filter((event: EventRow) =>
-        event.person_slug === intent.personSlug &&
-        event.transport_owner_member_id === driver?.id)
+      const matches = coordinationTargets(todayEvents.filter(event =>
+        event.transport_owner_member_id === driver?.id), intent, fact, today)
       if (!driver || matches.length === 0) { ambiguities.push(fact); continue }
       for (const event of matches) {
         writes.push({
@@ -719,21 +1225,173 @@ async function interpretCapture(m: Member, text: string) {
     }
 
     if (intent.type === 'event.create') {
+      const fullSourceAppointment = intent.appointment
+        ? parseAppointmentText(text, { today, timeZone: intent.appointment.timeZone })
+        : null
+      const appointment = intent.appointment
+        ? {
+            ...intent.appointment,
+            originalText: text,
+            clinician: fullSourceAppointment?.clinician || intent.appointment.clinician,
+            facility: fullSourceAppointment?.facility || intent.appointment.facility,
+            location: fullSourceAppointment?.location || intent.appointment.location,
+            preparationInstructions: fullSourceAppointment?.preparationInstructions
+              || intent.appointment.preparationInstructions,
+          }
+        : null
       const subject = intent.personSlug
         ? memberBySlug.get(intent.personSlug)
           || (intent.personSlug === 'danielle' && m.display_name.toLowerCase() === 'danielle' ? m : null)
         : null
       if (intent.personSlug && !subject) { ambiguities.push(fact); continue }
       const endsAt = new Date(new Date(intent.time).getTime() + 60 * 60 * 1000).toISOString()
+      const patientSlug = subject?.slug || (intent.private ? m.slug : null)
+      const dedupeKey = appointment
+        ? appointmentDedupeKey({
+            title: intent.title,
+            startsAt: intent.time,
+            patientSlug,
+            appointmentType: appointment.appointmentType,
+            clinician: appointment.clinician,
+          })
+        : null
+      const plannedEventId = dedupeKey ? appointmentEventId(dedupeKey) : planRecordId()
+      const existingAppointment = dedupeKey
+        ? await sql<{ id: string }[]>`
+            select id from public.events
+            where household_id=${m.household_id}::uuid
+              and deleted_at is null
+              and (
+                id=${plannedEventId}::uuid
+                or dedupe_key=${dedupeKey}
+                or (
+                  starts_at=${intent.time}::timestamptz
+                  and person_slug is not distinct from ${patientSlug}
+                  and lower(btrim(title))=lower(btrim(${intent.title}))
+                )
+              )
+            limit 1
+          `
+        : []
+      const eventId = existingAppointment[0]?.id || plannedEventId
       writes.push({
-        operation: 'event.create', record_id: planRecordId(),
-        title: intent.title, person_slug: subject?.slug || (intent.private ? m.slug : null),
+        operation: existingAppointment[0] ? 'event.update' : 'event.create', record_id: eventId,
+        title: intent.title, person_slug: patientSlug,
         starts_at: intent.time, ends_at: endsAt,
+        ...(appointment?.location ? { location: appointment.location } : {}),
         visibility: intent.private ? 'private' : 'household',
         owner_member_id: intent.private ? m.id : null,
-        kind: /appointment/i.test(intent.title) ? 'appointment' : 'event', source: 'pepper',
-        metadata: { type: 'event_created' },
+        kind: appointment ? 'appointment' : 'event', source: 'pepper',
+        metadata: {
+          type: existingAppointment[0] ? 'appointment_replayed' : 'event_created',
+          ...(appointment ? {
+            appointment_type: appointment.appointmentType,
+            source_timezone: appointment.timeZone,
+            scheduling_priority: 100,
+            dedupe_key: dedupeKey,
+          } : {}),
+        },
       })
+
+      if (appointment && dedupeKey) {
+        appointments.push({
+          eventId,
+          dedupeKey,
+          title: intent.title,
+          patientMemberId: subject?.id || null,
+          appointment,
+        })
+
+        const overlappingEvents = await sql<EventRow[]>`
+          select id,title,person_slug,starts_at,ends_at,kind,source,transport_owner_member_id
+          from public.events
+          where household_id=${m.household_id}::uuid
+            and id<>${eventId}::uuid
+            and deleted_at is null
+            and status<>'canceled'
+            and starts_at<${endsAt}::timestamptz
+            and coalesce(ends_at,starts_at + interval '1 hour')>${intent.time}::timestamptz
+          order by starts_at
+        `
+        for (const overlap of overlappingEvents) {
+          if (!eventsOverlap({
+            ...appointment,
+            id: eventId,
+            title: intent.title,
+            starts_at: intent.time,
+            ends_at: endsAt,
+            kind: 'appointment',
+            appointment_type: appointment.appointmentType,
+          } as SchedulingEvent, overlap)) continue
+          const followUpTitle = medicalCoordinationTaskTitle({
+            id: eventId,
+            title: intent.title,
+            starts_at: intent.time,
+            ends_at: endsAt,
+            kind: 'appointment',
+            appointment_type: appointment.appointmentType,
+          }, overlap)
+          if (!followUpTitle) continue
+          const coordinationPriority = medicalCoordinationPriority({
+            appointmentStartsAt: intent.time,
+            now: new Date().toISOString(),
+            unresolvedLogistics: true,
+          })
+          const taskId = appointmentEventId(`coordination:${dedupeKey}:${overlap.id}`)
+          const existingTask = await sql<{ id: string }[]>`
+            select id from public.tasks
+            where id=${taskId}::uuid and household_id=${m.household_id}::uuid
+            limit 1
+          `
+          writes.push({
+            operation: existingTask[0] ? 'task.update' : 'task.create',
+            record_id: taskId,
+            title: followUpTitle,
+            owner_member_id: m.id,
+            visibility: 'household',
+            status: 'open',
+            due_at: intent.time,
+            source: 'pepper_medical_coordination',
+            metadata: {
+              type: 'medical_coordination_follow_up',
+              medical_event_id: eventId,
+              overlapping_event_id: overlap.id,
+              coordination_priority: coordinationPriority.priority,
+              priority_reason: coordinationPriority.reason,
+            },
+          })
+        }
+
+        if (subject && ['teen', 'child'].includes(subject.role)) {
+          const transportationPriority = medicalCoordinationPriority({
+            appointmentStartsAt: intent.time,
+            now: new Date().toISOString(),
+            unresolvedLogistics: true,
+          })
+          const taskId = appointmentEventId(`transport:${dedupeKey}`)
+          const existingTask = await sql<{ id: string }[]>`
+            select id from public.tasks
+            where id=${taskId}::uuid and household_id=${m.household_id}::uuid
+            limit 1
+          `
+          writes.push({
+            operation: existingTask[0] ? 'task.update' : 'task.create',
+            record_id: taskId,
+            title: `Confirm transportation for ${intent.title}`,
+            owner_member_id: m.id,
+            visibility: 'household',
+            status: 'open',
+            due_at: intent.time,
+            source: 'pepper_medical_coordination',
+            metadata: {
+              type: 'medical_transportation_follow_up',
+              medical_event_id: eventId,
+              coordination_priority: transportationPriority.priority,
+              priority_reason: transportationPriority.reason,
+            },
+          })
+        }
+      }
       messages.push(`${intent.title} added to the calendar at ${formatTime(intent.time)}.`)
       continue
     }
@@ -741,7 +1399,8 @@ async function interpretCapture(m: Member, text: string) {
     if (intent.type === 'meal') {
       writes.push({
         operation: 'meal.upsert', record_id: todayMeals[0]?.id || planRecordId(),
-        meal_date: today, meal_name: intent.mealName, eat_at: intent.time,
+        meal_date: today, meal_name: intent.mealName,
+        ...(intent.time ? { eat_at: intent.time } : {}),
         metadata: { type: 'meal_updated' },
       })
       const mealEvent = todayEvents.find((event: EventRow) => event.kind === 'meal')
@@ -752,11 +1411,11 @@ async function interpretCapture(m: Member, text: string) {
           ...(intent.time ? { starts_at: intent.time } : {}),
           metadata: { type: 'meal_event_updated' },
         })
-      } else {
+      } else if (intent.time) {
         writes.push({
           operation: 'event.create', record_id: planRecordId(),
           title: `Dinner · ${intent.mealName}`,
-          starts_at: intent.time || new Date(`${today}T18:30:00-07:00`).toISOString(),
+          starts_at: intent.time,
           visibility: 'household', kind: 'meal', source: 'pepper',
           metadata: { type: 'meal_event_created' },
         })
@@ -823,10 +1482,14 @@ async function interpretCapture(m: Member, text: string) {
       continue
     }
 
-    ambiguities.push(fact)
+    if (intent.type === 'ambiguous' && intent.unresolvedFields?.length) {
+      ambiguities.push(...intent.unresolvedFields.map((field) => `${field}. Original: ${intent.text}`))
+    } else {
+      ambiguities.push(fact)
+    }
   }
 
-  return { facts, writes, messages, ambiguities }
+  return { facts, writes, messages, ambiguities, appointments }
 }
 
 Deno.serve(async (req: Request) => {
@@ -840,6 +1503,13 @@ Deno.serve(async (req: Request) => {
     try { body = await req.json() } catch { return json({ error: 'Invalid request.' }, 400) }
     const action = String(body.action || 'tell')
 
+    if (action === 'review_decide') {
+      const id = String(body.capture_id || '')
+      const decision = String(body.decision || '')
+      if (!UUID.test(id) || !['approved','declined'].includes(decision)) return json({ error: 'Proposal and explicit decision required.' }, 400)
+      return json(await decideCalendarProposal(currentMember, id, decision))
+    }
+
     if (action === 'undo') {
       const captureId = String(body.capture_id || '')
       if (!UUID.test(captureId)) return json({ error: 'A valid Pepper change is required.' }, 400)
@@ -847,13 +1517,27 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === 'review_list') {
-      const rows = await sql<{ reviews: unknown }[]>`
-        select coalesce(jsonb_agg(review_row order by review_row.captured_at desc),'[]'::jsonb) as reviews
-        from private.list_capture_reviews(
-          ${currentMember.id}::uuid,${Math.min(Math.max(Number(body.limit) || 50, 1), 100)}
-        ) review_row
+      const rows = await sql`
+        select c.id,c.original_text,c.status,c.source,c.captured_at,c.proposal_decision,
+          submitter.display_name as proposed_by,
+          (c.proposal_decision='pending' and ${isAdultHouseholdRole(currentMember.role)}) as can_review,
+          c.calendar_proposal->'preview' as proposed_changes,
+          c.calendar_proposal->'plan'->'remaining_ambiguities' as unresolved_details,
+          case when c.proposal_decision='approved' then
+            (select bool_and(e.sync_status='synced') from public.events e
+             where e.household_id=c.household_id and e.id in
+               (select (v->>'record_id')::uuid from jsonb_array_elements(c.applied_changes) v where v->>'entity_type'='event'))
+          else null end as delivery_complete
+        from public.captures c join public.household_members submitter on submitter.id=c.member_id
+        where c.household_id=${currentMember.household_id}::uuid
+          and ((c.member_id=${currentMember.id}::uuid and (c.proposal_decision is not null or
+            c.id in (select capture_id from private.list_capture_reviews(${currentMember.id}::uuid,50)))) or
+            (${isAdultHouseholdRole(currentMember.role)} and c.sharing_scope='household'
+             and submitter.role in ('child','teen') and c.calendar_proposal is not null))
+          and (c.status in ('captured','partially_applied','needs_review') or c.proposal_decision is not null)
+        order by (c.proposal_decision='pending') desc nulls last,c.captured_at desc limit 50
       `
-      return json({ ok: true, reviews: rows[0]?.reviews || [] })
+      return json({ ok: true, reviews: rows })
     }
 
     if (action === 'review_resolve') {
@@ -862,6 +1546,8 @@ Deno.serve(async (req: Request) => {
       if (!UUID.test(captureId) || !idempotencyKey || body.resolution !== 'no_change_required') {
         return json({ error: 'Capture, idempotency key, and an explicit no-change resolution are required.' }, 400)
       }
+      const proposal = await sql`select id from public.captures where id=${captureId}::uuid and calendar_proposal is not null`
+      if (proposal.length) return json({ error: 'Calendar proposals require an adult approve or decline decision.' }, 403)
       const reviewPlan = {
         version: 1,
         kind: 'review_resolution',
@@ -887,8 +1573,13 @@ Deno.serve(async (req: Request) => {
       if (!UUID.test(captureId) || !idempotencyKey) {
         return json({ error: 'Capture and idempotency key are required.' }, 400)
       }
-      const captureRows = await sql<{ original_text: string; remaining_ambiguities: unknown }[]>`
-        select original_text,remaining_ambiguities
+      const proposals = await sql`select proposal_decision from public.captures where id=${captureId}::uuid
+        and member_id=${currentMember.id}::uuid and household_id=${currentMember.household_id}::uuid and calendar_proposal is not null`
+      if (proposals[0]) return json({ status: proposals[0].proposal_decision === 'pending' ? 'needs_review' : proposals[0].proposal_decision,
+        ...calendarProposalResponse(), capture_id: captureId,
+        reply: proposals[0].proposal_decision === 'pending' ? calendarProposalResponse().reply : `This proposal was ${proposals[0].proposal_decision}. No new changes were made.`, applied_changes: [] })
+      const captureRows = await sql<{ original_text: string }[]>`
+        select original_text
         from public.captures
         where id=${captureId}::uuid
           and member_id=${currentMember.id}::uuid
@@ -896,14 +1587,8 @@ Deno.serve(async (req: Request) => {
         limit 1
       `
       if (!captureRows[0]) return json({ error: 'That review item is no longer waiting.' }, 404)
-      const remaining = Array.isArray(captureRows[0].remaining_ambiguities)
-        ? captureRows[0].remaining_ambiguities.filter((value): value is string => typeof value === 'string')
-        : []
       const clarificationText = String(body.clarification_text || '').trim()
-      const unresolvedText = remaining.length ? remaining.join('. ') : captureRows[0].original_text
-      const retryText = clarificationText
-        ? `${unresolvedText.replace(/[?.!]+$/u, '')} ${clarificationText}`
-        : unresolvedText
+      const retryText = reviewRetryText(captureRows[0].original_text, clarificationText)
       const retryQuestion = questionIntent(retryText)
       if (retryQuestion) {
         const answer = await answerQuestion(currentMember, retryQuestion)
@@ -925,7 +1610,10 @@ Deno.serve(async (req: Request) => {
         `
         return json({ ...answeredQuestionResponse(answer), captureId, capture_id: captureId })
       }
-      const interpretation = await interpretCapture(currentMember, retryText)
+      const interpretation = requireAdultCalendarReview(
+        currentMember,
+        await interpretCapture(currentMember, retryText),
+      )
       const plan = buildPlan(
         interpretation.facts,
         interpretation.writes,
@@ -935,6 +1623,14 @@ Deno.serve(async (req: Request) => {
       const result = await applyPlan(captureId, currentMember, idempotencyKey.slice(0, 200), plan)
       const outcome = String(result?.status || plan.outcome)
       const appliedChanges = Array.isArray(result?.applied_changes) ? result.applied_changes : []
+      const recordedEvents = await recordAppliedCalendarMutations(captureId, currentMember, appliedChanges)
+      const replayAppointments = await appointmentItemsForReplay(currentMember, appliedChanges)
+      const bridgeResults = await syncAppointmentBridges(
+        captureId,
+        currentMember,
+        mergeAppointmentBridgeItems(interpretation.appointments, replayAppointments),
+      )
+      const sharedCalendarResults = await syncSharedCalendarEvents(captureId, recordedEvents)
       const needsClarification = outcome === 'needs_review' || outcome === 'partially_applied'
       return json({
         status: outcome,
@@ -943,10 +1639,15 @@ Deno.serve(async (req: Request) => {
         capture_id: captureId,
         reply: replyForPlan(outcome, interpretation.messages),
         applied_changes: appliedChanges,
+        appointment_bridge: bridgeResults,
+        ...appointmentDeliverySummary(bridgeResults),
+        ...sharedCalendarDeliverySummary(sharedCalendarResults),
         undoable: appliedChanges.length > 0,
         ...(needsClarification
           ? { clarification: clarificationFor(interpretation.ambiguities.join(' ') || retryText) }
           : {}),
+        ...(outcome === 'needs_review' && interpretation.ambiguities.includes(ADULT_CALENDAR_REVIEW_REQUIRED)
+          ? calendarProposalResponse() : {}),
       })
     }
 
@@ -960,6 +1661,11 @@ Deno.serve(async (req: Request) => {
       currentMember, text, String(body.source) === 'voice' ? 'voice' : 'text',
       clientKey ? clientKey.slice(0, 200) : null,
     )
+    if (capture.existing) {
+      const decisions = await sql`select proposal_decision from public.captures where id=${capture.id}::uuid and proposal_decision in ('approved','declined')`
+      if (decisions[0]) return json({ status: decisions[0].proposal_decision,mode:'review',capture_id:capture.id,
+        reply:`This proposal was ${decisions[0].proposal_decision}. No new changes were made.`,undoable:false,applied_changes:[],idempotent_replay:true })
+    }
     if (capture.existing && clientKey) {
       const prior = await sql<{ result: Record<string, unknown> }[]>`
         select result from private.capture_plan_applications
@@ -970,25 +1676,46 @@ Deno.serve(async (req: Request) => {
         const appliedChanges = Array.isArray(prior[0].result.applied_changes)
           ? prior[0].result.applied_changes
           : []
+        const recordedEvents = await recordAppliedCalendarMutations(capture.id, currentMember, appliedChanges)
+        const appointments = await appointmentItemsForReplay(currentMember, appliedChanges)
+        const bridgeResults = await syncAppointmentBridges(capture.id, currentMember, appointments)
+        const sharedCalendarResults = await syncSharedCalendarEvents(capture.id, recordedEvents)
         return json({
           status: prior[0].result.status,
-          mode: 'action',
+          mode: prior[0].result.status === 'needs_review' ? 'review' : 'action',
           captureId: capture.id,
           capture_id: capture.id,
-          reply: 'Done. Pepper already handled that update.',
+          reply: prior[0].result.status === 'needs_review'
+            ? 'This request is still awaiting review. No new changes have been made.'
+            : prior[0].result.status === 'partially_applied'
+              ? 'Pepper already handled the safe changes. The rest is still awaiting review.'
+              : 'Done. Pepper already handled that update.',
           applied_changes: appliedChanges,
+          appointment_bridge: bridgeResults,
+          ...appointmentDeliverySummary(bridgeResults),
+          ...sharedCalendarDeliverySummary(sharedCalendarResults),
           undoable: appliedChanges.length > 0,
           idempotent_replay: true,
         })
       }
     }
-    const interpretation = await interpretCapture(currentMember, text)
+    const originalInterpretation = await interpretCapture(currentMember, text)
+    await saveCalendarProposal(capture.id, currentMember, originalInterpretation)
+    const interpretation = requireAdultCalendarReview(currentMember, originalInterpretation)
     const plan = buildPlan(interpretation.facts, interpretation.writes, interpretation.ambiguities)
     const result = await applyPlan(
       capture.id, currentMember, clientKey ? clientKey.slice(0, 200) : crypto.randomUUID(), plan,
     )
     const outcome = String(result?.status || plan.outcome)
     const appliedChanges = Array.isArray(result?.applied_changes) ? result.applied_changes : []
+    const recordedEvents = await recordAppliedCalendarMutations(capture.id, currentMember, appliedChanges)
+    const replayAppointments = await appointmentItemsForReplay(currentMember, appliedChanges)
+    const bridgeResults = await syncAppointmentBridges(
+      capture.id,
+      currentMember,
+      mergeAppointmentBridgeItems(interpretation.appointments, replayAppointments),
+    )
+    const sharedCalendarResults = await syncSharedCalendarEvents(capture.id, recordedEvents)
     const needsClarification = outcome === 'needs_review' || outcome === 'partially_applied'
     return json({
       status: outcome,
@@ -997,10 +1724,15 @@ Deno.serve(async (req: Request) => {
       capture_id: capture.id,
       reply: replyForPlan(outcome, interpretation.messages),
       applied_changes: appliedChanges,
+      appointment_bridge: bridgeResults,
+      ...appointmentDeliverySummary(bridgeResults),
+      ...sharedCalendarDeliverySummary(sharedCalendarResults),
       undoable: appliedChanges.length > 0,
       ...(needsClarification
         ? { clarification: clarificationFor(interpretation.ambiguities.join(' ') || text) }
         : {}),
+      ...(outcome === 'needs_review' && interpretation.ambiguities.includes(ADULT_CALENDAR_REVIEW_REQUIRED)
+        ? calendarProposalResponse() : {}),
     })
   } catch (error) {
     console.error(error)

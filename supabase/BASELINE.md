@@ -24,14 +24,17 @@ File-level deployed and local source SHA-256 hashes are recorded in [`baseline/p
 
 Twenty-two relevant production migration sources are captured under `supabase/migrations/`. Each is byte-for-byte or terminal-LF-only equivalent to the deployed migration text. Full deployed/local hashes are in the JSON manifest.
 
-Two remote-history entries are intentionally not copied:
+One remote-history entry is represented by a seed-free schema reconstruction:
 
-- `20260814230412_pepper_family_beta_sessions_seed`: mixes session-table DDL with private household seed/authentication data. The deployed SHA-256 is recorded, but the source is not placed in Git.
+- `20260814230412_pepper_family_beta_sessions_seed` mixed runtime DDL with private household seed/authentication data. [`migrations/20260814230412_pepper_family_beta_runtime_schema.sql`](migrations/20260814230412_pepper_family_beta_runtime_schema.sql) now restores only its catalog-verified runtime schema, plus the production event/calendar compatibility objects that predate the replayable migration set. It intentionally has a different source hash, contains no rows or credentials, and uses the production ledger version so it is never reapplied to production.
+
+One unrelated remote-history entry is intentionally not copied:
+
 - `20260822093842_add_internal_product_ops_ledger`: unrelated to the Pepper runtime/V6 foundation; its deployed SHA-256 is recorded for full-history accounting.
 
 ## Runtime schema supplement
 
-[`baseline/runtime_schema.sql`](baseline/runtime_schema.sql) is a schema-only reconstruction snapshot for the five runtime-critical tables whose original DDL is absent from the safe migration set:
+[`baseline/runtime_schema.sql`](baseline/runtime_schema.sql) remains the immutable catalog snapshot that proves the structure of five runtime-critical tables whose original DDL was absent from the safe migration set:
 
 - `public.member_sessions`
 - `public.calendar_connections`
@@ -39,14 +42,14 @@ Two remote-history entries are intentionally not copied:
 - `private.calendar_tokens`
 - `private.calendar_sync_runs`
 
-The snapshot was generated exclusively from PostgreSQL catalogs. It includes columns, defaults, nullability, constraints, indexes, the owned sequence used by calendar sync runs, RLS state, policies, trigger state, ownership, and runtime-relevant grants. It contains no rows, session or OAuth values, sequence state, household identifiers, credentials, or seed data.
+The snapshot was generated exclusively from PostgreSQL catalogs. It includes columns, defaults, nullability, constraints, indexes, the owned sequence used by calendar sync runs, RLS state, policies, trigger state, ownership, and runtime-relevant grants. It contains no rows, session or OAuth values, sequence state, household identifiers, credentials, or seed data. The versioned runtime-schema migration is the executable bootstrap source; this snapshot is retained as its provenance evidence.
 
 The snapshot preserves current security reality for later review: RLS is enabled on both public tables. The three private calendar tables currently have RLS disabled and no policies; their table privileges are limited to the owner.
 
 ## Known discrepancies and provenance notes
 
 - Files marked effective rather than byte-for-byte differ only in terminal line-feed normalization. Both deployed and local hashes are recorded.
-- The original migration provenance for the five supplemented runtime tables remains unavailable or unsafe to copy. Their current deployed structure is now reproducible from the no-data catalog snapshot.
+- The original seed-bearing migration remains unsafe to copy. Its required schema is reproducible through the versioned, seed-free runtime migration, while the no-data catalog snapshot remains the independent provenance record.
 - At capture time, production had `pepper-family-api` version 6 and the additional active `pepper-tell-v2` version 1. Both are included even though the earlier audit inventory predated them.
 
 ## Scope guard

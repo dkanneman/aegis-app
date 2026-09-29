@@ -3,25 +3,34 @@
 import type { CSSProperties, FormEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlarmClock,
   Armchair,
+  ArrowDown,
   ArrowLeft,
   ArrowUp,
   Cable,
   Camera,
+  CalendarClock,
   CalendarDays,
+  CalendarPlus,
   Check,
+  CheckCircle2,
   ChevronRight,
   CircleUserRound,
   CircleX,
-  Copy,
+  Ellipsis,
+  ExternalLink,
+  EyeOff,
   HeartPulse,
   House,
   Info,
+  ListRestart,
   LockKeyhole,
   ListTodo,
   Mail,
   Mic,
   Pencil,
+  Pin,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -32,6 +41,7 @@ import {
   Trash2,
   Undo2,
   Utensils,
+  UserRoundCheck,
   UsersRound,
   UserPlus,
   X,
@@ -73,6 +83,8 @@ type FamilyTask = {
   status: "open" | "in_progress" | "on_hold" | "completed" | "canceled";
   due_at?: string | null;
   source?: string | null;
+  source_url?: string | null;
+  source_capture_id?: string | null;
   area?: string | null;
   project?: string | null;
   priority?: string | null;
@@ -82,6 +94,20 @@ type FamilyTask = {
   next_action?: string | null;
   notes?: string | null;
   waiting_on?: string | null;
+  waiting_follow_up_at?: string | null;
+  blocked?: boolean | null;
+  snoozed_until?: string | null;
+  dismissed_for_date?: string | null;
+  manually_pinned?: boolean | null;
+  daily_plan_state?: string | null;
+  importance?: "critical" | "high" | "normal" | "low" | "someday" | null;
+  urgency?: "today" | "this_week" | "upcoming" | "flexible" | null;
+  deadline_type?: "hard" | "soft" | "none" | null;
+  due_date_confidence?: number | null;
+  priority_score?: number | null;
+  priority_reason?: string | null;
+  estimated_minutes?: number | null;
+  priority_classification_confidence?: number | null;
   completed_at?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
@@ -103,10 +129,22 @@ type FamilyEvent = {
   trusted_driver_id?: string | null;
   transport_status?: string | null;
   source?: string | null;
+  source_url?: string | null;
+  source_capture_id?: string | null;
   external_url?: string | null;
   external_organizer_email?: string | null;
   external_organizer_name?: string | null;
   notes?: string | null;
+  appointment_type?: string | null;
+  clinician_name?: string | null;
+  facility_name?: string | null;
+  preparation_instructions?: string | null;
+  source_timezone?: string | null;
+  sync_status?: string | null;
+  last_sync_error?: string | null;
+  sync_retry_at?: string | null;
+  sync_attempt_count?: number | null;
+  revision: number;
   updated_at?: string | null;
   deleted_at?: string | null;
 };
@@ -139,6 +177,7 @@ type SelectedItem =
 
 type ItemOperation =
   | "assign"
+  | "accept"
   | "edit"
   | "complete"
   | "cancel"
@@ -159,6 +198,9 @@ type ItemUpdate = {
   starts_local?: string;
   ends_local?: string;
   location?: string;
+  clinician_name?: string;
+  facility_name?: string;
+  preparation_instructions?: string;
 };
 
 type ItemUpdateResult =
@@ -174,6 +216,12 @@ type PreparationItem = {
 };
 
 type Capture = {
+  proposal_decision?: "pending" | "approved" | "declined" | null;
+  proposed_by?: string;
+  can_review?: boolean;
+  proposed_changes?: Array<{operation:string; title?:string; starts_at?:string; ends_at?:string; location?:string; record_id?:string; status?:string}>;
+  unresolved_details?: string[];
+  delivery_complete?: boolean | null;
   id?: string | number;
   original_text?: string | null;
   status?: string | null;
@@ -378,9 +426,14 @@ type SpeechRecognitionEventLike = {
 
 type SpeechRecognitionLike = {
   lang: string;
+  interimResults: boolean;
+  continuous: boolean;
   onresult: ((event: SpeechRecognitionEventLike) => void) | null;
   onerror: (() => void) | null;
+  onend: (() => void) | null;
   start: () => void;
+  stop: () => void;
+  abort: () => void;
 };
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
@@ -462,7 +515,19 @@ type PepperState = {
       connected?: boolean;
       status?: string;
       last_synced_at?: string | null;
+      last_successful_scan_at?: string | null;
+      last_attempted_scan_at?: string | null;
       last_error?: string | null;
+      gmail_history_id?: string | null;
+      gmail_watch_expiration?: string | null;
+      messages_processed_count?: number;
+      records_created_count?: number;
+      needs_review_count?: number;
+      last_scan_message_count?: number;
+      last_scan_relevant_count?: number;
+      last_scan_ignored_count?: number;
+      last_scan_records_created?: number;
+      last_scan_needs_review?: number;
       metadata?: { email?: string };
     };
     apple_health?: {
@@ -543,24 +608,11 @@ type MemberSetupDraft = {
   goals: string;
 };
 
-type HealthSetup = {
-  pairing_token: string;
-  publishable_key: string;
-  ingest_url: string;
-  requires: string;
-};
-
-type NativeHealthResult = {
-  ok: boolean;
-  step_count?: number;
-  active_minutes?: number;
-  error?: string;
-};
-
-type NativeHealthMessageHandler = {
+type NativeCompanionMessageHandler = {
   postMessage: (payload: {
-    ingest_url: string;
-    pairing_token: string;
+    action: "open_health_bridge";
+    member_id: string;
+    member_name: string;
   }) => void;
 };
 
@@ -580,7 +632,7 @@ type PepperNativeWindow = Window & {
   __pepperNativeSession?: string;
   webkit?: {
     messageHandlers?: {
-      pepperHealth?: NativeHealthMessageHandler;
+      pepperCompanion?: NativeCompanionMessageHandler;
       pepperBiometrics?: NativeBiometricMessageHandler;
     };
   };
@@ -594,11 +646,12 @@ type PepperAnswer = {
 
 type PepperExchange = {
   prompt: string;
-  mode: "answer" | "action" | "clarification";
+  mode: "answer" | "action" | "clarification" | "review";
   reply: string;
   answer?: PepperAnswer;
   captureId?: string;
   clarification?: { question: string; placeholder?: string };
+  deliveryPending?: boolean;
   undoable?: boolean;
   viewItem?: SelectedItem;
   undo?:
@@ -623,6 +676,27 @@ type DayPlanItem = {
   ends_at?: string | null;
   source: "tasks" | "calendar" | "meals" | "email";
   external_url?: string | null;
+  priority_score?: number;
+  plan_tier: "fixed" | "must_protect" | "optional";
+  project?: string | null;
+  estimated_minutes?: number | null;
+};
+
+type DailyPlanTaskAction =
+  | "pin"
+  | "not_today"
+  | "snooze_tomorrow"
+  | "snooze_next_week"
+  | "choose_date"
+  | "return_to_list"
+  | "lower_priority"
+  | "waiting_on"
+  | "complete";
+
+type DailyPlanTaskActionOptions = {
+  selectedDate?: string;
+  waitingOn?: string;
+  followUpDate?: string;
 };
 
 type DailyPlan = {
@@ -641,16 +715,20 @@ type DailyPlan = {
     emails: number;
   };
   email: {
-    status: "connected" | "not_connected" | "unavailable";
+    status: "connected_and_current" | "syncing" | "stale" | "reconnect_required" | "error" | "not_connected";
     scanned: number;
+    relevant?: number;
+    records_created?: number;
+    needs_review?: number;
+    last_successful_scan_at?: string | null;
     error?: string | null;
   };
 };
 
-function nativeHealthMessageHandler() {
+function nativeHealthBridgeMessageHandler() {
   if (typeof window === "undefined") return null;
   const nativeWindow = window as PepperNativeWindow;
-  return nativeWindow.webkit?.messageHandlers?.pepperHealth || null;
+  return nativeWindow.webkit?.messageHandlers?.pepperCompanion || null;
 }
 
 function nativeBiometricMessageHandler() {
@@ -669,37 +747,6 @@ function offerNativeFaceID(sessionToken: string, memberName: string) {
 
 function removeNativeFaceID() {
   nativeBiometricMessageHandler()?.postMessage({ action: "remove" });
-}
-
-function syncNativeHealth(setup: HealthSetup) {
-  return new Promise<NativeHealthResult>((resolve, reject) => {
-    const handler = nativeHealthMessageHandler();
-    if (!handler) {
-      reject(new Error("Native Apple Health access is not available in this build."));
-      return;
-    }
-
-    const timeout = window.setTimeout(() => {
-      window.removeEventListener("pepper:health-result", onResult);
-      reject(new Error("Apple Health did not finish. Please try again."));
-    }, 45_000);
-    function onResult(event: Event) {
-      window.clearTimeout(timeout);
-      window.removeEventListener("pepper:health-result", onResult);
-      const result = (event as CustomEvent<NativeHealthResult>).detail;
-      if (!result?.ok) {
-        reject(new Error(result?.error || "Apple Health could not connect."));
-        return;
-      }
-      resolve(result);
-    }
-
-    window.addEventListener("pepper:health-result", onResult, { once: true });
-    handler.postMessage({
-      ingest_url: setup.ingest_url,
-      pairing_token: setup.pairing_token,
-    });
-  });
 }
 
 type PinSetupState = {
@@ -1335,13 +1382,25 @@ export function PepperClient() {
   const lastDayPlanRefreshAt = useRef(0);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [tell, setTell] = useState("");
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const tellRequest = useRef<{ text: string; captureId?: string; key: string } | null>(null);
+  const tellInFlight = useRef(false);
+  useEffect(() => () => {
+    const recognition = recognitionRef.current;
+    if (recognition) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      recognition.abort();
+    }
+  }, []);
   const [reflection, setReflection] = useState("");
   const [reflectionSaved, setReflectionSaved] = useState(false);
   const [reflectionSavedText, setReflectionSavedText] = useState("");
   const [ritualOpen, setRitualOpen] = useState<Ritual | null>(null);
   const [ritualBusy, setRitualBusy] = useState(false);
   const [calendarConfirmation, setCalendarConfirmation] = useState("");
-  const [healthSetup, setHealthSetup] = useState<HealthSetup | null>(null);
   const [frontSeatOpen, setFrontSeatOpen] = useState(false);
   const isPepperIOS =
     typeof navigator !== "undefined" && navigator.userAgent.includes("Pepper-iOS");
@@ -1539,7 +1598,12 @@ export function PepperClient() {
         item_type: item.type,
         id: item.item.id,
         operation,
-        expected_updated_at: item.item.updated_at || null,
+        expected_updated_at:
+          item.type === "task" ? item.item.updated_at || null : undefined,
+        expected_revision:
+          item.type === "event" ? item.item.revision : undefined,
+        mutation_id:
+          item.type === "event" ? crypto.randomUUID() : undefined,
         ...changes,
       });
       const expectedStatus =
@@ -1583,7 +1647,15 @@ export function PepperClient() {
       setMemberState((current) =>
         current ? patchMemberStateItem(current, saved) : current,
       );
-      const receipt = operation === "assign"
+      const calendarSyncStatus = String(result.calendar_sync?.status || "");
+      const calendarNeedsAttention = ["retry_required", "reconnect_required"].includes(
+        calendarSyncStatus,
+      );
+      const receipt = calendarSyncStatus === "reconnect_required"
+        ? "Saved in Pepper. Reconnect Google Calendar to finish updating the appointment."
+        : calendarSyncStatus === "retry_required"
+          ? "Saved in Pepper. Google Calendar needs a retry; Pepper kept the appointment linked."
+          : operation === "assign"
         ? "Assigned. The family plan is current."
         : operation === "edit"
           ? "Saved everywhere this item appears."
@@ -1601,7 +1673,7 @@ export function PepperClient() {
           undoable: true,
           undo: { type: "item", before: item, after: saved, operation },
         });
-        setMessage("");
+        setMessage(calendarNeedsAttention ? receipt : "");
       }
       setSelectedItem(null);
       setDayPlan((current) => patchDailyPlanItem(current, saved, operation));
@@ -1691,6 +1763,26 @@ export function PepperClient() {
       });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function undoAutomaticCapture(captureId: string) {
+    const pendingKey = `capture:undo:${captureId}`;
+    setActionPending(pendingKey, true);
+    try {
+      const result = await call({ action: "capture_undo", capture_id: captureId });
+      setSelectedItem(null);
+      setPepperExchange({
+        prompt: "Automatic Gmail change",
+        mode: "action",
+        reply: result.reply || "Undone. Pepper restored the previous plan.",
+        undoable: false,
+      });
+      await Promise.all([load(token), refreshDayPlanAfterChange(token)]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Pepper could not undo that change.");
+    } finally {
+      setActionPending(pendingKey, false);
     }
   }
 
@@ -1967,7 +2059,7 @@ export function PepperClient() {
 
   async function changeGrocery(
     id: string,
-    operation: "assign" | "attach" | "complete" | "reopen",
+    operation: "assign" | "attach" | "edit" | "complete" | "reopen",
     value?: string,
   ) {
     const pendingKey = `grocery:${id}`;
@@ -2000,6 +2092,7 @@ export function PepperClient() {
         action: "grocery_update",
         id,
         operation,
+        ...(operation === "edit" ? { item: value } : {}),
         ...(operation === "assign" ? { owner_member_id: value || null } : {}),
         ...(operation === "attach" ? { meal_plan_id: value || null } : {}),
       });
@@ -2017,6 +2110,7 @@ export function PepperClient() {
           : current,
       );
       setMessage("Grocery plan updated for everyone.");
+      return true;
     } catch (error) {
       if (previous) {
         setState((current) =>
@@ -2033,6 +2127,7 @@ export function PepperClient() {
           ? error.message
           : "Pepper could not update that grocery.",
       );
+      return false;
     } finally {
       setActionPending(pendingKey, false);
     }
@@ -2456,6 +2551,18 @@ export function PepperClient() {
   }, [token]);
 
   useEffect(() => {
+    if (!token) return;
+    const onHealthBridgeSync = () => {
+      setMessage("Apple Health is current in Pepper.");
+      void Promise.all([load(token), loadSection("connections", true, token)]);
+    };
+    window.addEventListener("pepper:health-bridge-synced", onHealthBridgeSync);
+    return () =>
+      window.removeEventListener("pepper:health-bridge-synced", onHealthBridgeSync);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  useEffect(() => {
     const section = sectionForView(view);
     if (token && section) void loadSection(section);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2537,11 +2644,14 @@ export function PepperClient() {
   }, [state]);
   const reviewCaptures = [...(state?.captures || [])]
     .filter((capture) =>
-      ["captured", "needs_review", "partially_applied"].includes(
+      Boolean(capture.proposal_decision) || ["captured", "needs_review", "partially_applied"].includes(
         capture.status || "",
       ),
     )
     .sort((a, b) => {
+      const pendingDifference = Number(b.proposal_decision === "pending") -
+        Number(a.proposal_decision === "pending");
+      if (pendingDifference) return pendingDifference;
       const aTime = new Date(
         a.created_at || a.captured_at || a.updated_at || 0,
       ).getTime();
@@ -2657,6 +2767,9 @@ export function PepperClient() {
     setLoadingSections(new Set());
     setPendingActions(new Set());
     sectionRequests.current = {};
+    setPepperExchange(null);
+    setTell("");
+    setMessage("");
     setPin("");
     setPinSetup(null);
     setNewPin("");
@@ -2761,9 +2874,82 @@ export function PepperClient() {
     }
   }
 
+  async function updateDayPlanTask(
+    item: DayPlanItem,
+    operation: DailyPlanTaskAction,
+    options: DailyPlanTaskActionOptions = {},
+  ) {
+    if (item.kind !== "task" && item.kind !== "chore") return;
+    const pendingKey = `day-plan:${item.record_id}`;
+    setActionPending(pendingKey, true);
+    if (operation !== "pin") {
+      setDayPlan((current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.filter(
+                (candidate) => candidate.record_id !== item.record_id,
+              ),
+            }
+          : current,
+      );
+    }
+    try {
+      const result = await call({
+        action: "day_plan_task_action",
+        task_id: item.record_id,
+        operation,
+        selected_date: options.selectedDate || null,
+        waiting_on: options.waitingOn || null,
+        follow_up_date: options.followUpDate || null,
+      });
+      if (
+        !result.item ||
+        result.item.id !== item.record_id ||
+        result.replan_required !== true
+      ) {
+        throw new Error("Pepper could not verify that the task was updated.");
+      }
+      const saved = { type: "task", item: result.item } as SelectedItem;
+      setState((current) =>
+        current ? patchPepperStateItem(current, saved) : current,
+      );
+      setMemberState((current) =>
+        current ? patchMemberStateItem(current, saved) : current,
+      );
+      setSelectedItem((current) =>
+        current?.type === "task" && current.item.id === result.item.id
+          ? saved
+          : current,
+      );
+      await refreshDayPlanFromServer(token);
+      const receipts: Record<DailyPlanTaskAction, string> = {
+        pin: "Pinned for today.",
+        not_today: "Removed from today's plan.",
+        snooze_tomorrow: "Snoozed until tomorrow.",
+        snooze_next_week: "Snoozed until next week.",
+        choose_date: "Snoozed until the chosen date.",
+        return_to_list: "Returned to the task list without changing its deadline.",
+        lower_priority: "Priority lowered.",
+        waiting_on: "Marked as waiting.",
+        complete: "Task completed.",
+      };
+      setMessage(receipts[operation]);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Pepper could not update that daily task.",
+      );
+      await refreshDayPlanAfterChange(token);
+    } finally {
+      setActionPending(pendingKey, false);
+    }
+  }
+
   async function sendTell(text = tell, source: "text" | "voice" = "text") {
     const clean = text.trim();
-    if (!clean) return;
+    if (!clean || tellInFlight.current || listening) return;
     const clarificationContext =
       pepperExchange?.mode === "clarification" && pepperExchange.captureId
         ? pepperExchange
@@ -2775,6 +2961,12 @@ export function PepperClient() {
       await generateDayPlan(true, clean);
       return;
     }
+    tellInFlight.current = true;
+    const captureIdForRequest = clarificationContext?.captureId;
+    if (tellRequest.current?.text !== clean || tellRequest.current?.captureId !== captureIdForRequest) {
+      tellRequest.current = { text: clean, captureId: captureIdForRequest, key: crypto.randomUUID() };
+    }
+    const requestKey = tellRequest.current.key;
     setBusy(true);
     setMessage(clarificationContext ? "Pepper is finishing that update…" : "Pepper is checking One Brain…");
     try {
@@ -2784,18 +2976,20 @@ export function PepperClient() {
               action: "capture_review_retry",
               capture_id: clarificationContext.captureId,
               clarification_text: clean,
-              idempotency_key: crypto.randomUUID(),
+              idempotency_key: requestKey,
             }
           : {
               action: "tell",
               text: clean,
               source,
-              idempotency_key: crypto.randomUUID(),
+              idempotency_key: requestKey,
             },
       );
       setTell("");
       const mode = result.mode === "answer"
         ? "answer"
+        : result.mode === "review"
+          ? "review"
         : result.mode === "clarification" || ["needs_review", "partially_applied"].includes(result.status)
           ? "clarification"
           : "action";
@@ -2813,13 +3007,18 @@ export function PepperClient() {
           : mode === "clarification"
             ? "Pepper needs one detail before changing the plan."
             : "Updated.");
+      const deliveryPending = result.delivery_complete === false || result.shared_calendar_complete === false;
+      const deliveredReply = deliveryPending
+        ? String(result.delivery_notice || result.shared_calendar_notice || "Saved in Pepper. External delivery still needs attention.")
+        : baseReply;
       setPepperExchange({
         prompt: clarificationContext?.prompt || clean,
         mode,
-        reply: refreshedPlan ? `${baseReply} Today’s plan is reorganized.` : baseReply,
+        reply: refreshedPlan ? `${deliveredReply} Today’s plan is reorganized.` : deliveredReply,
         answer: result.answer,
         captureId,
         clarification: result.clarification,
+        deliveryPending,
         undoable: Boolean(result.undoable),
         undo: result.undoable && captureId
           ? { type: "capture", captureId }
@@ -2829,8 +3028,22 @@ export function PepperClient() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Pepper hit an error.");
     } finally {
+      tellInFlight.current = false;
       setBusy(false);
     }
+  }
+
+  async function decideProposal(capture: Capture, decision: "approved" | "declined") {
+    const key = `capture:decision:${capture.id}`;
+    setActionPending(key, true);
+    try {
+      const result = await call({action:"capture_review_decide",capture_id:String(capture.id),decision});
+      setMessage(result.reply);
+      await load(token);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Pepper could not save the decision.");
+      await load(token);
+    } finally { setActionPending(key, false); }
   }
 
   async function retryCapture(capture: Capture) {
@@ -2845,6 +3058,8 @@ export function PepperClient() {
       });
       const mode = result.mode === "answer"
         ? "answer"
+        : result.mode === "review"
+          ? "review"
         : result.mode === "clarification" || ["needs_review", "partially_applied"].includes(result.status)
           ? "clarification"
           : "action";
@@ -2856,13 +3071,18 @@ export function PepperClient() {
           ]))[1]
         : null;
       const baseReply = result.reply || (mode === "clarification" ? "Pepper needs one detail." : "Pepper reprocessed that update.");
+      const deliveryPending = result.delivery_complete === false || result.shared_calendar_complete === false;
+      const deliveredReply = deliveryPending
+        ? String(result.delivery_notice || "Saved in Pepper. External delivery still needs attention.")
+        : baseReply;
       setPepperExchange({
         prompt: captureText(capture),
         mode,
-        reply: refreshedPlan ? `${baseReply} Today’s plan is reorganized.` : baseReply,
+        reply: refreshedPlan ? `${deliveredReply} Today’s plan is reorganized.` : deliveredReply,
         answer: result.answer,
         captureId,
         clarification: result.clarification,
+        deliveryPending,
         undoable: Boolean(result.undoable),
         undo: result.undoable ? { type: "capture", captureId } : undefined,
       });
@@ -2971,37 +3191,26 @@ export function PepperClient() {
     }
   }
 
-  async function pairHealth() {
-    const pendingKey = "connection:health";
-    setActionPending(pendingKey, true);
-    try {
-      const nativeHealth = nativeHealthMessageHandler();
-      const result = await call({
-        action: "health_pair",
-        client: nativeHealth ? "native_ios" : "shortcut",
-      });
-      if (nativeHealth) {
-        setHealthSetup(null);
-        setMessage("Choose the Apple Health data Pepper may read…");
-        const health = await syncNativeHealth(result);
-        setMessage(
-          `Apple Health connected · ${(health.step_count || 0).toLocaleString()} steps today.`,
-        );
-      } else {
-        setHealthSetup(result);
-        setMessage("The Apple Health Shortcut pairing is ready for this iPhone.");
-      }
-      await Promise.all([load(), loadSection("connections", true)]);
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Apple Health setup failed.",
-      );
-    } finally {
-      setActionPending(pendingKey, false);
+  function openHealthBridge() {
+    const bridge = nativeHealthBridgeMessageHandler();
+    const memberID = state?.member.id;
+    if (!bridge || !memberID) {
+      setMessage("Apple Health connects only in Pepper's native iPhone app.");
+      return;
     }
+    bridge.postMessage({
+      action: "open_health_bridge",
+      member_id: memberID,
+      member_name: displayName(state.member),
+    });
+    setMessage("Opening the private Health Bridge on this iPhone…");
   }
 
   function listen() {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
     const w = window as Window & {
       SpeechRecognition?: SpeechRecognitionConstructor;
       webkitSpeechRecognition?: SpeechRecognitionConstructor;
@@ -3012,15 +3221,32 @@ export function PepperClient() {
       return;
     }
     const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
     recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
     recognition.onresult = (event) => {
       const transcript = event.results?.[0]?.[0]?.transcript || "";
       setTell(transcript);
-      void sendTell(transcript, "voice");
+      setMessage(transcript ? "Review your message, then send it." : "No words were captured. Nothing was changed.");
     };
-    recognition.onerror = () =>
-      setMessage("Voice did not start. Use the iPhone keyboard microphone.");
-    recognition.start();
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setListening(false);
+    };
+    recognition.onerror = () => {
+      recognitionRef.current = null;
+      setListening(false);
+      setMessage("Voice could not finish. Nothing was sent; you can type your update.");
+    };
+    try {
+      recognition.start();
+      setListening(true);
+    } catch {
+      recognitionRef.current = null;
+      setListening(false);
+      setMessage("Voice did not start. You can type your update.");
+    }
   }
 
   if (!token || !state) {
@@ -3145,6 +3371,7 @@ export function PepperClient() {
   const calendar = state.calendarStatus;
   const calendarConnected = Boolean(calendar?.connected);
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
+  const dinnerTonight = (state.meals || []).find((meal) => meal.meal_date === localDate());
   const primaryNavigation = [
     ["today", "Today", House],
     ["tasks", "Tasks", ListTodo],
@@ -3301,9 +3528,23 @@ export function PepperClient() {
               emailConnected={Boolean(state.integrations?.gmail?.connected)}
               onGenerate={() => void generateDayPlan()}
               onOpen={openDayPlanItem}
+              onTaskAction={updateDayPlanTask}
+              taskActionPending={(item) =>
+                isActionPending(`day-plan:${item.record_id}`)
+              }
             />
 
             <section className={styles.section}>
+              <div className={styles.sectionHeading}>
+                <div className={styles.sectionLabel}>Tonight&apos;s dinner</div>
+                <button type="button" className={styles.textButton} onClick={() => setView("meals")}>Weekly meals</button>
+              </div>
+              <h3>{dinnerTonight?.meal_name || "Not planned yet"}</h3>
+              {dinnerTonight?.eat_at ? <p>{time(dinnerTonight.eat_at)}</p> : null}
+              {dinnerTonight?.owner_member_id ? <p>{memberName(state, dinnerTonight.owner_member_id)} is preparing dinner.</p> : null}
+            </section>
+
+            {actorIsAdult ? <section className={styles.section}>
               <div className={styles.sectionLabel}>Daily Rhythm</div>
               {rhythmPhase === "morning" ? (
                 <button
@@ -3445,6 +3686,8 @@ export function PepperClient() {
               ) : null}
             </section>
 
+            : null}
+
             {!dayPlan ? (
               <>
                 <section className={styles.section}>
@@ -3484,17 +3727,17 @@ export function PepperClient() {
               </>
             ) : null}
 
-            {state.frontSeat ? (
+            {actorIsAdult && state.frontSeat ? (
               <FrontSeatCard
                 frontSeat={state.frontSeat}
                 onOpen={() => setFrontSeatOpen(true)}
               />
             ) : null}
 
-            <HealthSummary
+            {actorIsAdult ? <HealthSummary
               health={state.integrations?.apple_health}
               onOpen={() => setView("connections")}
-            />
+            /> : null}
 
             {!dayPlan ? <section className={styles.section}>
               <div className={styles.sectionHeading}>
@@ -3552,10 +3795,23 @@ export function PepperClient() {
                             {captureTime(capture) ? (
                               <time>{captureTime(capture)}</time>
                             ) : null}
-                            {needsReview ? <span>Needs review</span> : null}
+                            {capture.proposal_decision ? <span>{capture.proposal_decision === "pending" ? "Awaiting review" : capture.proposal_decision === "declined" ? "Declined" : capture.delivery_complete ? "Approved · Synced" : "Approved · Delivery pending"}</span> : needsReview ? <span>Needs review</span> : null}
                           </div>
                           {captureText(capture)}
-                          {needsReview ? (
+                          {capture.proposal_decision ? <>
+                            <p>Shared household proposal from {capture.proposed_by}</p>
+                            {(capture.proposed_changes || []).map((change, i) => <p key={i}>
+                              {change.operation === "event.create" ? "Add event" : "Update event"}: {change.title || change.record_id}
+                              {change.starts_at ? ` · ${new Date(change.starts_at).toLocaleString("en-US", {timeZone:"America/Los_Angeles"})} Pacific` : ""}
+                              {change.location ? ` · ${change.location}` : ""}{change.status === "canceled" ? " · Cancel event" : ""}
+                            </p>)}
+                            {(capture.unresolved_details || []).map((detail,i) => <p key={i}>{detail}</p>)}
+                            {capture.can_review ? <div className={styles.inboxCaptureActions}>
+                              <button type="button" className={styles.inboxRetry} disabled={isActionPending(`capture:decision:${capture.id}`) || Boolean(capture.unresolved_details?.length)} onClick={() => void decideProposal(capture,"approved")}><Check size={13} aria-hidden="true" />Approve</button>
+                              <button type="button" className={styles.inboxRetry} disabled={isActionPending(`capture:decision:${capture.id}`)} onClick={() => void decideProposal(capture,"declined")}><X size={13} aria-hidden="true" />Decline</button>
+                            </div> : null}
+                          </> : null}
+                          {needsReview && !capture.proposal_decision ? (
                             <div className={styles.inboxCaptureActions}>
                               <button
                                 type="button"
@@ -3683,8 +3939,7 @@ export function PepperClient() {
               calendar={calendar}
               gmail={state.integrations?.gmail}
               health={state.integrations?.apple_health}
-              healthSetup={healthSetup}
-              nativeHealthAvailable={Boolean(nativeHealthMessageHandler())}
+              nativeHealthAvailable={Boolean(nativeHealthBridgeMessageHandler())}
               member={state.member}
               members={state.members}
               isPending={isActionPending}
@@ -3692,7 +3947,7 @@ export function PepperClient() {
                 void (calendarConnected ? syncCalendar() : connectCalendar())
               }
               onEmail={() => void connectEmail()}
-              onHealth={() => void pairHealth()}
+              onHealth={openHealthBridge}
               onFamily={() => setView("family")}
               onDeleteAccount={deleteAccount}
             />
@@ -3711,6 +3966,7 @@ export function PepperClient() {
           onUpdate={(operation, changes) =>
             updateItem(selectedItem, operation, changes)
           }
+          onUndoCapture={undoAutomaticCapture}
         />
       ) : null}
 
@@ -3761,14 +4017,22 @@ export function PepperClient() {
                 </span>
                 <div>
                   <small>
-                    {pepperExchange.mode === "answer"
+                    {pepperExchange.deliveryPending
+                      ? "Delivery pending"
+                      : pepperExchange.mode === "review"
+                        ? "Awaiting review"
+                      : pepperExchange.mode === "answer"
                       ? "Pepper found"
                       : pepperExchange.mode === "clarification"
                         ? "One detail needed"
                         : "Pepper updated"}
                   </small>
                   <strong>
-                    {pepperExchange.answer?.title ||
+                    {pepperExchange.deliveryPending
+                      ? "Saved in Pepper"
+                      : pepperExchange.mode === "review"
+                        ? "Proposal saved"
+                      : pepperExchange.answer?.title ||
                       (pepperExchange.mode === "answer"
                         ? "From your family plan"
                         : pepperExchange.mode === "clarification"
@@ -3850,7 +4114,10 @@ export function PepperClient() {
               type="button"
               className={styles.mic}
               onClick={listen}
-              aria-label="Talk to Pepper"
+              disabled={busy}
+              aria-label={listening ? "Stop listening" : "Talk to Pepper"}
+              aria-pressed={listening}
+              title={listening ? "Stop listening" : "Talk to Pepper"}
             >
               <Mic size={19} strokeWidth={1.8} />
             </button>
@@ -3869,7 +4136,7 @@ export function PepperClient() {
             <button
               type="button"
               className={styles.send}
-              disabled={busy || !tell.trim()}
+              disabled={busy || listening || !tell.trim()}
               onClick={() => void sendTell()}
               aria-label="Send to Pepper"
             >
@@ -3888,12 +4155,20 @@ function DayPlanPanel({
   emailConnected,
   onGenerate,
   onOpen,
+  onTaskAction,
+  taskActionPending,
 }: {
   plan: DailyPlan | null;
   busy: boolean;
   emailConnected: boolean;
   onGenerate: () => void;
   onOpen: (item: DayPlanItem) => void;
+  onTaskAction: (
+    item: DayPlanItem,
+    action: DailyPlanTaskAction,
+    options?: DailyPlanTaskActionOptions,
+  ) => Promise<void>;
+  taskActionPending: (item: DayPlanItem) => boolean;
 }) {
   return (
     <section
@@ -3951,27 +4226,38 @@ function DayPlanPanel({
                         ? Check
                       : ListTodo;
                 return (
-                  <button
-                    type="button"
-                    className={styles.dayPlanRow}
+                  <div
+                    className={styles.dayPlanEntry}
                     data-kind={item.kind}
                     data-urgency={item.urgency}
                     key={item.id}
-                    onClick={() => onOpen(item)}
                   >
-                    <time>{item.scheduled_for ? time(item.scheduled_for) : "Later"}</time>
-                    <span className={styles.dayPlanIcon} aria-hidden="true">
-                      <Icon size={16} strokeWidth={1.8} />
-                    </span>
-                    <span className={styles.dayPlanBody}>
-                      <strong>{item.title}</strong>
-                      <small>
-                        {item.reason}
-                        {item.detail ? ` · ${item.detail}` : ""}
-                      </small>
-                    </span>
-                    <ChevronRight className={styles.rowChevron} size={16} aria-hidden="true" />
-                  </button>
+                    <button
+                      type="button"
+                      className={styles.dayPlanRow}
+                      onClick={() => onOpen(item)}
+                    >
+                      <time>{item.scheduled_for ? time(item.scheduled_for) : "Later"}</time>
+                      <span className={styles.dayPlanIcon} aria-hidden="true">
+                        <Icon size={16} strokeWidth={1.8} />
+                      </span>
+                      <span className={styles.dayPlanBody}>
+                        <strong>{item.title}</strong>
+                        <small>
+                          {item.reason}
+                          {item.detail ? ` · ${item.detail}` : ""}
+                        </small>
+                      </span>
+                      <ChevronRight className={styles.rowChevron} size={16} aria-hidden="true" />
+                    </button>
+                    {item.kind === "task" || item.kind === "chore" ? (
+                      <DayPlanTaskMenu
+                        item={item}
+                        busy={taskActionPending(item)}
+                        onAction={onTaskAction}
+                      />
+                    ) : null}
+                  </div>
                 );
               })
             ) : (
@@ -3988,9 +4274,17 @@ function DayPlanPanel({
             <span>{plan.counts.appointments} appointments</span>
             <span>{plan.counts.meals || 0} meals</span>
             <span>
-              {plan.email.status === "connected"
-                ? `${plan.email.scanned} recent emails checked privately`
-                : "Email was not included"}
+              {plan.email.status === "connected_and_current"
+                ? `${plan.email.scanned} emails processed in the latest background scan`
+                : plan.email.status === "syncing"
+                  ? "Email is syncing in the background"
+                  : plan.email.status === "stale"
+                    ? "Email sync is stale"
+                    : plan.email.status === "reconnect_required"
+                      ? "Email needs to be reconnected"
+                      : plan.email.status === "error"
+                        ? "Email sync needs attention"
+                        : "Email is not connected"}
             </span>
             <time>Updated {time(plan.generated_at)}</time>
           </footer>
@@ -4000,10 +4294,143 @@ function DayPlanPanel({
           <span><ListTodo size={15} aria-hidden="true" /> Tasks and chores</span>
           <span><CalendarDays size={15} aria-hidden="true" /> Events and appointments</span>
           <span><Utensils size={15} aria-hidden="true" /> Today&apos;s meal</span>
-          <span><Mail size={15} aria-hidden="true" /> {emailConnected ? "Private email signals" : "Connect email to include it"}</span>
+          <span><Mail size={15} aria-hidden="true" /> {emailConnected ? "Email is processed in the background" : "Connect email to include it"}</span>
         </div>
       )}
     </section>
+  );
+}
+
+function DayPlanTaskMenu({
+  item,
+  busy,
+  onAction,
+}: {
+  item: DayPlanItem;
+  busy: boolean;
+  onAction: (
+    item: DayPlanItem,
+    action: DailyPlanTaskAction,
+    options?: DailyPlanTaskActionOptions,
+  ) => Promise<void>;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const [mode, setMode] = useState<"menu" | "date" | "waiting">("menu");
+  const [selectedDate, setSelectedDate] = useState(addDateDays(localDate(), 1));
+  const [waitingOn, setWaitingOn] = useState("");
+  const [followUpDate, setFollowUpDate] = useState("");
+  const minimumDate = addDateDays(localDate(), 1);
+
+  async function run(
+    action: DailyPlanTaskAction,
+    options?: DailyPlanTaskActionOptions,
+  ) {
+    await onAction(item, action, options);
+    setMode("menu");
+    if (detailsRef.current) detailsRef.current.open = false;
+  }
+
+  return (
+    <details
+      ref={detailsRef}
+      className={styles.dayPlanTaskActions}
+      onToggle={(event) => {
+        if (!event.currentTarget.open) setMode("menu");
+      }}
+    >
+      <summary aria-label={`Plan actions for ${item.title}`} title="Plan actions">
+        {busy ? (
+          <RefreshCw size={18} aria-hidden="true" />
+        ) : (
+          <Ellipsis size={20} aria-hidden="true" />
+        )}
+      </summary>
+      <div className={styles.dayPlanTaskMenu} aria-busy={busy}>
+        {mode === "date" ? (
+          <div className={styles.dayPlanActionForm}>
+            <label htmlFor={`day-plan-date-${item.record_id}`}>Snooze until</label>
+            <input
+              id={`day-plan-date-${item.record_id}`}
+              type="date"
+              min={minimumDate}
+              value={selectedDate}
+              onChange={(event) => setSelectedDate(event.target.value)}
+            />
+            <div>
+              <button type="button" onClick={() => setMode("menu")}>Back</button>
+              <button
+                type="button"
+                disabled={busy || !selectedDate}
+                onClick={() => void run("choose_date", { selectedDate })}
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        ) : mode === "waiting" ? (
+          <div className={styles.dayPlanActionForm}>
+            <label htmlFor={`day-plan-waiting-${item.record_id}`}>Waiting on</label>
+            <input
+              id={`day-plan-waiting-${item.record_id}`}
+              type="text"
+              value={waitingOn}
+              placeholder="Person or organization"
+              onChange={(event) => setWaitingOn(event.target.value)}
+            />
+            <label htmlFor={`day-plan-follow-up-${item.record_id}`}>Follow up on (optional)</label>
+            <input
+              id={`day-plan-follow-up-${item.record_id}`}
+              type="date"
+              min={minimumDate}
+              value={followUpDate}
+              onChange={(event) => setFollowUpDate(event.target.value)}
+            />
+            <div>
+              <button type="button" onClick={() => setMode("menu")}>Back</button>
+              <button
+                type="button"
+                disabled={busy || !waitingOn.trim()}
+                onClick={() =>
+                  void run("waiting_on", { waitingOn, followUpDate })
+                }
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <button type="button" disabled={busy} onClick={() => void run("pin")}>
+              <Pin size={16} aria-hidden="true" /> Do today / Pin
+            </button>
+            <button type="button" disabled={busy} onClick={() => void run("not_today")}>
+              <EyeOff size={16} aria-hidden="true" /> Not today
+            </button>
+            <button type="button" disabled={busy} onClick={() => void run("snooze_tomorrow")}>
+              <AlarmClock size={16} aria-hidden="true" /> Snooze until tomorrow
+            </button>
+            <button type="button" disabled={busy} onClick={() => void run("snooze_next_week")}>
+              <CalendarClock size={16} aria-hidden="true" /> Snooze until next week
+            </button>
+            <button type="button" disabled={busy} onClick={() => setMode("date")}>
+              <CalendarPlus size={16} aria-hidden="true" /> Choose date
+            </button>
+            <button type="button" disabled={busy} onClick={() => void run("return_to_list")}>
+              <ListRestart size={16} aria-hidden="true" /> Return to task list
+            </button>
+            <button type="button" disabled={busy} onClick={() => void run("lower_priority")}>
+              <ArrowDown size={16} aria-hidden="true" /> Lower priority
+            </button>
+            <button type="button" disabled={busy} onClick={() => setMode("waiting")}>
+              <UserRoundCheck size={16} aria-hidden="true" /> Waiting on someone
+            </button>
+            <button type="button" disabled={busy} onClick={() => void run("complete")}>
+              <CheckCircle2 size={16} aria-hidden="true" /> Complete
+            </button>
+          </>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -4516,9 +4943,9 @@ function MorningBriefPanel({
                   : ""}
               </span>
               <span>
-                Email {state.integrations?.gmail?.connected ? "connected" : "not connected"}
-                {state.integrations?.gmail?.last_synced_at
-                  ? ` · ${connectionActivity(state.integrations.gmail.last_synced_at)}`
+                Email {(state.integrations?.gmail?.status || "not connected").replaceAll("_", " ")}
+                {state.integrations?.gmail?.last_successful_scan_at
+                  ? ` · ${connectionActivity(state.integrations.gmail.last_successful_scan_at)}`
                   : ""}
               </span>
               <span>Built for {displayName(state.member)} from permitted One Brain state.</span>
@@ -5015,7 +5442,6 @@ function ConnectionsPage({
   calendar,
   gmail,
   health,
-  healthSetup,
   nativeHealthAvailable,
   member,
   members,
@@ -5029,7 +5455,6 @@ function ConnectionsPage({
   calendar?: CalendarStatus;
   gmail?: NonNullable<PepperState["integrations"]>["gmail"];
   health?: NonNullable<PepperState["integrations"]>["apple_health"];
-  healthSetup: HealthSetup | null;
   nativeHealthAvailable: boolean;
   member: PepperState["member"];
   members: PepperState["members"];
@@ -5045,6 +5470,24 @@ function ConnectionsPage({
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const calendarConnection = calendar?.connection;
   const canConnectEmail = ["adult_admin", "adult", "teen"].includes(member.role);
+  const gmailState = gmail?.status || "not_connected";
+  const gmailHealthy = gmailState === "connected_and_current";
+  const gmailNeedsAttention = ["stale", "reconnect_required", "error"].includes(gmailState);
+  const gmailStatusLabel = gmailHealthy
+    ? "Connected and current"
+    : gmailState === "syncing"
+      ? "Syncing"
+      : gmailState === "stale"
+        ? "Stale"
+        : gmailState === "reconnect_required"
+          ? "Reconnect required"
+          : gmailState === "error"
+            ? "Sync error"
+            : gmail?.configured && canConnectEmail
+              ? "Ready to connect"
+              : canConnectEmail
+                ? "Setup pending"
+                : "Not available";
   const calendarOwner = displayName(
     members.find(
       (candidate) => candidate.id === calendarConnection?.connected_by_member_id,
@@ -5114,43 +5557,45 @@ function ConnectionsPage({
       mark: "M",
       title: "Google email",
       identifier: gmail?.metadata?.email || "Gmail or Google Workspace",
-      summary: gmail?.connected
-        ? "Account linked. Pepper checks recent priority messages when this member’s day is organized or refreshed."
+      summary: gmailHealthy
+        ? `Pepper processes Gmail in the background and stores verified results in One Brain. Latest scan: ${gmail?.last_scan_relevant_count || 0} relevant, ${gmail?.last_scan_records_created || 0} created, ${gmail?.last_scan_needs_review || 0} for review.`
+        : gmailState === "syncing"
+          ? "Pepper is establishing the Gmail watch and processing mailbox history."
+          : gmailNeedsAttention
+            ? gmail?.last_error || "Gmail has stopped synchronizing and needs attention."
         : canConnectEmail
           ? "Connect the personal, school, or work Google account you use most."
           : "Email connections are available from adult and teen profiles.",
-      state: gmail?.connected
+      state: gmailHealthy
         ? "connected"
+        : gmailNeedsAttention
+          ? "attention"
         : gmail?.configured && canConnectEmail
           ? "available"
           : "setup",
-      statusLabel: gmail?.connected
-        ? "Connected"
-        : gmail?.configured && canConnectEmail
-          ? "Ready to connect"
-          : canConnectEmail
-            ? "Setup pending"
-            : "Not available",
+      statusLabel: gmailStatusLabel,
       owner: displayName(member),
       privacy: "Private source",
       coverage: displayName(member),
-      lastActivity: gmail?.connected ? connectionActivity(gmail.last_synced_at) : "No verified activity yet",
+      lastActivity: connectionActivity(gmail?.last_successful_scan_at),
       reads: [
         "Google account identity for the connected member",
-        "Subject, sender, and short snippet from recent unread or important messages when Plan my day is requested",
+        "Full content only for messages that may contain appointments, deadlines, requests, bills, or logistics",
+        "Supported calendar and text-based PDF attachment evidence",
       ],
       automatic: [
-        "Rank likely email commitments alongside this member's tasks and appointments",
-        "Do not create a task or mark anything handled from email alone",
+        "Preserve an immutable private source before processing",
+        "Create verified canonical appointments and tasks; send ambiguity to Needs Review",
+        "Feed the daily plan from canonical records without waiting for Plan my day",
       ],
       approval: [
         "Sending email or sharing private content",
-        "Creating any new external commitment",
+        "Unrecognized, ambiguous, or conflicting details",
       ],
       sharing:
         "Private by default. Only permission-safe family actions may leave the member's private context.",
-      feeds: ["Private day plan"],
-      action: gmail?.connected
+      feeds: ["Today", "Morning brief", "Needs Review"],
+      action: gmailHealthy || gmailState === "syncing"
         ? undefined
         : gmail?.configured && canConnectEmail
           ? "Connect"
@@ -5210,15 +5655,15 @@ function ConnectionsPage({
             ? "This iPhone · Health access incomplete"
             : "This iPhone · HealthKit"
           : health?.status === "pending"
-          ? "Apple Health Shortcut waiting"
-          : "This iPhone",
+          ? "Pepper iPhone app required"
+          : "Pepper iPhone app required",
       summary: health?.connected
         ? "Approved daily steps, goals, and active minutes are reaching Pepper."
         : nativeHealthAvailable
           ? health?.status === "pending"
             ? "No activity has reached Pepper yet. Try again and approve Steps and Exercise in Health."
             : "Read your approved daily steps and exercise minutes directly from Apple Health."
-          : "A private iPhone pathway for steps, goals, and active minutes.",
+          : "Open Pepper's native iPhone app to connect Apple Health privately.",
       state: health?.connected
         ? "connected"
         : health?.status === "pending"
@@ -5229,7 +5674,7 @@ function ConnectionsPage({
         : health?.status === "pending"
           ? nativeHealthAvailable
             ? "Needs attention"
-            : "Pairing ready"
+            : "Use iPhone app"
           : "Not connected",
       owner: displayName(member),
       privacy: "Private",
@@ -5240,7 +5685,7 @@ function ConnectionsPage({
       reads: [
         nativeHealthAvailable
           ? "Only today's steps and exercise minutes after you approve Health access"
-          : "Only daily steps, step goal, and active minutes approved in the iPhone Shortcut",
+          : "No Apple Health data is read by the Pepper web app",
       ],
       automatic: [
         "Update this member's private Home health summary when the paired device reports",
@@ -5248,7 +5693,7 @@ function ConnectionsPage({
       approval: [
         nativeHealthAvailable
           ? "Apple shows the Health permission sheet before Pepper can read anything"
-          : "Every HealthKit category is selected on the iPhone",
+          : "Apple Health permission is available only in the native iPhone app",
         "Pepper never writes data back to HealthKit",
       ],
       sharing:
@@ -5260,7 +5705,7 @@ function ConnectionsPage({
           ? health?.status === "pending"
             ? "Try again"
             : "Connect"
-          : "Set up Shortcut",
+          : "Open on iPhone",
       actionIcon: health?.connected ? <RefreshCw size={15} /> : <Plus size={15} />,
       actionDisabled: isPending("connection:health"),
       actionBusy: isPending("connection:health"),
@@ -5401,22 +5846,6 @@ function ConnectionsPage({
         )}
       </section>
 
-      {healthSetup ? (
-        <section className={styles.healthSetup}>
-          <div>
-            <div className={styles.sectionLabel}>One-time Shortcut setup</div>
-            <h2>Use these in the Pepper Health Shortcut.</h2>
-            <p>
-              The pairing token is shown once. The Shortcut sends only the
-              metrics you approve.
-            </p>
-          </div>
-          <CopyField label="Upload URL" value={healthSetup.ingest_url} />
-          <CopyField label="Pepper public key" value={healthSetup.publishable_key} />
-          <CopyField label="Pairing token" value={healthSetup.pairing_token} />
-        </section>
-      ) : null}
-
       {selectedProvider ? (
         <ConnectionDetailDrawer
           provider={selectedProvider}
@@ -5428,7 +5857,7 @@ function ConnectionsPage({
   );
 }
 
-type ConnectionProviderState = "connected" | "available" | "setup" | "builtin";
+type ConnectionProviderState = "connected" | "available" | "attention" | "setup" | "builtin";
 
 type ConnectionProviderView = {
   id: string;
@@ -5483,6 +5912,8 @@ function ConnectionCard({
       ? styles.connectionStateConnected
       : provider.state === "builtin"
         ? styles.connectionStateBuiltin
+        : provider.state === "attention"
+          ? styles.connectionStateAttention
         : provider.state === "available"
           ? styles.connectionStateAvailable
           : styles.connectionStateSetup;
@@ -5635,26 +6066,6 @@ function ConnectionCapability({
         <p key={item}><span aria-hidden="true">{icon}</span>{item}</p>
       ))}
     </article>
-  );
-}
-
-function CopyField({ label, value }: { label: string; value: string }) {
-  return (
-    <div className={styles.copyField}>
-      <span>
-        <small>{label}</small>
-        <code>{value}</code>
-      </span>
-      <button
-        type="button"
-        className={styles.iconButton}
-        aria-label={`Copy ${label}`}
-        title={`Copy ${label}`}
-        onClick={() => void navigator.clipboard.writeText(value)}
-      >
-        <Copy size={17} />
-      </button>
-    </div>
   );
 }
 
@@ -6356,9 +6767,9 @@ function MealsPage({
   onCreateGrocery: (draft: GroceryDraft) => Promise<boolean>;
   onChangeGrocery: (
     id: string,
-    operation: "assign" | "attach" | "complete" | "reopen",
+    operation: "assign" | "attach" | "edit" | "complete" | "reopen",
     value?: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }) {
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
   const planBusy = isPending("meal-plan");
@@ -6557,7 +6968,8 @@ function MealsPage({
                     {completed ? <Check size={16} aria-hidden="true" /> : null}
                   </button>
                   <div className={styles.groceryBody}>
-                    <strong>{item.item}</strong>
+                    <GroceryName item={item.item} editable={actorIsAdult} busy={groceryBusy}
+                      onSave={(value) => onChangeGrocery(item.id, "edit", value)} />
                     <small>{linkedMeal?.meal_name || "Weekly staples"}</small>
                   </div>
                   {actorIsAdult ? (
@@ -6756,6 +7168,26 @@ function MealNeedComposer({ members, busy, onClose, onSave }: {
       </form>
     </div>
   );
+}
+
+function GroceryName({ item, editable, busy, onSave }: {
+  item: string; editable: boolean; busy: boolean; onSave: (value: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item);
+  return editing ? (
+    <form onSubmit={async (event) => {
+      event.preventDefault();
+      if (draft.trim() && await onSave(draft.trim())) setEditing(false);
+    }}>
+      <input aria-label="Grocery name" value={draft} maxLength={240} disabled={busy}
+        onChange={event => setDraft(event.target.value)} autoFocus />
+      <button type="submit" disabled={busy || !draft.trim()} title="Save grocery name" aria-label="Save grocery name"><Check size={16} /></button>
+      <button type="button" disabled={busy} onClick={() => setEditing(false)} title="Cancel edit" aria-label="Cancel edit"><X size={16} /></button>
+    </form>
+  ) : <><strong>{item}</strong>{editable ? <button type="button" className={styles.toastLink}
+    disabled={busy} title="Edit grocery" aria-label={`Edit ${item}`}
+    onClick={() => { setDraft(item); setEditing(true); }}><Pencil size={14} /></button> : null}</>;
 }
 
 function GroceryComposer({ meals, members, actor, busy, onClose, onSave }: {
@@ -7608,6 +8040,7 @@ function ItemActionSheet({
   busy,
   onClose,
   onUpdate,
+  onUndoCapture,
 }: {
   selected: SelectedItem;
   state: PepperState;
@@ -7617,6 +8050,7 @@ function ItemActionSheet({
     operation: ItemOperation,
     changes?: ItemUpdate,
   ) => Promise<ItemUpdateResult>;
+  onUndoCapture: (captureId: string) => Promise<void>;
 }) {
   const item = selected.item;
   const eventItem = selected.type === "event" ? selected.item : null;
@@ -7643,6 +8077,11 @@ function ItemActionSheet({
     localDateTimeFor(eventItem?.ends_at),
   );
   const [location, setLocation] = useState(eventItem?.location || "");
+  const [clinicianName, setClinicianName] = useState(eventItem?.clinician_name || "");
+  const [facilityName, setFacilityName] = useState(eventItem?.facility_name || "");
+  const [preparationInstructions, setPreparationInstructions] = useState(
+    eventItem?.preparation_instructions || "",
+  );
   const currentOwner = eventItem
     ? eventItem.transport_owner_member_id
       ? `member:${eventItem.transport_owner_member_id}`
@@ -7663,7 +8102,8 @@ function ItemActionSheet({
           taskItem.creator_member_id === state.member.id),
     );
   const handled = ["completed", "canceled"].includes(item.status);
-  const eventEditorLabel = eventItem && isMedicalAppointment(eventItem)
+  const medicalEvent = Boolean(eventItem && isMedicalAppointment(eventItem));
+  const eventEditorLabel = medicalEvent
     ? "Edit appointment"
     : "Edit event";
 
@@ -7698,6 +8138,13 @@ function ItemActionSheet({
       ends_local: endsLocal,
       location,
       notes,
+      ...(medicalEvent
+        ? {
+            clinician_name: clinicianName,
+            facility_name: facilityName,
+            preparation_instructions: preparationInstructions,
+          }
+        : {}),
     });
   }
 
@@ -7733,8 +8180,44 @@ function ItemActionSheet({
         ) : null}
         {!editing && taskItem?.notes ? <p className={styles.itemNotes}>{taskItem.notes}</p> : null}
         {!editing && eventItem?.notes ? <p className={styles.itemNotes}>{eventItem.notes}</p> : null}
+        {!editing && eventItem?.transport_status === "assigned" && eventItem.transport_owner_member_id === state.member.id && !["completed", "canceled"].includes(eventItem.status) ? (
+          <button type="button" disabled={busy} className={styles.sourceUndo} onClick={() => void runUpdate("accept")}>
+            <Check size={16} /> Accept this ride
+          </button>
+        ) : null}
+        {!editing && eventItem?.sync_status === "reconnect_required" ? (
+          <p className={styles.actionError} role="status">
+            Saved in Pepper. Reconnect Google Calendar to update the linked event.
+          </p>
+        ) : !editing && eventItem?.sync_status === "retry_required" ? (
+          <p className={styles.actionError} role="status">
+            Saved in Pepper. Google Calendar is waiting for a retry.
+          </p>
+        ) : null}
         {!editing && item.source && item.source !== "pepper" ? (
-          <p className={styles.sourceNote}>Calendar supplied the evidence. Pepper owns this family plan.</p>
+          <p className={styles.sourceNote}>
+            {item.source === "gmail" ? "Gmail supplied the evidence." : "Calendar supplied the evidence."} Pepper owns this family plan.
+          </p>
+        ) : null}
+        {!editing && (item.source_url || (eventItem?.external_url ?? null)) ? (
+          <a
+            className={styles.sourceLink}
+            href={item.source_url || eventItem?.external_url || undefined}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLink size={16} /> View source
+          </a>
+        ) : null}
+        {!editing && item.source === "gmail" && item.source_capture_id && !item.deleted_at ? (
+          <button
+            type="button"
+            className={styles.sourceUndo}
+            disabled={busy}
+            onClick={() => void onUndoCapture(item.source_capture_id!)}
+          >
+            <Undo2 size={16} /> Undo automatic change
+          </button>
         ) : null}
         {actionError ? (
           <p className={styles.actionError} role="alert">{actionError}</p>
@@ -7847,6 +8330,40 @@ function ItemActionSheet({
                     onChange={(event) => setLocation(event.target.value)}
                   />
                 </label>
+                {medicalEvent ? (
+                  <>
+                    <div className={styles.editFieldGrid}>
+                      <label className={styles.editField}>
+                        Clinician
+                        <input
+                          value={clinicianName}
+                          maxLength={500}
+                          disabled={busy}
+                          onChange={(event) => setClinicianName(event.target.value)}
+                        />
+                      </label>
+                      <label className={styles.editField}>
+                        Facility
+                        <input
+                          value={facilityName}
+                          maxLength={500}
+                          disabled={busy}
+                          onChange={(event) => setFacilityName(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <label className={styles.editField}>
+                      Preparation instructions
+                      <textarea
+                        value={preparationInstructions}
+                        rows={3}
+                        maxLength={8000}
+                        disabled={busy}
+                        onChange={(event) => setPreparationInstructions(event.target.value)}
+                      />
+                    </label>
+                  </>
+                ) : null}
               </>
             )}
             <label className={styles.editField}>

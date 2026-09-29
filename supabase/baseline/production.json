@@ -475,7 +475,11 @@
         "name": "pepper_family_beta_sessions_seed",
         "deployed_source_sha256": "9c4c1f70578bfb857d6e3449bcbf11d8f029bde68e689d8b6b5b2b9a9ae615a1",
         "deployed_bytes": 1071,
-        "reason": "The deployed migration combines member-session schema with household seed/authentication data. Phase 0 intentionally does not place private production seed material in Git."
+        "reason": "The deployed migration combines member-session schema with household seed/authentication data. Private production seed material is intentionally excluded from Git.",
+        "local_schema_reconstruction": "supabase/migrations/20260814230412_pepper_family_beta_runtime_schema.sql",
+        "local_schema_reconstruction_sha256": "d4d5f7d536194bab48d08d249753f201916f2ac6812be3f9e42779b4cada3c98",
+        "local_schema_reconstruction_bytes": 13022,
+        "equivalence": "schema_only_catalog_reconstruction_private_seed_omitted"
       },
       {
         "version": "20260822093842",

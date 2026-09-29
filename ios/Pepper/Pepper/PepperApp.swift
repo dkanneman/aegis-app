@@ -3,10 +3,11 @@ import SwiftUI
 @main
 struct PepperApp: App {
     @StateObject private var browser = PepperBrowserModel()
+    @StateObject private var healthBridge = PepperHealthBridgeStore()
 
     var body: some Scene {
         WindowGroup {
-            PepperRootView(browser: browser)
+            PepperRootView(browser: browser, healthBridge: healthBridge)
                 .preferredColorScheme(.light)
         }
     }
@@ -15,6 +16,7 @@ struct PepperApp: App {
 private struct PepperRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var browser: PepperBrowserModel
+    @ObservedObject var healthBridge: PepperHealthBridgeStore
 
     var body: some View {
         ZStack {
@@ -95,6 +97,11 @@ private struct PepperRootView: View {
         } message: {
             Text("Unlock \(browser.biometricMemberName)'s private day without entering a PIN on this iPhone.")
         }
+        .sheet(isPresented: $browser.showsHealthBridge) {
+            PepperHealthBridgeView(store: healthBridge, browser: browser)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 }
 
@@ -159,7 +166,7 @@ private struct PepperFaceIDLockView: View {
     }
 }
 
-private extension Color {
+extension Color {
     static let pepperPorcelain = Color(red: 247 / 255, green: 244 / 255, blue: 238 / 255)
     static let pepperCiel = Color(red: 200 / 255, green: 220 / 255, blue: 232 / 255)
     static let pepperRiviera = Color(red: 110 / 255, green: 157 / 255, blue: 183 / 255)
@@ -168,4 +175,5 @@ private extension Color {
     static let pepperSoftInk = Color(red: 93 / 255, green: 104 / 255, blue: 114 / 255)
     static let pepperPeriwinkle = Color(red: 105 / 255, green: 112 / 255, blue: 174 / 255)
     static let pepperSage = Color(red: 84 / 255, green: 119 / 255, blue: 97 / 255)
+    static let pepperHealthMist = Color(red: 244 / 255, green: 246 / 255, blue: 242 / 255)
 }

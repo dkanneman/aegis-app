@@ -42,9 +42,7 @@
   --shadow: 0 16px 38px rgba(51, 67, 107, 0.09);
   min-height: 100vh;
   color: var(--ink);
-  background:
-    radial-gradient(circle at 76% 8%, color-mix(in srgb, var(--atmosphere-glow) 30%, transparent), transparent 34rem),
-    linear-gradient(180deg, var(--atmosphere-top), var(--atmosphere-middle) 52%, var(--atmosphere-bottom));
+  background: linear-gradient(180deg, var(--atmosphere-top), var(--atmosphere-middle) 52%, var(--atmosphere-bottom));
   background-attachment: fixed;
   font-family:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
@@ -62,12 +60,7 @@
   padding: 25px clamp(20px, 5vw, 54px) 158px;
   border-right: 1px solid rgba(255, 255, 255, 0.55);
   border-left: 1px solid rgba(255, 255, 255, 0.55);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--atmosphere-top) 15%, rgba(253, 253, 255, 0.96)),
-    color-mix(in srgb, var(--atmosphere-middle) 12%, rgba(248, 250, 253, 0.95)) 54%,
-    color-mix(in srgb, var(--atmosphere-bottom) 12%, rgba(246, 249, 248, 0.94))
-  );
+  background: rgba(249, 250, 253, 0.88);
   backdrop-filter: blur(28px) saturate(118%);
 }
 
@@ -77,6 +70,49 @@
   justify-content: space-between;
   margin-bottom: 22px;
   padding: 0 2px;
+}
+
+.mic[aria-pressed="true"] {
+  outline: 3px solid var(--pepper-sage);
+  background: var(--pepper-sage-deep);
+  color: white;
+}
+
+.groceryBody form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.groceryBody form input {
+  min-width: 0;
+  width: 100%;
+  padding: 9px;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.groceryBody form button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page *, .loginPage * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .topbarActions {
@@ -269,7 +305,7 @@
 }
 
 .dayPlan {
-  overflow: hidden;
+  overflow: visible;
   scroll-margin-top: 24px;
   border: 1px solid rgba(95, 111, 162, 0.2);
   border-top: 3px solid var(--pepper-sage);
@@ -394,8 +430,23 @@
 }
 
 .dayPlanList {
+  overflow: visible;
   border-top: 1px solid rgba(95, 111, 162, 0.12);
   background: rgba(253, 253, 255, 0.78);
+}
+
+.dayPlanEntry {
+  position: relative;
+  min-width: 0;
+  border-bottom: 1px solid rgba(51, 67, 107, 0.09);
+}
+
+.dayPlanEntry:last-child {
+  border-bottom: 0;
+}
+
+.dayPlanEntry:has(.dayPlanTaskActions) .dayPlanRow {
+  padding-right: 62px;
 }
 
 .dayPlanRow {
@@ -408,16 +459,11 @@
   align-items: center;
   padding: 13px 20px;
   border: 0;
-  border-bottom: 1px solid rgba(51, 67, 107, 0.09);
   background: transparent;
   color: var(--pepper-ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
-}
-
-.dayPlanRow:last-child {
-  border-bottom: 0;
 }
 
 .dayPlanRow:hover {
@@ -429,24 +475,24 @@
   outline-offset: -3px;
 }
 
-.dayPlanRow[data-urgency="critical"] {
+.dayPlanEntry[data-urgency="critical"] {
   box-shadow: inset 4px 0 var(--pepper-soft-coral);
 }
 
-.dayPlanRow[data-urgency="high"] {
+.dayPlanEntry[data-urgency="high"] {
   box-shadow: inset 4px 0 var(--pepper-lavande);
 }
 
-.dayPlanRow[data-kind="appointment"],
-.dayPlanRow[data-kind="chore"] {
+.dayPlanEntry[data-kind="appointment"],
+.dayPlanEntry[data-kind="chore"] {
   box-shadow: inset 4px 0 var(--pepper-sage);
 }
 
-.dayPlanRow[data-kind="event"] {
+.dayPlanEntry[data-kind="event"] {
   box-shadow: inset 4px 0 var(--pepper-lavande);
 }
 
-.dayPlanRow[data-kind="meal"] {
+.dayPlanEntry[data-kind="meal"] {
   box-shadow: inset 4px 0 var(--pepper-soft-coral);
 }
 
@@ -466,23 +512,23 @@
   color: var(--pepper-mediterranean);
 }
 
-.dayPlanRow[data-kind="appointment"] .dayPlanIcon,
-.dayPlanRow[data-kind="chore"] .dayPlanIcon {
+.dayPlanEntry[data-kind="appointment"] .dayPlanIcon,
+.dayPlanEntry[data-kind="chore"] .dayPlanIcon {
   background: rgba(191, 215, 199, 0.48);
   color: var(--pepper-sage-deep);
 }
 
-.dayPlanRow[data-kind="event"] .dayPlanIcon {
+.dayPlanEntry[data-kind="event"] .dayPlanIcon {
   background: rgba(217, 222, 242, 0.72);
   color: var(--pepper-midnight-sea);
 }
 
-.dayPlanRow[data-kind="meal"] .dayPlanIcon {
+.dayPlanEntry[data-kind="meal"] .dayPlanIcon {
   background: rgba(243, 221, 220, 0.72);
   color: var(--pepper-bordeaux);
 }
 
-.dayPlanRow[data-kind="email"] .dayPlanIcon {
+.dayPlanEntry[data-kind="email"] .dayPlanIcon {
   background: rgba(189, 183, 218, 0.42);
   color: var(--pepper-bordeaux);
 }
@@ -495,6 +541,143 @@
 .dayPlanBody small {
   display: block;
   overflow-wrap: anywhere;
+}
+
+.dayPlanTaskActions {
+  position: absolute;
+  z-index: 8;
+  top: 15px;
+  right: 14px;
+}
+
+.dayPlanTaskActions > summary {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(95, 111, 162, 0.16);
+  border-radius: 50%;
+  background: rgba(248, 249, 255, 0.92);
+  color: var(--pepper-midnight-sea);
+  cursor: pointer;
+  list-style: none;
+}
+
+.dayPlanTaskActions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dayPlanTaskActions > summary:hover,
+.dayPlanTaskActions[open] > summary {
+  border-color: rgba(95, 111, 162, 0.34);
+  background: rgba(217, 222, 242, 0.92);
+}
+
+.dayPlanTaskActions > summary:focus-visible {
+  outline: 3px solid rgba(130, 141, 189, 0.3);
+  outline-offset: 2px;
+}
+
+.dayPlanTaskActions[open] > summary svg {
+  transform: rotate(90deg);
+}
+
+.dayPlanTaskActions > summary svg {
+  transition: transform 160ms ease;
+}
+
+.dayPlanTaskMenu {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  width: min(280px, calc(100vw - 38px));
+  padding: 7px;
+  border: 1px solid rgba(95, 111, 162, 0.2);
+  border-radius: 12px;
+  background: rgba(253, 253, 255, 0.99);
+  box-shadow: 0 18px 42px rgba(37, 49, 80, 0.2);
+}
+
+.dayPlanTaskMenu > button {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--pepper-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dayPlanTaskMenu > button:hover,
+.dayPlanTaskMenu > button:focus-visible {
+  background: rgba(217, 222, 242, 0.54);
+  outline: none;
+}
+
+.dayPlanTaskMenu > button:last-child {
+  color: var(--pepper-sage-deep);
+}
+
+.dayPlanTaskMenu button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.dayPlanActionForm {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+}
+
+.dayPlanActionForm label {
+  color: var(--pepper-soft-ink);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.dayPlanActionForm input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid rgba(95, 111, 162, 0.2);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--pepper-ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.dayPlanActionForm > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+.dayPlanActionForm button {
+  min-height: 38px;
+  border: 1px solid rgba(95, 111, 162, 0.18);
+  border-radius: 8px;
+  background: rgba(217, 222, 242, 0.44);
+  color: var(--pepper-ink);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dayPlanActionForm button:last-child {
+  border-color: transparent;
+  background: var(--pepper-midnight-sea);
+  color: #fff;
 }
 
 .dayPlanBody strong {
@@ -2948,6 +3131,11 @@ button.morningBriefOutcome {
   color: var(--pepper-mediterranean);
 }
 
+.connectionStateAttention {
+  background: rgba(234, 204, 199, 0.66);
+  color: #7f4540;
+}
+
 .connectionStateSetup {
   background: rgba(220, 224, 226, 0.62);
   color: var(--muted);
@@ -4787,6 +4975,28 @@ button.morningBriefOutcome {
   background: rgba(200, 220, 232, 0.2);
 }
 
+.sourceLink,
+.sourceUndo {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--pepper-mediterranean);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sourceUndo:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
 .actionError {
   margin: 14px 0 0;
   padding: 11px 12px;
@@ -5693,6 +5903,20 @@ button.morningBriefOutcome {
     grid-template-columns: 50px 30px minmax(0, 1fr) 14px;
     gap: 8px;
     padding: 12px 13px;
+  }
+
+  .dayPlanEntry:has(.dayPlanTaskActions) .dayPlanRow {
+    padding-right: 56px;
+  }
+
+  .dayPlanTaskActions {
+    top: 16px;
+    right: 8px;
+  }
+
+  .dayPlanTaskActions > summary {
+    width: 40px;
+    height: 40px;
   }
 
   .dayPlanIcon {

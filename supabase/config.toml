@@ -1,0 +1,4 @@
+# The native HealthKit bridge authenticates with x-pepper-health-token.
+# Its handler rejects missing or invalid pairing tokens before any database write.
+[functions.pepper-health-ingest]
+verify_jwt = false

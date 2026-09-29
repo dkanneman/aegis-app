@@ -13,6 +13,8 @@ final class PepperBrowserModel: NSObject, ObservableObject {
     @Published private(set) var biometricMemberName: String
     @Published private(set) var biometricErrorMessage: String?
     @Published var showsBiometricOffer = false
+    @Published var showsHealthBridge = false
+    @Published private(set) var healthBridgeMember: PepperHealthBridgeMember?
 
     weak var webView: WKWebView?
     private var authenticationSession: ASWebAuthenticationSession?
@@ -143,6 +145,39 @@ final class PepperBrowserModel: NSObject, ObservableObject {
         isBiometricLocked = false
     }
 
+    func presentHealthBridge(memberID: String, memberName: String) {
+        guard UUID(uuidString: memberID) != nil else { return }
+        let cleanName = String(memberName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        healthBridgeMember = PepperHealthBridgeMember(
+            id: memberID,
+            name: cleanName.isEmpty ? "This profile" : cleanName
+        )
+        showsHealthBridge = true
+    }
+
+    func currentPepperSessionToken() async throws -> String {
+        if let unlockedSessionToken, UUID(uuidString: unlockedSessionToken) != nil {
+            return unlockedSessionToken
+        }
+        guard webContentReady, let webView else {
+            throw PepperNativeSessionError.unavailable
+        }
+        let value = try await webView.evaluateJavaScript(
+            "window.__pepperNativeSession||localStorage.getItem('pepper_family_session')||'';"
+        )
+        guard
+            let sessionToken = value as? String,
+            UUID(uuidString: sessionToken) != nil
+        else { throw PepperNativeSessionError.unavailable }
+        return sessionToken
+    }
+
+    func healthBridgeDidSync() {
+        webView?.evaluateJavaScript(
+            "window.dispatchEvent(new Event('pepper:health-bridge-synced'));"
+        )
+    }
+
     func startAuthentication(at url: URL) {
         guard authenticationSession == nil else { return }
 
@@ -271,6 +306,14 @@ private enum PepperBiometricBridgeError: LocalizedError {
 
     var errorDescription: String? {
         "Pepper could not secure this session for Face ID. Try again."
+    }
+}
+
+private enum PepperNativeSessionError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "Unlock your Pepper profile before connecting Apple Health."
     }
 }
 

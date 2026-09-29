@@ -1,7 +1,15 @@
 import postgres from 'npm:postgres@3.4.7'
 import {chooseMealWeek,uniqueGroceriesForWeek,wantsMealPlanRefresh} from './meal-planning.ts'
-import {buildDailyPlan} from './day-planning.ts'
-const sql=postgres(Deno.env.get('SUPABASE_DB_URL')!,{ssl:'require',prepare:false,max:1,idle_timeout:20,connect_timeout:10})
+import {
+  buildDailyPlan,
+  dailyPlanActionPatch,
+  type DailyPlanTaskAction,
+  type TaskImportance,
+} from './day-planning.ts'
+import {publicAppointmentSyncResult} from '../aegis-bridge-worker/logic.ts'
+import {calendarMutationActionKey,calendarMutationKind,isAdultHouseholdRole,parseExpectedEventRevision} from '../_shared/calendar-contribution.ts'
+const DATABASE_SSL=Deno.env.get('PEPPER_DB_SSL')==='disable'?false:'require'
+const sql=postgres(Deno.env.get('SUPABASE_DB_URL')!,{ssl:DATABASE_SSL,prepare:false,max:1,idle_timeout:20,connect_timeout:10})
 const SUPABASE_URL=Deno.env.get('SUPABASE_URL')||''
 if(!SUPABASE_URL)throw new Error('SUPABASE_URL is not configured.')
 const BASE=SUPABASE_URL+'/functions/v1'
@@ -20,18 +28,37 @@ const PREPARATION=BASE+'/pepper-preparation'
 const RITUALS=BASE+'/pepper-rituals'
 const INTEGRATIONS=BASE+'/pepper-integrations'
 const CALENDAR=BASE+'/pepper-calendar'
+const APPOINTMENT_BRIDGE=BASE+'/aegis-bridge-worker'
 const TZ='America/Los_Angeles'
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function previewOrigin(origin:string){try{const host=new URL(origin).hostname;return /^pepper-family-beta-[a-z0-9-]+-dkanneman-8936s-projects\.vercel\.app$/.test(host)}catch{return false}}
 function cors(req:Request){const o=req.headers.get('origin')||'';const allowed=!o||o===APP_ORIGIN||o===PRODUCTION_ORIGIN||o===LEGACY_PREVIEW_ORIGIN||previewOrigin(o)||o.startsWith('http://localhost:')||o.startsWith('http://127.0.0.1:');return {'Access-Control-Allow-Origin':allowed&&o?o:APP_ORIGIN,'Access-Control-Allow-Headers':'apikey,authorization,content-type,x-pepper-session','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Max-Age':'86400','Cache-Control':'no-store','Content-Type':'application/json; charset=utf-8','Vary':'Origin','X-Content-Type-Options':'nosniff'}}
 function json(req:Request,body:any,status=200){return new Response(JSON.stringify(body),{status,headers:cors(req)})}
-async function validSession(token:string){if(!UUID.test(token))return null;const rows=await sql<any[]>`select m.id,m.household_id,m.slug,m.display_name,m.role,s.expires_at from public.member_sessions s join public.household_members m on m.id=s.member_id where s.token=${token}::uuid and s.revoked_at is null and s.expires_at>now() limit 1`;return rows[0]||null}
+async function validSession(token:string){if(!UUID.test(token))return null;const rows=await sql<any[]>`select m.id,m.household_id,m.slug,m.display_name,m.role,m.active,m.removed_at,s.session_id,s.expires_at from public.member_sessions s join public.household_members m on m.id=s.member_id where s.token=${token}::uuid and s.revoked_at is null and s.expires_at>now() and m.active=true and m.removed_at is null limit 1`;return rows[0]||null}
 async function proxy(url:string,headers:any,body:any){const r=await fetch(url,{method:'POST',headers,body:JSON.stringify(body)});const text=await r.text();let data:any;try{data=JSON.parse(text)}catch{data={error:text||'Pepper service error.'}}return {ok:r.ok,status:r.status,data}}
-function adult(member:any){return member.role==='adult_admin'||member.role==='adult'}
+function adult(member:any){return isAdultHouseholdRole(member.role)}
 function dateLA(d=new Date()){return new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'}).format(d)}
 function addDays(date:string,n:number){const [y,m,d]=date.split('-').map(Number);return new Date(Date.UTC(y,m-1,d+n)).toISOString().slice(0,10)}
+function connectionHealth(input:{storedState?:string|null;lastSuccessfulScanAt?:string|null;lastAttemptedScanAt?:string|null;watchExpiration?:string|number|null;now?:string|number|Date;staleAfterMs?:number}){
+  if(input.storedState==='reconnect_required')return 'reconnect_required'
+  if(input.storedState==='error')return 'error'
+  const now=new Date(input.now||Date.now()).getTime()
+  const attempted=input.lastAttemptedScanAt?new Date(input.lastAttemptedScanAt).getTime():0
+  const successful=input.lastSuccessfulScanAt?new Date(input.lastSuccessfulScanAt).getTime():0
+  const expiration=input.watchExpiration?new Date(Number(input.watchExpiration)>1e12?Number(input.watchExpiration):input.watchExpiration).getTime():0
+  if(input.storedState==='syncing'&&attempted>now-15*60_000)return 'syncing'
+  if(!successful||successful<now-(input.staleAfterMs||30*60_000))return 'stale'
+  if(!expiration||expiration<=now)return 'stale'
+  return 'connected_and_current'
+}
 function dayDistance(from:string,to:string){return Math.round((Date.parse(`${to}T00:00:00Z`)-Date.parse(`${from}T00:00:00Z`))/86400000)}
 function cleanList(value:any,limit=20){const values=Array.isArray(value)?value:String(value||'').split(/[\n,]/);return [...new Set(values.map((item:any)=>String(item).trim().slice(0,160)).filter(Boolean))].slice(0,limit)}
+function eventWithRevision(event:any){
+  if(!event)return event
+  const revision=Number(event.revision)
+  if(!Number.isSafeInteger(revision)||revision<1)throw new Error('Pepper received an invalid event revision.')
+  return {...event,revision}
+}
 function encodedStoragePath(path:string){return path.split('/').map(encodeURIComponent).join('/')}
 function storageObjectUrl(path:string){return `${SUPABASE_URL}/storage/v1/object/${PROFILE_PHOTO_BUCKET}/${encodedStoragePath(path)}`}
 function storageSignUrl(path:string){return `${SUPABASE_URL}/storage/v1/object/sign/${PROFILE_PHOTO_BUCKET}/${encodedStoragePath(path)}`}
@@ -131,11 +158,13 @@ async function trustedDriverState(member:any){
 }
 async function monthState(member:any){
   const start=dateLA(),end=addDays(start,30)
-  return sql<any[]>`
+  const events=await sql<any[]>`
     select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,
       e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,
       e.transport_status,e.source,e.external_url,e.external_organizer_email,
-      e.external_organizer_name
+      e.external_organizer_name,e.appointment_type,e.clinician_name,e.facility_name,
+      e.preparation_instructions,e.source_timezone,e.sync_status,e.last_sync_error,
+      e.sync_retry_at,e.sync_attempt_count,e.revision,e.updated_at
     from public.events e
     where e.household_id=${member.household_id}::uuid
       and e.deleted_at is null
@@ -152,20 +181,21 @@ async function monthState(member:any){
     order by e.starts_at
     limit 320
   `
+  return events.map(eventWithRevision)
 }
 async function memberState(member:any,targetSlug:string){
   const targets=await sql<any[]>`select id,slug,display_name,role from public.household_members where household_id=${member.household_id}::uuid and slug=${targetSlug} limit 1`
   const target=targets[0]
   if(!target)throw Object.assign(new Error('Family member not found.'),{status:404})
   const [events,appointments,tasks,profiles,schoolChanges,setup]=await Promise.all([
-    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and e.starts_at<now()+interval '31 days' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) order by e.starts_at limit 120`,
-    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) and (lower(coalesce(e.kind,''))='appointment' or lower(coalesce(e.title,'')) ~ '(^|[^a-z])dr([^a-z]|$)' or lower(concat_ws(' ',e.title,e.notes,e.location)) ~ '(^|[^a-z])(doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)') order by e.starts_at limit 160`,
-    sql<any[]>`select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,t.due_at,t.source,t.updated_at,t.created_at,t.area,t.project,t.priority,t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action from public.tasks t where t.household_id=${member.household_id}::uuid and t.deleted_at is null and (t.owner_member_id=${target.id}::uuid or ((lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.display_name).toLowerCase()}%`} or lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.slug).toLowerCase()}%`}) and lower(coalesce(t.area,'')) in ('health','kids') and lower(concat_ws(' ',t.title,t.project,t.notes,t.classification,array_to_string(t.tags,' '))) ~ '(^|[^a-z])(dr|doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)')) and (t.visibility='household' or t.owner_member_id=${member.id}::uuid or t.creator_member_id=${member.id}::uuid) order by case t.status when 'open' then 0 when 'in_progress' then 1 when 'on_hold' then 2 when 'completed' then 3 else 4 end,t.due_at nulls last,t.updated_at desc limit 160`,
+    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source,(to_jsonb(e)->>'source_url') as source_url,(to_jsonb(e)->>'source_capture_id') as source_capture_id,e.appointment_type,e.clinician_name,e.facility_name,e.preparation_instructions,e.source_timezone,e.sync_status,e.last_sync_error,e.sync_retry_at,e.sync_attempt_count,e.revision,e.updated_at from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and e.starts_at<now()+interval '31 days' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) order by e.starts_at limit 120`,
+    sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source,(to_jsonb(e)->>'source_url') as source_url,(to_jsonb(e)->>'source_capture_id') as source_capture_id,e.appointment_type,e.clinician_name,e.facility_name,e.preparation_instructions,e.source_timezone,e.sync_status,e.last_sync_error,e.sync_retry_at,e.sync_attempt_count,e.revision,e.updated_at from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) and (lower(coalesce(e.kind,''))='appointment' or lower(coalesce(e.title,'')) ~ '(^|[^a-z])dr([^a-z]|$)' or lower(concat_ws(' ',e.title,e.notes,e.location)) ~ '(^|[^a-z])(doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)') order by e.starts_at limit 160`,
+    sql<any[]>`select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,t.due_at,t.source,(to_jsonb(t)->>'source_url') as source_url,(to_jsonb(t)->>'source_capture_id') as source_capture_id,t.updated_at,t.created_at,t.area,t.project,t.priority,t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action,t.importance,t.urgency,t.deadline_type,t.due_date_confidence,t.waiting_follow_up_at,t.blocked,t.snoozed_until,t.dismissed_for_date::text,t.manually_pinned,t.daily_plan_state,t.priority_score,t.priority_reason,t.estimated_minutes,t.priority_classification_confidence from public.tasks t where t.household_id=${member.household_id}::uuid and t.deleted_at is null and (t.owner_member_id=${target.id}::uuid or ((lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.display_name).toLowerCase()}%`} or lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.slug).toLowerCase()}%`}) and lower(coalesce(t.area,'')) in ('health','kids') and lower(concat_ws(' ',t.title,t.project,t.notes,t.classification,array_to_string(t.tags,' '))) ~ '(^|[^a-z])(dr|doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)')) and (t.visibility='household' or t.owner_member_id=${member.id}::uuid or t.creator_member_id=${member.id}::uuid) order by case t.status when 'open' then 0 when 'in_progress' then 1 when 'on_hold' then 2 when 'completed' then 3 else 4 end,t.due_at nulls last,t.updated_at desc limit 160`,
     sql<any[]>`select p.id,p.academic_year,p.school_name,p.district_name,p.grade_label,p.timezone,p.family_arrival_target_local::text,p.first_bell_local::text,p.normal_dismissal_local::text,p.first_day::text,p.last_day::text,p.source_label,p.source_url,p.source_checked_on::text from private.school_profiles p where p.household_id=${member.household_id}::uuid and p.student_member_id=${target.id}::uuid order by p.last_day desc limit 1`,
     sql<any[]>`select schedule_date::text,schedule_kind,schedule_title,day_starts_at,dismissal_at,precedence,resolution_level,source_label,source_url from private.resolve_school_schedule(${member.household_id}::uuid,(now() at time zone 'America/Los_Angeles')::date,((now() at time zone 'America/Los_Angeles')::date+interval '31 days')::date) where person_slug=${target.slug} and resolution_level='dated_exception' and transportation_impact=true order by schedule_date limit 6`,
     sql<any[]>`select member_id,activities,school_name,grade_label,dietary_preferences,medications,goals,avatar_path,avatar_updated_at,updated_at from private.member_setup_profiles where household_id=${member.household_id}::uuid and member_id=${target.id}::uuid limit 1`,
   ])
-  const memberEvents=[...new Map([...events,...appointments].map((event:any)=>[event.id,event])).values()]
+  const memberEvents=[...new Map([...events,...appointments].map((event:any)=>[event.id,eventWithRevision(event)])).values()]
     .sort((left:any,right:any)=>+new Date(left.starts_at)-+new Date(right.starts_at))
   const memberProfile=setup[0]||(profiles[0]?{
     member_id:target.id,
@@ -186,7 +216,10 @@ async function choreState(member:any){
   return sql<any[]>`
     select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,
       t.due_at,t.source,t.updated_at,t.created_at,t.area,t.project,t.priority,
-      t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action
+      t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action,
+      t.importance,t.urgency,t.deadline_type,t.due_date_confidence,t.waiting_follow_up_at,
+      t.blocked,t.snoozed_until,t.dismissed_for_date::text,t.manually_pinned,t.daily_plan_state,
+      t.priority_score,t.priority_reason,t.estimated_minutes,t.priority_classification_confidence
     from public.tasks t
     where t.household_id=${member.household_id}::uuid
       and t.deleted_at is null
@@ -296,7 +329,7 @@ async function updateFrontSeat(member:any,body:any){
 async function householdMember(tx:any,member:any,id:string){
   if(!id)return null
   if(!UUID.test(id))throw Object.assign(new Error('Choose someone in this household.'),{status:400})
-  const rows=await tx<any[]>`select id from public.household_members where id=${id}::uuid and household_id=${member.household_id}::uuid limit 1`
+  const rows=await tx<any[]>`select id from public.household_members where id=${id}::uuid and household_id=${member.household_id}::uuid and active=true and removed_at is null limit 1`
   if(!rows[0])throw Object.assign(new Error('Choose someone in this household.'),{status:400})
   return rows[0]
 }
@@ -371,7 +404,7 @@ async function updateGrocery(member:any,body:any){
   const operation=String(body.operation||'')
   const ownerId=body.owner_member_id==null?'':String(body.owner_member_id)
   const mealPlanId=body.meal_plan_id==null?'':String(body.meal_plan_id)
-  if(!UUID.test(id)||!['assign','attach','complete','reopen'].includes(operation))throw Object.assign(new Error('Invalid grocery update.'),{status:400})
+  if(!UUID.test(id)||!['assign','attach','edit','complete','reopen'].includes(operation))throw Object.assign(new Error('Invalid grocery update.'),{status:400})
   return sql.begin(async(tx:any)=>{
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     const rows=await tx<any[]>`select id,item,status,owner_member_id,meal_plan_id from public.groceries where id=${id}::uuid and household_id=${member.household_id}::uuid for update`
@@ -386,6 +419,13 @@ async function updateGrocery(member:any,body:any){
       if(!adult(member))throw Object.assign(new Error('Only an adult can change the meal link.'),{status:403})
       await validateMeal(tx,member,mealPlanId)
       await tx`update public.groceries set meal_plan_id=${mealPlanId||null}::uuid,updated_at=now() where id=${id}::uuid`
+    }else if(operation==='edit'){
+      if(!adult(member))throw Object.assign(new Error('Only an adult can edit shared groceries.'),{status:403})
+      const item=String(body.item||'').trim().slice(0,240)
+      if(!item)throw Object.assign(new Error('A grocery item needs a name.'),{status:400})
+      const duplicates=await tx<any[]>`select id from public.groceries where household_id=${member.household_id}::uuid and status='open' and lower(btrim(item))=lower(btrim(${item})) and id<>${id}::uuid limit 1`
+      if(grocery.status==='open'&&duplicates.length)throw Object.assign(new Error('That item is already on the list. Keep both meal links for review.'),{status:409})
+      await tx`update public.groceries set item=${item},updated_at=now() where id=${id}::uuid`
     }else{
       if(!adult(member)&&grocery.owner_member_id&&grocery.owner_member_id!==member.id)throw Object.assign(new Error('That grocery is assigned to someone else.'),{status:403})
       if(operation==='reopen'){
@@ -568,10 +608,11 @@ async function createChore(member:any,body:any){
   if(ownerId&&!UUID.test(ownerId))throw Object.assign(new Error('Choose someone in this household.'),{status:400})
   if(dueDate&&!/^\d{4}-\d{2}-\d{2}$/.test(dueDate))throw Object.assign(new Error('Choose a valid due date.'),{status:400})
   if(!['none','daily','weekly','monthly'].includes(recurrence))throw Object.assign(new Error('Choose a valid repeat schedule.'),{status:400})
+  if(recurrence!=='none'&&!dueDate)throw Object.assign(new Error('Choose the first date for this repeating chore.'),{status:400})
   return sql.begin(async(tx:any)=>{
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     if(ownerId){
-      const owners=await tx<any[]>`select id from public.household_members where id=${ownerId}::uuid and household_id=${member.household_id}::uuid limit 1`
+      const owners=await tx<any[]>`select id from public.household_members where id=${ownerId}::uuid and household_id=${member.household_id}::uuid and active=true and removed_at is null limit 1`
       if(!owners[0])throw Object.assign(new Error('Choose someone in this household.'),{status:400})
     }
     const rows=await tx<any[]>`insert into public.tasks(household_id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,area,project,classification,tags,recurrence,next_action) values(${member.household_id}::uuid,${title},${ownerId||null}::uuid,${member.id}::uuid,'household','open',(nullif(${dueDate},'')::date+time '17:00') at time zone 'America/Los_Angeles','pepper','Home','Family chores','Chore',array['home','chores']::text[],${recurrence},${title}) returning id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,updated_at,created_at,area,project,classification,tags,recurrence,completed_at,next_action`
@@ -645,21 +686,125 @@ async function removeTrustedDriver(member:any,body:any){
     return {ok:true,id:driverId}
   })
 }
+const DAILY_PLAN_TASK_ACTIONS=new Set<DailyPlanTaskAction>([
+  'pin','not_today','snooze_tomorrow','snooze_next_week','choose_date',
+  'return_to_list','lower_priority','waiting_on','complete',
+])
+async function updateDailyPlanTask(member:any,body:any){
+  const taskId=String(body.task_id||'')
+  const operation=String(body.operation||'') as DailyPlanTaskAction
+  const selectedDate=body.selected_date==null?'':String(body.selected_date)
+  const followUpDate=body.follow_up_date==null?'':String(body.follow_up_date)
+  if(!UUID.test(taskId)||!DAILY_PLAN_TASK_ACTIONS.has(operation))throw Object.assign(new Error('Choose a valid daily task action.'),{status:400})
+  if(selectedDate&&!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate))throw Object.assign(new Error('Choose a valid snooze date.'),{status:400})
+  if(followUpDate&&!/^\d{4}-\d{2}-\d{2}$/.test(followUpDate))throw Object.assign(new Error('Choose a valid follow-up date.'),{status:400})
+  const today=dateLA()
+  if(operation==='choose_date'&&selectedDate<=today)throw Object.assign(new Error('Choose a future date.'),{status:400})
+  return sql.begin(async(tx:any)=>{
+    await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
+    const rows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status,due_at,importance,urgency,deadline_type,due_date_confidence,waiting_on,waiting_follow_up_at,blocked,snoozed_until,dismissed_for_date::text,manually_pinned,daily_plan_state,priority_score,priority_reason,completed_at from public.tasks where id=${taskId}::uuid and household_id=${member.household_id}::uuid and deleted_at is null for update`
+    const task=rows[0]
+    if(!task)throw Object.assign(new Error('Task not found.'),{status:404})
+    if(task.visibility==='private'&&task.owner_member_id!==member.id&&task.creator_member_id!==member.id)throw Object.assign(new Error('That task is private.'),{status:403})
+    if(!adult(member)&&task.owner_member_id!==member.id&&task.creator_member_id!==member.id)throw Object.assign(new Error('You cannot change that task.'),{status:403})
+    let followUpAt:string|null=null
+    if(followUpDate){
+      followUpAt=String(dailyPlanActionPatch('choose_date',{today,now:new Date().toISOString(),timeZone:TZ,selectedDate:followUpDate}).snoozed_until||'')||null
+    }
+    const patch=dailyPlanActionPatch(operation,{
+      today,
+      now:new Date().toISOString(),
+      timeZone:TZ,
+      selectedDate,
+      currentImportance:task.importance as TaskImportance,
+      waitingOn:body.waiting_on,
+      followUpAt,
+    })
+    const has=(key:string)=>Object.prototype.hasOwnProperty.call(patch,key)
+    const nextImportance=has('importance')?patch.importance:task.importance
+    const nextWaitingOn=has('waiting_on')?patch.waiting_on:task.waiting_on
+    const nextWaitingFollowUpAt=has('waiting_follow_up_at')?patch.waiting_follow_up_at:task.waiting_follow_up_at
+    const nextBlocked=has('blocked')?patch.blocked:task.blocked
+    const nextSnoozedUntil=has('snoozed_until')?patch.snoozed_until:task.snoozed_until
+    const nextDismissedForDate=has('dismissed_for_date')?patch.dismissed_for_date:task.dismissed_for_date
+    const nextPinned=has('manually_pinned')?patch.manually_pinned:task.manually_pinned
+    const nextPlanState=has('daily_plan_state')?patch.daily_plan_state:task.daily_plan_state
+    const nextStatus=has('status')?patch.status:task.status
+    const nextCompletedAt=has('completed_at')?patch.completed_at:task.completed_at
+    const nextScore=operation==='pin'?Math.max(100,Number(task.priority_score||0)):operation==='lower_priority'?0:Number(task.priority_score||0)
+    const nextReason=operation==='pin'?'User pinned':operation==='lower_priority'?'Priority lowered by user':String(task.priority_reason||'')
+    const updated=await tx<any[]>`update public.tasks set importance=${nextImportance},waiting_on=${nextWaitingOn},waiting_follow_up_at=${nextWaitingFollowUpAt}::timestamptz,blocked=${nextBlocked},snoozed_until=${nextSnoozedUntil}::timestamptz,dismissed_for_date=${nextDismissedForDate}::date,manually_pinned=${nextPinned},daily_plan_state=${nextPlanState},status=${nextStatus},completed_at=${nextCompletedAt}::timestamptz,priority_score=${nextScore},priority_reason=${nextReason},updated_at=now() where id=${taskId}::uuid and household_id=${member.household_id}::uuid returning id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,area,project,priority,classification,tags,notes,waiting_on,recurrence,completed_at,next_action,deleted_at,updated_at,importance,urgency,deadline_type,due_date_confidence,waiting_follow_up_at,blocked,snoozed_until,dismissed_for_date::text,manually_pinned,daily_plan_state,priority_score,priority_reason,estimated_minutes,priority_classification_confidence`
+    const labels:Record<DailyPlanTaskAction,string>={
+      pin:'pinned for today',not_today:'removed from today',snooze_tomorrow:'snoozed until tomorrow',
+      snooze_next_week:'snoozed until next week',choose_date:'snoozed to the chosen date',
+      return_to_list:'returned to the task list',lower_priority:'moved to a lower priority',
+      waiting_on:'marked as waiting',complete:'completed',
+    }
+    await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'day_plan_task_action','task',${taskId}::uuid,${`${task.title} ${labels[operation]}.`})`
+    return {ok:true,operation,item:updated[0],replan_required:true}
+  })
+}
+
+function safeAppointmentSyncError(error:unknown){
+  return String(error instanceof Error?error.message:error||'Calendar synchronization failed.')
+    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi,'Bearer [redacted]')
+    .slice(0,500)
+}
+
+async function syncPublishedAppointment(member:any,event:any,operation:string){
+  const appointment=event?.appointment_type||String(event?.kind||'').toLowerCase()==='appointment'
+  if(event?.visibility!=='household')return {status:'needs_review',retryable:false,operation,reason:'private_event_not_publishable'}
+  const deliveries=await sql<any[]>`
+    select capture_id from private.appointment_bridge_deliveries
+    where event_id=${event.id}::uuid and household_id=${member.household_id}::uuid
+    limit 1
+  `
+  const captureId=deliveries[0]?.capture_id||event.source_capture_id||''
+  const useBridge=Boolean(appointment&&captureId&&event.dedupe_key)
+  const endpoint=useBridge?APPOINTMENT_BRIDGE:CALENDAR
+  const requestBody=useBridge
+    ?{action:'appointment.sync',event_id:event.id,capture_id:captureId,dedupe_key:event.dedupe_key}
+    :{action:'publish_event',event_id:event.id,capture_id:captureId}
+  try{
+    const response=await fetch(endpoint,{
+      method:'POST',
+      headers:{authorization:`Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,'content-type':'application/json'},
+      body:JSON.stringify(requestBody),
+      signal:AbortSignal.timeout(20000),
+    })
+    const text=await response.text()
+    let data:any={}
+    try{data=text?JSON.parse(text):{}}catch{data={}}
+    if(!response.ok)throw new Error(data.error||'Appointment calendar synchronization failed.')
+    return publicAppointmentSyncResult({useBridge,data,operation})
+  }catch(error){
+    const reason=safeAppointmentSyncError(error)
+    await sql.begin(async(tx:any)=>{
+      await tx`update public.events set sync_status='retry_required',last_sync_error=${reason},sync_retry_at=now()+interval '15 minutes',updated_at=now() where id=${event.id}::uuid and household_id=${member.household_id}::uuid`
+      await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,'calendar_sync_retry_required','event',${event.id},${reason})`
+    })
+    return {status:'retry_required',retryable:true,operation,error:reason}
+  }
+}
 async function updateFamilyItem(member:any,body:any){
   const itemType=String(body.item_type||'')
   const itemId=String(body.id||'')
   const operation=String(body.operation||'')
   const ownerId=body.owner_member_id==null?'':String(body.owner_member_id)
   const trustedDriverId=body.trusted_driver_id==null?'':String(body.trusted_driver_id)
-  const expectedUpdatedAt=body.expected_updated_at==null?'':String(body.expected_updated_at)
+  const expectedUpdatedAt=itemType==='task'&&body.expected_updated_at!=null?String(body.expected_updated_at):''
+  const expectedRevision=itemType==='event'?parseExpectedEventRevision(body.expected_revision):null
+  const mutationId=itemType==='event'?String(body.mutation_id||''):''
   if(!['task','event'].includes(itemType)||!UUID.test(itemId))throw Object.assign(new Error('Invalid family item.'),{status:400})
-  if(!['assign','edit','complete','cancel','delete','reopen','restore'].includes(operation))throw Object.assign(new Error('Invalid update.'),{status:400})
+  if(!['assign','accept','edit','complete','cancel','delete','reopen','restore'].includes(operation))throw Object.assign(new Error('Invalid update.'),{status:400})
+  if(operation==='accept'&&itemType!=='event')throw Object.assign(new Error('Only a ride can be accepted.'),{status:400})
   if(ownerId&&!UUID.test(ownerId))throw Object.assign(new Error('Invalid family member.'),{status:400})
   if(trustedDriverId&&!UUID.test(trustedDriverId))throw Object.assign(new Error('Invalid trusted driver.'),{status:400})
   if(ownerId&&trustedDriverId)throw Object.assign(new Error('Choose one driver for this ride.'),{status:400})
   if(itemType==='task'&&trustedDriverId)throw Object.assign(new Error('A trusted driver can only be assigned to a ride.'),{status:400})
   if(expectedUpdatedAt&&Number.isNaN(Date.parse(expectedUpdatedAt)))throw Object.assign(new Error('Invalid item version.'),{status:400})
-  return sql.begin(async (tx:any)=>{
+  if(itemType==='event'&&!UUID.test(mutationId))throw Object.assign(new Error('A valid event mutation ID is required.'),{status:400})
+  const result=await sql.begin(async (tx:any)=>{
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     if(itemType==='task'){
       const rows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null)) and updated_at=coalesce(nullif(${expectedUpdatedAt},'')::timestamptz,updated_at) for update`
@@ -705,46 +850,132 @@ async function updateFamilyItem(member:any,body:any){
       const summary=operation==='assign'?`${item.title} was assigned.`:operation==='edit'?`${item.title} details were updated.`:operation==='delete'?`${item.title} was deleted from Pepper.`:`${item.title} was ${operation==='reopen'?'reopened':operation==='restore'?'restored':operation+'ed'}.`
       const auditType=operation==='edit'?'task_edit':operation==='delete'?'task_delete':`task_${operation}`
       await tx`insert into public.audit_log(household_id,actor_member_id,event_type,entity_type,entity_id,summary) values(${member.household_id}::uuid,${member.id}::uuid,${auditType},'task',${itemId}::uuid,${summary})`
-      const updatedRows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,area,project,priority,classification,tags,notes,waiting_on,recurrence,completed_at,next_action,deleted_at,updated_at from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+    const updatedRows=await tx<any[]>`select id,title,owner_member_id,creator_member_id,visibility,status,due_at,source,(to_jsonb(tasks)->>'source_url') as source_url,(to_jsonb(tasks)->>'source_capture_id') as source_capture_id,area,project,priority,classification,tags,notes,waiting_on,recurrence,completed_at,next_action,deleted_at,updated_at,importance,urgency,deadline_type,due_date_confidence,waiting_follow_up_at,blocked,snoozed_until,dismissed_for_date::text,manually_pinned,daily_plan_state,priority_score,priority_reason,estimated_minutes,priority_classification_confidence from public.tasks where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
       return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0]}
     }
-    const rows=await tx<any[]>`select id,title,owner_member_id,visibility,status,transport_owner_member_id,trusted_driver_id from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null)) and updated_at=coalesce(nullif(${expectedUpdatedAt},'')::timestamptz,updated_at) for update`
+    const rows=await tx<any[]>`select id,household_id,title,owner_member_id,visibility,status,transport_owner_member_id,trusted_driver_id,revision from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null))`
     const item=rows[0]
-    if(!item)throw Object.assign(new Error(expectedUpdatedAt?'That event changed somewhere else. Refresh before changing it again.':'Event not found.'),{status:expectedUpdatedAt?409:404})
+    if(!item)throw Object.assign(new Error('Event not found.'),{status:404})
     if(item.visibility==='private'&&item.owner_member_id!==member.id)throw Object.assign(new Error('That event is private.'),{status:403})
     if(!adult(member))throw Object.assign(new Error('Only an adult can change a family event.'),{status:403})
-    if(operation==='restore'){
-      await tx`update public.events set status='confirmed',canonical_status_override=null,deleted_at=null,deleted_by_member_id=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-    }else if(operation==='assign'){
-      if(ownerId){
-        const drivers=await tx<any[]>`select id from public.household_members where id=${ownerId}::uuid and household_id=${member.household_id}::uuid and role in ('adult_admin','adult') limit 1`
-        if(!drivers[0])throw Object.assign(new Error('Choose an adult driver in this household.'),{status:400})
-        await tx`update public.events set transport_owner_member_id=${ownerId}::uuid,trusted_driver_id=null,transport_status='confirmed',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-      }else if(trustedDriverId){
-        const drivers=await tx<any[]>`select id from public.trusted_drivers where id=${trustedDriverId}::uuid and household_id=${member.household_id}::uuid and active=true limit 1`
-        if(!drivers[0])throw Object.assign(new Error('Choose an active trusted driver for this household.'),{status:400})
-        await tx`update public.events set transport_owner_member_id=null,trusted_driver_id=${trustedDriverId}::uuid,transport_status='confirmed',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-      }else{
-        await tx`update public.events set transport_owner_member_id=null,trusted_driver_id=null,transport_status='unassigned',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-      }
-    }else if(operation==='edit'){
-      const title=String(body.title||'').trim().slice(0,240)
-      const startsLocal=String(body.starts_local||'').trim()
-      const endsLocal=String(body.ends_local||'').trim()
-      const location=String(body.location||'').trim().slice(0,500)
-      const notes=String(body.notes||'').trim().slice(0,8000)
+    if(operation==='accept'&&(item.transport_owner_member_id!==member.id||['canceled','completed'].includes(item.status)))throw Object.assign(new Error('Only the assigned driver can accept an active ride.'),{status:403})
+    if(operation==='assign'&&ownerId){
+      const drivers=await tx<any[]>`select id from public.household_members where id=${ownerId}::uuid and household_id=${member.household_id}::uuid and role in ('adult_admin','adult') and active=true and removed_at is null limit 1`
+      if(!drivers[0])throw Object.assign(new Error('Choose an active adult driver in this household.'),{status:400})
+    }
+    if(operation==='assign'&&trustedDriverId){
+      const drivers=await tx<any[]>`select id from public.trusted_drivers where id=${trustedDriverId}::uuid and household_id=${member.household_id}::uuid and active=true limit 1`
+      if(!drivers[0])throw Object.assign(new Error('Choose an active trusted driver for this household.'),{status:400})
+    }
+    const title=String(body.title||'').trim().slice(0,240)
+    const startsLocal=String(body.starts_local||'').trim()
+    const endsLocal=String(body.ends_local||'').trim()
+    const location=String(body.location||'').trim().slice(0,500)
+    const notes=String(body.notes||'').trim().slice(0,8000)
+    const hasClinician=body.clinician_name!==undefined
+    const hasFacility=body.facility_name!==undefined
+    const hasPreparation=body.preparation_instructions!==undefined
+    const clinician=String(body.clinician_name||'').trim().slice(0,500)
+    const facility=String(body.facility_name||'').trim().slice(0,500)
+    const preparation=String(body.preparation_instructions||'').trim().slice(0,8000)
+    if(operation==='edit'){
       const localPattern=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/
       if(!title)throw Object.assign(new Error('Give this appointment a title.'),{status:400})
       if(!localPattern.test(startsLocal)||endsLocal&&!localPattern.test(endsLocal))throw Object.assign(new Error('Choose a valid date and time.'),{status:400})
       if(endsLocal&&endsLocal<=startsLocal)throw Object.assign(new Error('The end time must be after the start time.'),{status:400})
-      await tx`update public.events set title=${title},starts_at=(${startsLocal}::timestamp at time zone ${TZ}),ends_at=(nullif(${endsLocal},'')::timestamp at time zone ${TZ}),location=nullif(${location},''),notes=nullif(${notes},''),canonical_content_override=canonical_content_override||jsonb_build_object('title',${title},'starts_at',((${startsLocal}::timestamp at time zone ${TZ}))::text,'ends_at',coalesce(((nullif(${endsLocal},'')::timestamp at time zone ${TZ}))::text,''),'location',${location},'notes',${notes}),updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-    }else if(operation==='delete'){
-      await tx`update public.events set status='canceled',canonical_status_override='canceled',deleted_at=now(),deleted_by_member_id=${member.id}::uuid,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-    }else{
-      const status=operation==='complete'?'completed':operation==='cancel'?'canceled':'confirmed'
-      if(operation==='complete')await tx`update public.events set status=${status},canonical_status_override='completed',transport_status=case when transport_owner_member_id is null and trusted_driver_id is null then transport_status else 'completed' end,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-      else if(operation==='cancel')await tx`update public.events set status=${status},canonical_status_override='canceled',updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-      else await tx`update public.events set status=${status},canonical_status_override=null,updated_at=now() where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+    }
+    const mutationAction=calendarMutationKind(operation)
+    const actionKey=calendarMutationActionKey({
+      eventId:itemId,
+      action:mutationAction,
+      actorMemberId:member.id,
+      sessionId:member.session_id,
+      requestId:mutationId,
+    })
+    const mutationEvidence={
+      mutation_id:mutationId,
+      expected_revision:expectedRevision,
+      operation,
+      title:body.title??null,
+      starts_local:body.starts_local??null,
+      ends_local:body.ends_local??null,
+      location:body.location??null,
+      notes:body.notes??null,
+      clinician_name:body.clinician_name??null,
+      facility_name:body.facility_name??null,
+      preparation_instructions:body.preparation_instructions??null,
+      owner_member_id:ownerId||null,
+      trusted_driver_id:trustedDriverId||null,
+    }
+    const priorActions=await tx<any[]>`select id from private.calendar_event_mutation_requests where action_key=${actionKey} limit 1`
+    const actionRows=await tx<any[]>`
+      select private.pepper_record_calendar_event_mutation(
+        ${member.household_id}::uuid,${itemId}::uuid,${member.id}::uuid,
+        ${member.session_id}::uuid,${mutationAction},${actionKey},
+        ${expectedRevision}::bigint,${expectedRevision}::bigint,${Number(expectedRevision)+1}::bigint,
+        ${tx.json(mutationEvidence)}::jsonb
+      ) as id
+    `
+    if(priorActions[0]){
+      const replayRows=await tx<any[]>`select id,title,person_slug,starts_at,ends_at,location,status,visibility,owner_member_id,kind,transport_owner_member_id,trusted_driver_id,transport_status,source,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id,notes,appointment_type,clinician_name,facility_name,preparation_instructions,original_source_text,source_timezone,dedupe_key,external_provider,external_event_id,external_calendar_id,sync_status,last_sync_error,sync_retry_at,sync_attempt_count,canonical_status_override,canonical_content_override,created_by_member_id,last_modified_by_member_id,last_calendar_action_id,revision,deleted_at,updated_at from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+      if(!replayRows[0]||Number(replayRows[0].revision)<Number(expectedRevision)+1)throw Object.assign(new Error('That event changed somewhere else. Refresh before changing it again.'),{status:409})
+      return {ok:true,item_type:itemType,id:itemId,operation,item:eventWithRevision(replayRows[0]),idempotent_replay:true}
+    }
+    const updatedRows=await tx<any[]>`
+      update public.events set
+        title=case when ${operation}='edit' then ${title} else title end,
+        starts_at=case when ${operation}='edit' then (nullif(${startsLocal},'')::timestamp at time zone ${TZ}) else starts_at end,
+        ends_at=case when ${operation}='edit' then (nullif(${endsLocal},'')::timestamp at time zone ${TZ}) else ends_at end,
+        location=case when ${operation}='edit' then nullif(${location},'') else location end,
+        notes=case when ${operation}='edit' then nullif(${notes},'') else notes end,
+        clinician_name=case when ${operation}='edit' and ${hasClinician} then nullif(${clinician},'') else clinician_name end,
+        facility_name=case when ${operation}='edit' and ${hasFacility} then nullif(${facility},'') else facility_name end,
+        preparation_instructions=case when ${operation}='edit' and ${hasPreparation} then nullif(${preparation},'') else preparation_instructions end,
+        canonical_content_override=case when ${operation}='edit' then canonical_content_override||jsonb_build_object('title',${title}::text,'starts_at',((nullif(${startsLocal},'')::timestamp at time zone ${TZ}))::text,'ends_at',coalesce(((nullif(${endsLocal},'')::timestamp at time zone ${TZ}))::text,''),'location',${location}::text,'notes',${notes}::text) else canonical_content_override end,
+        transport_owner_member_id=case when ${operation}='assign' then nullif(${ownerId},'')::uuid else transport_owner_member_id end,
+        trusted_driver_id=case when ${operation}='assign' then nullif(${trustedDriverId},'')::uuid else trusted_driver_id end,
+        transport_status=case when ${operation}='accept' then 'confirmed' when ${operation}='assign' then case when ${ownerId}<>'' or ${trustedDriverId}<>'' then 'assigned' else 'unassigned' end when ${operation}='complete' and (transport_owner_member_id is not null or trusted_driver_id is not null) then 'completed' else transport_status end,
+        status=case when ${operation} in ('cancel','delete') then 'canceled' when ${operation}='complete' then 'completed' when ${operation} in ('reopen','restore') then 'confirmed' else status end,
+        canonical_status_override=case when ${operation} in ('cancel','delete') then 'canceled' when ${operation}='complete' then 'completed' when ${operation} in ('reopen','restore') then null else canonical_status_override end,
+        deleted_at=case when ${operation}='delete' then now() when ${operation}='restore' then null else deleted_at end,
+        deleted_by_member_id=case when ${operation}='delete' then ${member.id}::uuid when ${operation}='restore' then null else deleted_by_member_id end,
+        sync_status=case when ${operation} in ('edit','cancel','reopen','restore') and (appointment_type is not null or external_event_id is not null) then 'pending' else sync_status end,
+        last_sync_error=case when ${operation} in ('edit','cancel','reopen','restore') then null else last_sync_error end,
+        sync_retry_at=case when ${operation} in ('edit','cancel','reopen','restore') then null else sync_retry_at end,
+        created_by_member_id=coalesce(created_by_member_id,${member.id}::uuid),
+        last_modified_by_member_id=${member.id}::uuid,
+        last_modified_session_id=${member.session_id}::uuid,
+        last_calendar_action_id=${actionRows[0].id}::uuid,
+        revision=revision+1,
+        updated_at=now()
+      where id=${itemId}::uuid
+        and household_id=${member.household_id}::uuid
+        and revision=${expectedRevision}::bigint
+        and ((${operation}='restore' and deleted_at is not null) or (${operation}<>'restore' and deleted_at is null))
+        and (visibility<>'private' or owner_member_id=${member.id}::uuid)
+      returning id,title,person_slug,starts_at,ends_at,location,status,visibility,owner_member_id,kind,transport_owner_member_id,trusted_driver_id,transport_status,source,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id,notes,appointment_type,clinician_name,facility_name,preparation_instructions,original_source_text,source_timezone,dedupe_key,external_provider,external_event_id,external_calendar_id,sync_status,last_sync_error,sync_retry_at,sync_attempt_count,canonical_status_override,canonical_content_override,created_by_member_id,last_modified_by_member_id,last_calendar_action_id,revision,deleted_at,updated_at
+    `
+    if(!updatedRows[0])throw Object.assign(new Error('That event changed somewhere else. Refresh before changing it again.'),{status:409})
+    if(['complete','cancel','delete'].includes(operation)){
+      await tx`
+        update public.tasks task
+        set status='canceled',daily_plan_state='returned',completed_at=null,updated_at=now()
+        where task.household_id=${member.household_id}::uuid
+          and task.source='pepper_medical_coordination'
+          and task.status not in ('completed','canceled')
+          and task.id in (
+            select (change.value->>'record_id')::uuid
+            from private.capture_plan_applications application
+            join public.captures capture on capture.id=application.capture_id
+            cross join lateral jsonb_array_elements(
+              coalesce(application.result->'applied_changes','[]'::jsonb)
+            ) change(value)
+            where capture.household_id=${member.household_id}::uuid
+              and change.value->>'entity_type'='task'
+              and change.value->>'medical_event_id'=${itemId}
+              and change.value->>'record_id' ~* '^[0-9a-f-]{36}$'
+          )
+      `
     }
     const summary=operation==='assign'?`${item.title} driver changed.`:operation==='edit'?`${item.title} appointment details were updated.`:operation==='delete'?`${item.title} was deleted from Pepper.`:`${item.title} was ${operation==='reopen'||operation==='restore'?'restored':operation+'ed'}.`
     const auditType=operation==='edit'?'event_edit':operation==='delete'?'event_delete':`event_${operation}`
@@ -756,9 +987,12 @@ async function updateFamilyItem(member:any,body:any){
       if(unresolved[0])throw Object.assign(new Error('Pepper could not resolve the ride after assigning that driver.'),{status:409})
       transportConsequenceResolved=true
     }
-    const updatedRows=await tx<any[]>`select id,title,person_slug,starts_at,ends_at,location,status,visibility,owner_member_id,kind,transport_owner_member_id,trusted_driver_id,transport_status,source,notes,canonical_status_override,canonical_content_override,deleted_at,updated_at from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
-    return {ok:true,item_type:itemType,id:itemId,operation,item:updatedRows[0],transport_consequence_resolved:transportConsequenceResolved}
+    return {ok:true,item_type:itemType,id:itemId,operation,item:eventWithRevision(updatedRows[0]),transport_consequence_resolved:transportConsequenceResolved}
   })
+  if(itemType!=='event'||result.idempotent_replay||!['edit','cancel','reopen','restore'].includes(operation))return result
+  const calendarSync=await syncPublishedAppointment(member,result.item,operation)
+  const currentRows=await sql<any[]>`select id,title,person_slug,starts_at,ends_at,location,status,visibility,owner_member_id,kind,transport_owner_member_id,trusted_driver_id,transport_status,source,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id,notes,appointment_type,clinician_name,facility_name,preparation_instructions,original_source_text,source_timezone,dedupe_key,external_provider,external_event_id,external_calendar_id,sync_status,last_sync_error,sync_retry_at,sync_attempt_count,canonical_status_override,canonical_content_override,created_by_member_id,last_modified_by_member_id,last_calendar_action_id,revision,deleted_at,updated_at from public.events where id=${itemId}::uuid and household_id=${member.household_id}::uuid`
+  return {...result,item:eventWithRevision(currentRows[0]||result.item),calendar_sync:calendarSync}
 }
 async function sectionState(member:any,section:string,headers:any,token:string){
   if(section==='chores')return {chores:await choreState(member)}
@@ -787,23 +1021,26 @@ async function sectionState(member:any,section:string,headers:any,token:string){
   }
   throw Object.assign(new Error('Unknown Pepper section.'),{status:400})
 }
-async function memberDayPlan(member:any,headers:any){
+async function memberDayPlan(member:any,_headers:any){
   const today=dateLA()
-  const [bounds,tasks,events,meals,email]=await Promise.all([
+  const [bounds,tasks,events,meals,emailRows]=await Promise.all([
     sql<any[]>`select now() as now,(${today}::date at time zone ${TZ}) as day_start,((${today}::date+1) at time zone ${TZ}) as day_end`,
     sql<any[]>`
-      select id,title,status,due_at,priority,area,project,classification,tags,next_action,source
+      select id,title,status,due_at,priority,area,project,classification,tags,next_action,source,(to_jsonb(tasks)->>'source_url') as source_url,(to_jsonb(tasks)->>'source_capture_id') as source_capture_id,
+        importance,urgency,deadline_type,due_date_confidence,waiting_on,waiting_follow_up_at,
+        blocked,snoozed_until,dismissed_for_date::text,manually_pinned,daily_plan_state,
+        priority_score,priority_reason,estimated_minutes
       from public.tasks
       where household_id=${member.household_id}::uuid
         and deleted_at is null
         and owner_member_id=${member.id}::uuid
         and status in ('open','in_progress','on_hold')
         and visibility in ('household','private')
-      order by updated_at desc
-      limit 160
+      order by manually_pinned desc,priority_score desc,updated_at desc
+      limit 500
     `,
     sql<any[]>`
-      select id,title,starts_at,ends_at,location,person_slug,kind
+      select id,title,starts_at,ends_at,location,person_slug,kind,appointment_type,source,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id
       from public.events
       where household_id=${member.household_id}::uuid
         and deleted_at is null
@@ -832,10 +1069,15 @@ async function memberDayPlan(member:any,headers:any){
       order by mp.updated_at desc
       limit 1
     `,
-    proxy(INTEGRATIONS,headers,{action:'gmail_digest'}),
+    sql<any[]>`select status,last_successful_scan_at,last_attempted_scan_at,gmail_watch_expiration,
+      last_scan_message_count,last_scan_relevant_count,last_scan_records_created,last_scan_needs_review,last_error
+      from public.integration_connections
+      where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid and provider='gmail'
+      limit 1`,
   ])
   const clock=bounds[0]||{now:new Date().toISOString(),day_start:new Date().toISOString(),day_end:new Date(Date.now()+86400000).toISOString()}
-  const emailMessages=email.ok&&Array.isArray(email.data?.messages)?email.data.messages:[]
+  const email=emailRows[0]||null
+  const emailStatus=email?connectionHealth({storedState:email.status,lastSuccessfulScanAt:email.last_successful_scan_at,lastAttemptedScanAt:email.last_attempted_scan_at,watchExpiration:email.gmail_watch_expiration}):'not_connected'
   const plan=buildDailyPlan({
     now:new Date(clock.now).toISOString(),
     dayStart:new Date(clock.day_start).toISOString(),
@@ -844,21 +1086,25 @@ async function memberDayPlan(member:any,headers:any){
     tasks,
     events,
     meals,
-    emails:emailMessages,
+    emails:[],
   })
   return {
     ok:true,
     plan:{
       ...plan,
       email:{
-        status:email.ok?String(email.data?.status||'connected'):'unavailable',
-        scanned:Number(email.data?.scanned||0),
-        error:email.ok?null:String(email.data?.error||'Email could not be checked.'),
+        status:emailStatus,
+        scanned:Number(email?.last_scan_message_count||0),
+        relevant:Number(email?.last_scan_relevant_count||0),
+        records_created:Number(email?.last_scan_records_created||0),
+        needs_review:Number(email?.last_scan_needs_review||0),
+        last_successful_scan_at:email?.last_successful_scan_at||null,
+        error:email?.last_error||null,
       },
     },
   }
 }
-Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.6',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','day_plan','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','item_restore','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','trusted_driver_save','trusted_driver_remove','personal_task_create','capture_undo','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
+Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.7',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','day_plan','day_plan_task_action','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','item_restore','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','trusted_driver_save','trusted_driver_remove','personal_task_create','capture_undo','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
 if(action==='pin_setup'){
   const setupToken=String(b.setup_token||'').trim()
@@ -879,6 +1125,11 @@ if(action==='state'){
   if(!core.ok)return json(req,core.data,core.status)
   if(progressive){
     const state=core.data?.state||{}
+    const reviews=await proxy(TELL,headers,{action:'review_list'})
+    if(reviews.ok)state.captures=reviews.data.reviews
+    const dinner=await mealState(member)
+    state.meals=dinner.meals
+    if(Array.isArray(state.events))state.events=state.events.map(eventWithRevision)
     state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[]
     state.weeklyInsight=ir.ok?ir.data?.insight||null:null
     state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}}
@@ -886,13 +1137,13 @@ if(action==='state'){
     state.rituals=rr.ok?rr.data:null
     state.frontSeat=frontSeat
     state.trustedDrivers=trustedDrivers
-    state.apiVersion='2.6'
+    state.apiVersion='2.7'
     state.progressive=true
     return json(req,{state})
   }
   const [hr,calendarResult,chores,mealPlan,memberProfiles,monthEvents]=await Promise.all([proxy(HORIZON,headers,{}),proxy(CALENDAR,headers,{action:'status',session_token:token}),choreState(member),mealState(member),setupProfiles(member),monthState(member)])
   const csr=calendarResult.ok?calendarResult.data:{...await calendarState(member),configured:false,last_error:calendarResult.data?.error||'Calendar service is unavailable.'}
-  const state=core.data?.state||{};state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;state.meals=mealPlan.meals;state.groceries=mealPlan.groceries;state.mealNeeds=mealPlan.mealNeeds;state.memberProfiles=memberProfiles;state.frontSeat=frontSeat;state.trustedDrivers=trustedDrivers;state.monthEvents=monthEvents;
+  const state=core.data?.state||{};if(Array.isArray(state.events))state.events=state.events.map(eventWithRevision);state.consequences=cr.ok&&Array.isArray(cr.data?.consequences)?cr.data.consequences:[];state.weeklyInsight=ir.ok?ir.data?.insight||null:null;state.horizon=hr.ok?hr.data:null;state.calendarStatus=csr;state.integrations=xr.ok?xr.data:{gmail:{configured:false,connected:false},apple_health:{connected:false,latest:null}};state.preparation=prep.ok?prep.data:{now:[],watching:[]};state.rituals=rr.ok?rr.data:null;state.chores=chores;state.meals=mealPlan.meals;state.groceries=mealPlan.groceries;state.mealNeeds=mealPlan.mealNeeds;state.memberProfiles=memberProfiles;state.frontSeat=frontSeat;state.trustedDrivers=trustedDrivers;state.monthEvents=monthEvents;
   if(state.horizon&&prep.ok&&Array.isArray(prep.data?.now)){
     const existing=Array.isArray(state.horizon.readiness)?state.horizon.readiness:[]
     const fingerprints=new Set(existing.map((x:any)=>`${x.type}|${x.title}|${x.summary}`))
@@ -900,13 +1151,16 @@ if(action==='state'){
     state.horizon.readiness=[...additions,...existing]
     if(state.horizon.coverage)state.horizon.coverage.preparation_now=additions.length
   }
-  state.apiVersion='2.6';return json(req,{state})
+  const reviews=await proxy(TELL,headers,{action:'review_list'})
+  if(reviews.ok)state.captures=reviews.data.reviews
+  state.apiVersion='2.7';return json(req,{state})
 }
 if(action==='section_state'){
   const section=String(b.section||'')
   return json(req,{section,state:await sectionState(member,section,headers,token)})
 }
 if(action==='day_plan'){return json(req,await memberDayPlan(member,headers))}
+if(action==='day_plan_task_action'){return json(req,await updateDailyPlanTask(member,b))}
 if(action==='member_state'){return json(req,{state:await memberState(member,String(b.member_slug||''))})}
 if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}
 if(action==='member_setup_save'){return json(req,await saveMemberSetup(member,b))}
@@ -926,10 +1180,16 @@ if(action==='conflict_resolve'){return json(req,await resolveConflict(member,b))
 if(action==='tell'&&wantsMealPlanRefresh(String(b.text||''))){const result=await generateMealPlan(member,{start_date:dateLA(),refresh:true,instruction:b.text});return json(req,{...result,reply:`I refreshed the next seven dinners and rebuilt the shopping list as ${result.grocery_count} unique items.`})}
 if(action==='tell'){const r=await proxy(TELL,headers,{action:'tell',text:b.text,source:b.source,idempotency_key:b.idempotency_key});return json(req,r.data,r.status)}
 if(action==='capture_reviews'){const r=await proxy(TELL,headers,{action:'review_list',limit:b.limit});return json(req,r.data,r.status)}
+if(action==='capture_review_decide'){const r=await proxy(TELL,headers,{action:'review_decide',capture_id:b.capture_id,decision:b.decision});return json(req,r.data,r.status)}
 if(action==='capture_review_retry'){const r=await proxy(TELL,headers,{action:'review_retry',capture_id:b.capture_id,clarification_text:b.clarification_text,idempotency_key:b.idempotency_key});return json(req,r.data,r.status)}
 if(action==='capture_undo'){const r=await proxy(TELL,headers,{action:'undo',capture_id:b.capture_id});return json(req,r.data,r.status)}
 if(action==='capture_review_resolve'){const r=await proxy(TELL,headers,{action:'review_resolve',capture_id:b.capture_id,idempotency_key:b.idempotency_key,resolution:b.resolution});return json(req,r.data,r.status)}
-if(['task','grocery','reflect'].includes(action)){const r=await proxy(TARGET,headers,b);return json(req,r.data,r.status)}
+if(action==='task'||action==='grocery'){
+  if(!['open','completed'].includes(b.status))return json(req,{error:'Invalid completion state.'},400)
+  const operation=b.status==='completed'?'complete':'reopen'
+  return json(req,action==='task'?await updateFamilyItem(member,{...b,item_type:'task',operation}):await updateGrocery(member,{...b,operation}))
+}
+if(action==='reflect'){const r=await proxy(TARGET,headers,b);return json(req,r.data,r.status)}
 if(action==='reflection_explore'){const r=await proxy(REFLECTIONS,headers,{action:'explore',insight_id:b.insight_id});return json(req,r.data,r.status)}
 if(action==='reflection_weekly'){const r=await proxy(REFLECTIONS,headers,{action:'weekly'});return json(req,r.data,r.status)}
 if(action==='preparation_list'){const r=await proxy(PREPARATION,headers,{action:'list'});return json(req,r.data,r.status)}

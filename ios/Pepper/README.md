@@ -21,11 +21,13 @@ Before archiving, the stable `pepper-family-beta.vercel.app` host must point at 
 
 ## Apple Health
 
-The native shell requests read-only access to today's step count and exercise
-minutes when the member taps Connect or Refresh in Pepper. The shell sends those
-two approved totals to the existing member-scoped One Brain health ingest endpoint.
-Pepper does not request write access and does not expose health totals to other
-household profiles.
+Apple Health is handled by the native SwiftUI Health Bridge. The Pepper web page
+can open that native screen, but it never receives a HealthKit object, permission,
+pairing token, or direct HealthKit result. The bridge requests read-only access to
+today's step count and exercise minutes, stores its member-scoped pairing in the
+iPhone Keychain, and sends those two approved totals directly to the One Brain
+health ingest endpoint. Pepper never requests HealthKit write access and does not
+expose health totals to other household profiles.
 
 ## Face ID
 
