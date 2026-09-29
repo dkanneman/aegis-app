@@ -1712,7 +1712,8 @@ export function PepperClient() {
           prompt: exchange.prompt,
           mode: "action",
           reply: result.reply || "Undone. Pepper restored the previous plan.",
-          undoable: false,
+          undoable: result.undoable === true,
+          ...(result.undoable === true ? { undo: exchange.undo } : {}),
         });
         void Promise.all([
           load(token),
@@ -1760,6 +1761,11 @@ export function PepperClient() {
         reply: "Undone. Pepper restored the previous plan.",
         viewItem: before,
         undoable: false,
+      });
+    } catch (error) {
+      setPepperExchange({
+        ...exchange,
+        reply: error instanceof Error ? error.message : "Pepper could not confirm Undo. No success has been recorded.",
       });
     } finally {
       setBusy(false);

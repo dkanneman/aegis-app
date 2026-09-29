@@ -400,7 +400,7 @@ function stateText(state: Record<string, unknown> | null, key: string) {
 }
 
 async function undoCapture(m: Member, captureId: string) {
-  return sql.begin(async (tx) => {
+  const committed = await sql.begin(async (tx) => {
     await tx`select pg_catalog.set_config('pepper.actor_member_id',${m.id}::text,true)`
     const captures = await tx<{ id: string; original_text: string }[]>`
       select id,original_text
@@ -420,13 +420,6 @@ async function undoCapture(m: Member, captureId: string) {
       where capture_id=${captureId}::uuid and event_type='capture_undone'
       limit 1
     `
-    if (priorUndo[0]) {
-      return {
-        status: 'undone', mode: 'action', reply: 'That change was already undone.',
-        applied_changes: [], undoable: false, idempotent_replay: true,
-      }
-    }
-
     const changes = await tx<StateChangeRow[]>`
       select entity_type,entity_id,
         (jsonb_agg(before_state order by id asc)->0) as before_state,
@@ -442,10 +435,15 @@ async function undoCapture(m: Member, captureId: string) {
       throw Object.assign(new Error('This Pepper response did not create a reversible change.'), { status: 409 })
     }
 
+    const eventIds = changes.filter(change => change.entity_type === 'event').map(change => change.entity_id)
+    if (priorUndo[0]) return { eventIds, replay: true }
+
     for (const change of changes) {
       if (!UUID.test(change.entity_id) || !change.after_state) {
         throw Object.assign(new Error('Pepper could not verify the original change.'), { status: 409 })
       }
+      // Bind as text before the SQL cast: the driver's timestamp serializer
+      // otherwise truncates PostgreSQL microseconds through a JavaScript Date.
       const expectedUpdatedAt = stateText(change.after_state, 'updated_at')
       const expectedRevision = change.entity_type === 'event'
         ? Number(change.after_state.revision)
@@ -474,7 +472,7 @@ async function undoCapture(m: Member, captureId: string) {
                 updated_at=now()
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and updated_at=${expectedUpdatedAt}::text::timestamptz
               returning id
             `
           : await tx<{ id: string }[]>`
@@ -483,7 +481,7 @@ async function undoCapture(m: Member, captureId: string) {
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
                 and deleted_at is null
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and updated_at=${expectedUpdatedAt}::text::timestamptz
               returning id
             `
       } else if (change.entity_type === 'event') {
@@ -523,6 +521,7 @@ async function undoCapture(m: Member, captureId: string) {
                 last_modified_by_member_id=${m.id}::uuid,
                 last_modified_session_id=${m.session_id}::uuid,
                 last_calendar_action_id=${actionRows[0].id}::uuid,
+                sync_status='pending',
                 revision=revision+1,
                 updated_at=now()
               where id=${change.entity_id}::uuid
@@ -532,10 +531,11 @@ async function undoCapture(m: Member, captureId: string) {
             `
           : await tx<{ id: string }[]>`
               update public.events set status='canceled',canonical_status_override='canceled',
-                deleted_at=now(),deleted_by_member_id=${m.id}::uuid,
+                deleted_by_member_id=${m.id}::uuid,
                 last_modified_by_member_id=${m.id}::uuid,
                 last_modified_session_id=${m.session_id}::uuid,
                 last_calendar_action_id=${actionRows[0].id}::uuid,
+                sync_status='pending',
                 revision=revision+1,updated_at=now()
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
@@ -556,14 +556,14 @@ async function undoCapture(m: Member, captureId: string) {
                 updated_at=now()
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and updated_at=${expectedUpdatedAt}::text::timestamptz
               returning id
             `
           : await tx<{ id: string }[]>`
               delete from public.groceries
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and updated_at=${expectedUpdatedAt}::text::timestamptz
               returning id
             `
       } else {
@@ -579,14 +579,14 @@ async function undoCapture(m: Member, captureId: string) {
                 updated_at=now()
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and updated_at=${expectedUpdatedAt}::text::timestamptz
               returning id
             `
           : await tx<{ id: string }[]>`
               delete from public.meal_plan
               where id=${change.entity_id}::uuid
                 and household_id=${m.household_id}::uuid
-                and updated_at=${expectedUpdatedAt}::timestamptz
+                and updated_at=${expectedUpdatedAt}::text::timestamptz
               returning id
             `
       }
@@ -607,11 +607,36 @@ async function undoCapture(m: Member, captureId: string) {
         'capture_undone','capture',${captureId},${`Undid: ${capture.original_text.slice(0, 400)}`}
       )
     `
-    return {
-      status: 'undone', mode: 'action', reply: 'Undone. Pepper restored the previous family plan.',
-      applied_changes: [], undoable: false,
-    }
+    return { eventIds, replay: false }
   })
+  const deliveries: Array<Record<string, unknown>> = []
+  for (const eventId of committed.eventIds) {
+    // Retry only this capture's reversal, never a newer user's mutation.
+    const rows = await sql<Array<{ sync_status: string; visibility: string }>>`
+      select e.sync_status,e.visibility from public.events e
+      join private.calendar_event_mutation_requests mutation on mutation.id=e.last_calendar_action_id
+      where e.id=${eventId}::uuid and e.household_id=${m.household_id}::uuid
+        and mutation.actor_member_id=${m.id}::uuid and mutation.after_revision=e.revision
+        and mutation.action_key like ${`%:undo:${captureId}:${eventId}`}
+    `
+    if (!rows[0]) throw Object.assign(new Error('This event changed after Undo. Refresh before retrying.'), {status:409})
+    if (rows[0].visibility !== 'household') continue
+    if (committed.replay && rows[0].sync_status === 'synced') {
+      deliveries.push({ok:true,status:'synced',event_id:eventId}); continue
+    }
+    try { deliveries.push(await invokeCalendarPublisher(captureId,eventId)) }
+    catch {
+      await sql`update public.events set sync_status='retry_required',last_sync_error='Undo saved in Pepper; Calendar cancellation needs a retry.',sync_retry_at=now()+interval '15 minutes' where id=${eventId}::uuid and household_id=${m.household_id}::uuid`
+      deliveries.push({ok:false,status:'retry_required',event_id:eventId})
+    }
+  }
+  const complete = deliveries.every(delivery => delivery.ok === true && delivery.status === 'synced')
+  return {
+    status:complete?'undone':'retry_required',mode:'action',local_reversal_confirmed:true,
+    reply:complete?'Undone. Pepper restored the previous family plan.':'Undone in Pepper. Google Calendar reversal is pending or needs a retry.',
+    applied_changes:[],undoable:!complete,idempotent_replay:committed.replay,
+    delivery_complete:complete,calendar_delivery:deliveries,
+  }
 }
 
 async function appendCapture(m: Member, text: string, source: string, dedupeKey: string | null) {
@@ -1278,7 +1303,7 @@ async function interpretCapture(m: Member, text: string) {
         operation: existingAppointment[0] ? 'event.update' : 'event.create', record_id: eventId,
         title: intent.title, person_slug: patientSlug,
         starts_at: intent.time, ends_at: endsAt,
-        ...(appointment?.location ? { location: appointment.location } : {}),
+        ...(appointment?.location || intent.location ? { location: appointment?.location || intent.location } : {}),
         visibility: intent.private ? 'private' : 'household',
         owner_member_id: intent.private ? m.id : null,
         kind: appointment ? 'appointment' : 'event', source: 'pepper',

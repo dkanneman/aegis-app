@@ -43,6 +43,67 @@ async function success(body, session = adult) {
 }
 
 const proposalSessions = [['child', child], ['teen', teen]]
+const failedReleaseRequest = 'Create a shared family event titled [PEPPER TEST] Release verification 20260929 at 4:00 PM on October 15, 2026 in America/Los_Angeles. Location: Synthetic test room.'
+test('release regression: exact family event request creates one event, never a task', async () => {
+  const result = await success({action:'tell',text:failedReleaseRequest,idempotency_key:randomUUID()})
+  assert.equal(query(`select count(*) from public.state_changes where capture_id=${q(result.capture_id)} and entity_type='task'`),'0')
+  const events=JSON.parse(query(`select coalesce(json_agg(json_build_object('title',title,'starts_at',starts_at,'location',location,'visibility',visibility)),'[]') from public.events where id::text in (select entity_id from public.state_changes where capture_id=${q(result.capture_id)} and entity_type='event')`))
+  assert.equal(events.length,1)
+  assert.equal(events[0].title,'[PEPPER TEST] Release verification 20260929')
+  assert.equal(new Date(events[0].starts_at).toISOString(),'2026-10-15T23:00:00.000Z')
+  assert.equal(events[0].location,'Synthetic test room')
+  assert.equal(events[0].visibility,'household')
+})
+test('release regression: exact failed capture can be undone and replayed', async () => {
+  await fetch(new URL('/__test/publisher',endpoint),{method:'POST',body:JSON.stringify({mode:'success'})})
+  try {
+  const result=await success({action:'tell',text:failedReleaseRequest,idempotency_key:randomUUID()})
+  const id=query(`select entity_id from public.state_changes where capture_id=${q(result.capture_id)} and entity_type='event' limit 1`)
+  const before=JSON.parse(await (await fetch(new URL('/__test/publisher',endpoint))).text()).calls.length
+  const undo=await success({action:'capture_undo',capture_id:result.capture_id})
+  assert.equal(undo.status,'undone')
+  assert.equal(query(`select status='canceled' and sync_status='synced' from public.events where id=${q(id)}`),'t')
+  assert.equal((await success({action:'capture_undo',capture_id:result.capture_id})).idempotent_replay,true)
+  const calls=(await (await fetch(new URL('/__test/publisher',endpoint))).json()).calls
+  assert.equal(calls.length,before+1)
+  assert.equal(calls.at(-1).event_id,id)
+  } finally {await fetch(new URL('/__test/publisher',endpoint),{method:'POST',body:JSON.stringify({mode:'unavailable'})})}
+})
+test('release regression: failed Calendar reversal remains pending and retries without another local mutation', async () => {
+  const result=await success({action:'tell',text:failedReleaseRequest,idempotency_key:randomUUID()})
+  const id=query(`select entity_id from public.state_changes where capture_id=${q(result.capture_id)} and entity_type='event' limit 1`)
+  const undo=await success({action:'capture_undo',capture_id:result.capture_id})
+  assert.equal(undo.status,'retry_required')
+  assert.equal(undo.delivery_complete,false)
+  assert.equal(undo.undoable,true)
+  assert.equal(undo.local_reversal_confirmed,true)
+  const revision=query(`select revision from public.events where id=${q(id)}`)
+  await fetch(new URL('/__test/publisher',endpoint),{method:'POST',body:JSON.stringify({mode:'success'})})
+  try {
+    assert.equal((await success({action:'capture_undo',capture_id:result.capture_id})).status,'undone')
+    assert.equal(query(`select revision from public.events where id=${q(id)}`),revision)
+  } finally {await fetch(new URL('/__test/publisher',endpoint),{method:'POST',body:JSON.stringify({mode:'unavailable'})})}
+})
+test('release regression: legitimate task Undo is exact, authorized and repeatable', async () => {
+  const result=await success({action:'tell',text:'Create a checklist for the family outing',idempotency_key:randomUUID()})
+  const id=query(`select entity_id from public.state_changes where capture_id=${q(result.capture_id)} and entity_type='task' limit 1`)
+  assert.ok(id)
+  assert.equal((await call({action:'capture_undo',capture_id:result.capture_id},other)).status,404)
+  assert.equal((await call({action:'capture_undo',capture_id:result.capture_id},child)).status,404)
+  const undo=await success({action:'capture_undo',capture_id:result.capture_id})
+  assert.equal(undo.status,'undone')
+  assert.equal(query(`select status='canceled' and deleted_at is not null from public.tasks where id=${q(id)}`),'t')
+  assert.equal((await success({action:'capture_undo',capture_id:result.capture_id})).idempotent_replay,true)
+  assert.equal(query(`select count(*) from public.audit_log where capture_id=${q(result.capture_id)} and event_type='capture_undone'`),'1')
+})
+test('release regression: a changed task fails reversal without false success', async () => {
+  const result=await success({action:'tell',text:'Create a checklist for another family outing',idempotency_key:randomUUID()})
+  const id=query(`select entity_id from public.state_changes where capture_id=${q(result.capture_id)} and entity_type='task' limit 1`)
+  query(`update public.tasks set title='Newer authorized change',updated_at=clock_timestamp() where id=${q(id)}`)
+  assert.equal((await call({action:'capture_undo',capture_id:result.capture_id})).status,409)
+  assert.equal(query(`select title from public.tasks where id=${q(id)}`),'Newer authorized change')
+  assert.equal(query(`select count(*) from public.audit_log where capture_id=${q(result.capture_id)} and event_type='capture_undone'`),'0')
+})
 for (const [role, child] of proposalSessions) {
 test(`${role} calendar proposals and their retries never claim a saved event`, async () => {
   const key = randomUUID()

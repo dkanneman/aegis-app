@@ -3,9 +3,34 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
 import vm from 'node:vm'
-import { classifyPiece, coordinationTargets, dayBounds } from '../supabase/functions/pepper-tell-v2/logic.ts'
+import { classifyPiece, coordinationTargets, dayBounds, splitCapture } from '../supabase/functions/pepper-tell-v2/logic.ts'
 
 const today = '2026-09-28'
+test('exact release request keeps explicit shared event and its location together', () => {
+  const request='Create a shared family event titled [PEPPER TEST] Release verification 20260929 at 4:00 PM on October 15, 2026 in America/Los_Angeles. Location: Synthetic test room.'
+  const parts=splitCapture(request)
+  assert.equal(parts.length,1)
+  const event=classifyPiece(parts[0],'2026-09-29')
+  assert.equal(event.type,'event.create')
+  assert.equal(event.title,'[PEPPER TEST] Release verification 20260929')
+  assert.equal(new Date(event.time).toISOString(),'2026-10-15T23:00:00.000Z')
+  assert.equal(event.location,'Synthetic test room')
+  assert.equal(event.private,false)
+  assert.equal(classifyPiece('Create a checklist for the family outing',today).type,'task')
+  assert.equal(classifyPiece('Create a shared family event',today).type,'ambiguous')
+  assert.equal(splitCapture('Create a checklist. Location: Synthetic test room.').length,2)
+})
+test('capture Undo preserves microseconds and reports failed or pending reversal visibly', () => {
+  const tell=readFileSync(new URL('../supabase/functions/pepper-tell-v2/index.ts',import.meta.url),'utf8')
+  const undo=tell.slice(tell.indexOf('async function undoCapture'),tell.indexOf('async function appendCapture'))
+  assert.equal((undo.match(/updated_at=\$\{expectedUpdatedAt\}::text::timestamptz/g)||[]).length,6)
+  assert.ok(undo.includes('invokeCalendarPublisher(captureId,eventId)'))
+  assert.ok(undo.includes("status:complete?'undone':'retry_required'"))
+  const ui=readFileSync(new URL('../app/pepper/pepper-client.tsx',import.meta.url),'utf8')
+  const uiUndo=ui.slice(ui.indexOf('async function undoPepperExchange'),ui.indexOf('async function undoAutomaticCapture'))
+  assert.ok(uiUndo.includes('undoable: result.undoable === true'))
+  assert.ok(uiUndo.includes('catch (error)'))
+})
 test('profile switch clears stale proposal feedback and Inbox distinguishes approval from delivery', () => {
   const source = readFileSync(new URL('../app/pepper/pepper-client.tsx', import.meta.url), 'utf8')
   const logout = source.slice(source.indexOf('async function logout()'), source.indexOf('async function deleteAccount('))

@@ -47,6 +47,7 @@ const MONTHS = [
 const MONTH_DATE_SOURCE = String.raw`\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?\b`
 const CLOCK_TIME_SOURCE = String.raw`\b(?:at\s+)?(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*(?:o['’]?clock\s*)?(a\.?m\.?|p\.?m\.?)\b`
 const FAMILY_MEMBER_SOURCE = 'danielle|elle|matt|lyra|chloe|posey'
+const EVENT_COMMAND = /^(?:please\s+)?(?:(?:add|create)\s+(?:an?\s+)?(?:(?:shared|family|household|calendar)\s+)*|new\s+)event\b\s*[-:–—]?\s*/i
 
 function validCalendarDate(year: number, month: number, day: number) {
   const value = new Date(Date.UTC(year, month - 1, day))
@@ -189,10 +190,17 @@ export function splitCapture(text: string) {
     /\b(Dr|Mr|Mrs|Ms|Prof|Sr|Jr|St|Ave|Rd|Blvd)\./gi,
     '$1__PEPPER_DOT__',
   )
-  return protectedText
+  const pieces = protectedText
     .split(/(?:[.;]+|\b(?:and\s+)?then\b|\band\s+(?=(?:add|create|schedule|assign|change|update|cancel|delete|complete|mark|set|move|order|buy|call|email|pick up|return|confirm|look into|find|book|pay|upload|review|send|get|bring)\b))/i)
     .map((part) => part.replace(/__PEPPER_DOT__/g, '.').trim())
     .filter(Boolean)
+  return pieces.reduce<string[]>((result, piece) => {
+    const previous = result.at(-1)
+    if (previous && EVENT_COMMAND.test(previous) && /^location\s*:/i.test(piece)) {
+      result[result.length - 1] = `${previous}. ${piece}`
+    } else result.push(piece)
+    return result
+  }, [])
 }
 
 export function hasAppointmentLanguage(piece: string) {
@@ -215,18 +223,18 @@ export function reviewRetryText(originalText: string, clarificationText: string)
 function cleanEventTitle(piece: string) {
   let title = piece
     .replace(/^please\s+/i, '')
-    .replace(/^(?:(?:add|create)\s+(?:an?\s+)?(?:calendar\s+)?|new\s+)event\s*[-:–—]?\s*/i, '')
+    .replace(EVENT_COMMAND, '')
     .replace(/^(?:add|create|schedule|put|make|book)\s+(?:an?\s+)?/i, '')
     .replace(/\s+(?:on|to)\s+(?:(?:the|my)\s+)?calendar\b/gi, ' ')
     .replace(/^(?:on|to)\s+(?:(?:the|my)\s+)?calendar\s*[-:–—]?\s*/i, '')
-    .replace(new RegExp(MONTH_DATE_SOURCE, 'ig'), ' ')
+    .replace(new RegExp(String.raw`(?:\bon\s+)?${MONTH_DATE_SOURCE}`, 'ig'), ' ')
     .replace(/\b20\d{2}-\d{2}-\d{2}\b/g, ' ')
     .replace(/\b(?:0?[1-9]|1[0-2])\/(?:0?[1-9]|[12]\d|3[01])(?:\/(?:\d{2}|20\d{2}))?\b/g, ' ')
     .replace(/\b(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, ' ')
     .replace(/\b(?:today|tonight|tomorrow)\b/gi, ' ')
     .replace(new RegExp(CLOCK_TIME_SOURCE, 'ig'), ' ')
     .replace(/\b(?:at\s+)?(?:noon|midnight)\b/gi, ' ')
-    .replace(/\b(?:PDT|PST|Pacific(?:\s+(?:Standard|Daylight))?\s+Time|America\/Los_Angeles)\b/gi, ' ')
+    .replace(/\b(?:in\s+)?(?:PDT|PST|Pacific(?:\s+(?:Standard|Daylight))?\s+Time|America\/Los_Angeles)\b/gi, ' ')
     .replace(/\b(?:called|titled|named)\s+/i, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -409,6 +417,7 @@ export type PieceIntent =
     title: string
     personSlug: string | null
     time: string
+    location?: string
     private: boolean
     appointment?: ParsedAppointment
   }
@@ -426,6 +435,11 @@ export type PieceIntent =
   | { type: 'ambiguous'; text: string; unresolvedFields?: string[] }
 
 export function classifyPiece(piece: string, date = localDate(), members?: Array<{ slug: string; display_name: string }>): PieceIntent {
+  const locatedEvent = piece.match(/^(.+?)\.\s*Location\s*:\s*(.+?)\.?$/i)
+  if (locatedEvent && EVENT_COMMAND.test(locatedEvent[1])) {
+    const intent = classifyPiece(locatedEvent[1], date, members)
+    return intent.type === 'event.create' ? { ...intent, location: locatedEvent[2].trim() } : intent
+  }
   const politeCommand = piece.match(
     /^(?:can|could|would)\s+you\s+(?:please\s+)?((?:add|create|schedule|assign|change|update|cancel|delete|complete|mark|set|move)\b.+?)\??$/i,
   )
@@ -446,7 +460,7 @@ export function classifyPiece(piece: string, date = localDate(), members?: Array
   const normalized = piece.trim().toLowerCase()
   const eventDate = dateFromText(piece, date)
   const time = timeFromText(piece, eventDate?.date || date)
-  const explicitEvent = /^(?:please\s+)?(?:(?:add|create)\s+(?:an?\s+)?(?:calendar\s+)?|new\s+)event\b/i.test(piece)
+  const explicitEvent = EVENT_COMMAND.test(piece)
   const calendarEvent = /^(?:please\s+)?(?:add|create|schedule|put|make|book)\b.*\b(?:on|to)\s+(?:(?:the|my)\s+)?calendar\b/i.test(piece)
   const scheduleEvent = /^(?:please\s+)?schedule\b/i.test(piece)
   const eventCommand = explicitEvent || calendarEvent || scheduleEvent
