@@ -1,6 +1,7 @@
 "use client";
 
 import type { CSSProperties, FormEvent } from "react";
+import { PrivateSources, type PrivateSource } from "./private-sources";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlarmClock,
@@ -510,6 +511,7 @@ type PepperState = {
   horizon?: HorizonState;
   calendarStatus?: CalendarStatus;
   integrations?: {
+    sources?: Record<string, PrivateSource>;
     gmail?: {
       configured?: boolean;
       connected?: boolean;
@@ -665,6 +667,7 @@ type PepperExchange = {
 };
 
 type DayPlanItem = {
+  all_day?: boolean;
   id: string;
   record_id: string;
   kind: "task" | "chore" | "event" | "appointment" | "meal" | "email";
@@ -700,6 +703,7 @@ type DailyPlanTaskActionOptions = {
 };
 
 type DailyPlan = {
+  source_warnings?: string[];
   generated_at: string;
   date: string;
   headline: string;
@@ -1351,7 +1355,12 @@ export function PepperClient() {
   const [pinSetup, setPinSetup] = useState<PinSetupState | null>(null);
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
-  const [token, setToken] = useState("");
+  const [token, setSessionToken] = useState("");
+  const activeSessionRef = useRef("");
+  function setToken(value: string) {
+    activeSessionRef.current = value;
+    setSessionToken(value);
+  }
   const [state, setState] = useState<PepperState | null>(null);
   const [view, setView] = useState<View>("today");
   const [memberState, setMemberState] = useState<MemberState | null>(null);
@@ -1495,9 +1504,10 @@ export function PepperClient() {
     }
   }
 
-  async function refreshDayPlanFromServer(session = token) {
+  async function refreshDayPlanFromServer(session = token, refreshSources = false) {
     if (!session) return null;
-    const result = await call({ action: "day_plan" }, session);
+    const result = await call({ action: "day_plan", refresh_sources: refreshSources }, session);
+    if (activeSessionRef.current !== session) return null;
     if (!result.plan || !Array.isArray(result.plan.items)) {
       throw new Error("Pepper could not verify a complete day plan.");
     }
@@ -1530,6 +1540,7 @@ export function PepperClient() {
           { action: "section_state", section },
           session,
         );
+        if (activeSessionRef.current !== session) return;
         setState((current) =>
           current ? { ...current, ...(result.state || {}) } : current,
         );
@@ -2443,7 +2454,7 @@ export function PepperClient() {
       if (calendarConnected) {
         setView("connections");
         setCalendarConfirmation(
-          "Google Calendar connected. Pepper is planning ahead from it.",
+          "Pepper's calendar destination is connected. Select existing calendars separately under Private planning sources.",
         );
       } else if (calendarResult === "error") {
         setView("connections");
@@ -2461,6 +2472,13 @@ export function PepperClient() {
       } else if (connection === "gmail_error") {
         setView("connections");
         setCalendarConfirmation("Google email did not connect. Try again.");
+      }
+      if (connection === "gmail_authorized" || connection === "calendar_read_authorized") {
+        setView("connections");
+        setCalendarConfirmation(connection === "gmail_authorized" ? "Read-only email authorized. Select Sync now to retrieve private suggestions." : "Read-only calendar access authorized. Choose the calendars to include, then sync.");
+      } else if (connection?.startsWith("source_")) {
+        setView("connections");
+        setCalendarConfirmation("Read-only connection was not saved. Check your Pepper session, Google account and requested permissions, then reconnect.");
       }
     }, 0);
 
@@ -2807,11 +2825,11 @@ export function PepperClient() {
   }
 
   function openDayPlanItem(item: DayPlanItem) {
-    if (item.kind === "email") {
+    if (item.kind === "email" || item.record_id.startsWith("source:")) {
       if (item.external_url) {
         window.open(item.external_url, "_blank", "noopener,noreferrer");
       } else {
-        setMessage("Pepper could not open that email directly.");
+        setMessage("This private source has no direct link. Open its Google calendar or inbox.");
       }
       return;
     }
@@ -2846,7 +2864,7 @@ export function PepperClient() {
     if (fromAsk) setBusy(true);
     setMessage("Pepper is organizing tasks, chores, meals, email, and appointments…");
     try {
-      const plan = await refreshDayPlanFromServer(token);
+      const plan = await refreshDayPlanFromServer(token, true);
       if (!plan) throw new Error("Pepper could not verify a complete day plan.");
       setTell("");
       setView("today");
@@ -3941,6 +3959,8 @@ export function PepperClient() {
 
         {view === "connections" ? (
           loadedSections.has("connections") ? (
+            <>
+            {["adult_admin", "adult", "teen"].includes(state.member.role) ? <PrivateSources sources={state.integrations?.sources} call={call} ios={isPepperIOS} onChanged={async () => { await loadSection("connections", true); await refreshDayPlanAfterChange(token); }} /> : null}
             <ConnectionsPage
               calendar={calendar}
               gmail={state.integrations?.gmail}
@@ -3957,6 +3977,7 @@ export function PepperClient() {
               onFamily={() => setView("family")}
               onDeleteAccount={deleteAccount}
             />
+            </>
           ) : (
             <SectionLoading label="Checking connections" active={loadingSections.has("connections")} />
           )
@@ -4209,6 +4230,7 @@ function DayPlanPanel({
 
       {plan ? (
         <>
+          {plan.source_warnings?.map(warning => <p role="status" key={warning}>{warning}</p>)}
           {plan.conflicts.length ? (
             <div className={styles.dayPlanConflicts} role="alert">
               <strong>Resolve before the day starts</strong>
@@ -4243,7 +4265,7 @@ function DayPlanPanel({
                       className={styles.dayPlanRow}
                       onClick={() => onOpen(item)}
                     >
-                      <time>{item.scheduled_for ? time(item.scheduled_for) : "Later"}</time>
+                      <time>{item.all_day ? "All day" : item.scheduled_for ? time(item.scheduled_for) : "Later"}</time>
                       <span className={styles.dayPlanIcon} aria-hidden="true">
                         <Icon size={16} strokeWidth={1.8} />
                       </span>
@@ -4268,7 +4290,7 @@ function DayPlanPanel({
               })
             ) : (
               <div className={styles.dayPlanEmpty}>
-                Nothing needs to be scheduled from the information Pepper can verify.
+                {plan.source_warnings?.length ? "Sources are incomplete. Refresh or reconnect them before relying on an empty plan." : "No items found in the selected sources and scan window."}
               </div>
             )}
           </div>
@@ -4281,7 +4303,7 @@ function DayPlanPanel({
             <span>{plan.counts.meals || 0} meals</span>
             <span>
               {plan.email.status === "connected_and_current"
-                ? `${plan.email.scanned} emails processed in the latest background scan`
+                ? `${plan.email.scanned} private email suggestions from the latest scan`
                 : plan.email.status === "syncing"
                   ? "Email is syncing in the background"
                   : plan.email.status === "stale"
@@ -4300,7 +4322,7 @@ function DayPlanPanel({
           <span><ListTodo size={15} aria-hidden="true" /> Tasks and chores</span>
           <span><CalendarDays size={15} aria-hidden="true" /> Events and appointments</span>
           <span><Utensils size={15} aria-hidden="true" /> Today&apos;s meal</span>
-          <span><Mail size={15} aria-hidden="true" /> {emailConnected ? "Email is processed in the background" : "Connect email to include it"}</span>
+          <span><Mail size={15} aria-hidden="true" /> {emailConnected ? "Private email suggestions" : "Connect email to include it"}</span>
         </div>
       )}
     </section>
@@ -5510,12 +5532,12 @@ function ConnectionsPage({
       group: "Email and calendars",
       icon: <CalendarDays size={21} />,
       mark: "G",
-      title: "Google Calendar",
+      title: "Pepper Family calendar output",
       identifier:
-        calendarConnection?.calendar_name || "Primary Google Calendar",
+        calendarConnection?.calendar_name || "Pepper-created calendar",
       summary: calendar?.connected
-        ? "Calendar evidence is flowing into schedules, transportation, and conflict checks."
-        : "Read-only schedule evidence for events, locations, and conflicts.",
+        ? "Approved shared events are delivered only to Pepper's dedicated calendar."
+        : "Connect Pepper's dedicated destination for approved shared events.",
       state: calendar?.connected
         ? "connected"
         : calendar?.configured
@@ -5757,7 +5779,7 @@ function ConnectionsPage({
       </section>
 
       {groups.map((group) => {
-        const groupProviders = providers.filter((provider) => provider.group === group);
+        const groupProviders = providers.filter((provider) => provider.group === group && provider.id !== "gmail");
         return (
           <section className={styles.connectionGroup} key={group}>
             <header className={styles.connectionGroupHeader}>

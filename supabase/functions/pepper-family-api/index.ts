@@ -8,6 +8,7 @@ import {
 } from './day-planning.ts'
 import {publicAppointmentSyncResult} from '../aegis-bridge-worker/logic.ts'
 import {calendarMutationActionKey,calendarMutationKind,isAdultHouseholdRole,parseExpectedEventRevision} from '../_shared/calendar-contribution.ts'
+import {sourceItems,readSourceStatus} from '../_shared/planning-source-runtime.ts'
 const DATABASE_SSL=Deno.env.get('PEPPER_DB_SSL')==='disable'?false:'require'
 const sql=postgres(Deno.env.get('SUPABASE_DB_URL')!,{ssl:DATABASE_SSL,prepare:false,max:1,idle_timeout:20,connect_timeout:10})
 const SUPABASE_URL=Deno.env.get('SUPABASE_URL')||''
@@ -39,18 +40,6 @@ async function proxy(url:string,headers:any,body:any){const r=await fetch(url,{m
 function adult(member:any){return isAdultHouseholdRole(member.role)}
 function dateLA(d=new Date()){return new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'}).format(d)}
 function addDays(date:string,n:number){const [y,m,d]=date.split('-').map(Number);return new Date(Date.UTC(y,m-1,d+n)).toISOString().slice(0,10)}
-function connectionHealth(input:{storedState?:string|null;lastSuccessfulScanAt?:string|null;lastAttemptedScanAt?:string|null;watchExpiration?:string|number|null;now?:string|number|Date;staleAfterMs?:number}){
-  if(input.storedState==='reconnect_required')return 'reconnect_required'
-  if(input.storedState==='error')return 'error'
-  const now=new Date(input.now||Date.now()).getTime()
-  const attempted=input.lastAttemptedScanAt?new Date(input.lastAttemptedScanAt).getTime():0
-  const successful=input.lastSuccessfulScanAt?new Date(input.lastSuccessfulScanAt).getTime():0
-  const expiration=input.watchExpiration?new Date(Number(input.watchExpiration)>1e12?Number(input.watchExpiration):input.watchExpiration).getTime():0
-  if(input.storedState==='syncing'&&attempted>now-15*60_000)return 'syncing'
-  if(!successful||successful<now-(input.staleAfterMs||30*60_000))return 'stale'
-  if(!expiration||expiration<=now)return 'stale'
-  return 'connected_and_current'
-}
 function dayDistance(from:string,to:string){return Math.round((Date.parse(`${to}T00:00:00Z`)-Date.parse(`${from}T00:00:00Z`))/86400000)}
 function cleanList(value:any,limit=20){const values=Array.isArray(value)?value:String(value||'').split(/[\n,]/);return [...new Set(values.map((item:any)=>String(item).trim().slice(0,160)).filter(Boolean))].slice(0,limit)}
 function eventWithRevision(event:any){
@@ -527,6 +516,10 @@ async function deleteAccount(member:any,body:any){
     await tx`select set_config('pepper.actor_member_id',${member.id}::text,true)`
     const members=await tx<any[]>`select id,role from public.household_members where household_id=${member.household_id}::uuid and id<>${member.id}::uuid for update`
     const nextAdult=members.find((candidate:any)=>candidate.role==='adult_admin'||candidate.role==='adult')
+    const deletingHousehold=member.role==='adult_admin'&&!nextAdult
+    const sources=await tx`delete from private.planning_source_connections where household_id=${member.household_id}::uuid and (${deletingHousehold}::boolean or member_id=${member.id}::uuid) returning vault_secret_id`
+    for(const source of sources)await tx`delete from vault.secrets where id=${source.vault_secret_id}::uuid`
+    await tx`delete from private.planning_source_oauth where household_id=${member.household_id}::uuid and (${deletingHousehold}::boolean or member_id=${member.id}::uuid)`
     if(member.role==='adult_admin'&&!nextAdult){
       await tx`delete from public.households where id=${member.household_id}::uuid`
       return {ok:true,household_deleted:true}
@@ -1023,7 +1016,8 @@ async function sectionState(member:any,section:string,headers:any,token:string){
 }
 async function memberDayPlan(member:any,_headers:any){
   const today=dateLA()
-  const [bounds,tasks,events,meals,emailRows]=await Promise.all([
+  const [privateInputs,sourceStatus]=await Promise.all([sourceItems(sql,member),readSourceStatus(sql,member)])
+  const [bounds,tasks,events,meals]=await Promise.all([
     sql<any[]>`select now() as now,(${today}::date at time zone ${TZ}) as day_start,((${today}::date+1) at time zone ${TZ}) as day_end`,
     sql<any[]>`
       select id,title,status,due_at,priority,area,project,classification,tags,next_action,source,(to_jsonb(tasks)->>'source_url') as source_url,(to_jsonb(tasks)->>'source_capture_id') as source_capture_id,
@@ -1040,13 +1034,13 @@ async function memberDayPlan(member:any,_headers:any){
       limit 500
     `,
     sql<any[]>`
-      select id,title,starts_at,ends_at,location,person_slug,kind,appointment_type,source,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id
+      select id,title,starts_at,ends_at,location,person_slug,kind,appointment_type,source,external_event_id,external_calendar_id,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id
       from public.events
       where household_id=${member.household_id}::uuid
         and deleted_at is null
         and status not in ('canceled','completed')
         and lower(coalesce(kind,''))<>'meal'
-        and starts_at>=(${today}::date at time zone ${TZ})
+        and coalesce(ends_at,starts_at+interval '30 minutes')>(${today}::date at time zone ${TZ})
         and starts_at<((${today}::date+1) at time zone ${TZ})
         and (
           owner_member_id=${member.id}::uuid
@@ -1069,37 +1063,34 @@ async function memberDayPlan(member:any,_headers:any){
       order by mp.updated_at desc
       limit 1
     `,
-    sql<any[]>`select status,last_successful_scan_at,last_attempted_scan_at,gmail_watch_expiration,
-      last_scan_message_count,last_scan_relevant_count,last_scan_records_created,last_scan_needs_review,last_error
-      from public.integration_connections
-      where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid and provider='gmail'
-      limit 1`,
   ])
   const clock=bounds[0]||{now:new Date().toISOString(),day_start:new Date().toISOString(),day_end:new Date(Date.now()+86400000).toISOString()}
-  const email=emailRows[0]||null
-  const emailStatus=email?connectionHealth({storedState:email.status,lastSuccessfulScanAt:email.last_successful_scan_at,lastAttemptedScanAt:email.last_attempted_scan_at,watchExpiration:email.gmail_watch_expiration}):'not_connected'
   const plan=buildDailyPlan({
     now:new Date(clock.now).toISOString(),
     dayStart:new Date(clock.day_start).toISOString(),
     dayEnd:new Date(clock.day_end).toISOString(),
     timeZone:TZ,
     tasks,
-    events,
+    events:[...events,...privateInputs.events.filter(e=>!events.some(owned=>owned.external_event_id===e.external_event_id&&owned.external_calendar_id===e.external_calendar_id))],
     meals,
-    emails:[],
+    emails:privateInputs.emails,
   })
+  const sourceWarnings=['gmail','calendar_read'].filter(key=>sourceStatus[key]?.status!=='connected'||(key==='calendar_read'&&!sourceStatus[key]?.selected_calendars?.length)).map(key=>`${key==='gmail'?'Email':'Selected calendars'}: ${sourceStatus[key]?.last_error||(key==='calendar_read'&&!sourceStatus[key]?.selected_calendars?.length?'no calendars selected':sourceStatus[key]?.status)||'not connected'}. The plan may be incomplete.`)
   return {
     ok:true,
     plan:{
       ...plan,
+      headline:sourceWarnings.length?'A provisional plan from available information. Check source status before relying on free time.':plan.headline,
+      source_status:sourceStatus,
+      source_warnings:sourceWarnings,
       email:{
-        status:emailStatus,
-        scanned:Number(email?.last_scan_message_count||0),
-        relevant:Number(email?.last_scan_relevant_count||0),
-        records_created:Number(email?.last_scan_records_created||0),
-        needs_review:Number(email?.last_scan_needs_review||0),
-        last_successful_scan_at:email?.last_successful_scan_at||null,
-        error:email?.last_error||null,
+        status:sourceStatus.gmail?.status==='connected'?'connected_and_current':sourceStatus.gmail?.status||'not_connected',
+        scanned:privateInputs.emails.length,
+        relevant:privateInputs.emails.length,
+        records_created:0,
+        needs_review:privateInputs.emails.length,
+        last_successful_scan_at:sourceStatus.gmail?.last_success_at||null,
+        error:sourceStatus.gmail?.last_error||null,
       },
     },
   }
@@ -1159,7 +1150,19 @@ if(action==='section_state'){
   const section=String(b.section||'')
   return json(req,{section,state:await sectionState(member,section,headers,token)})
 }
-if(action==='day_plan'){return json(req,await memberDayPlan(member,headers))}
+if(action==='day_plan'){
+  const failedSources:string[]=[]
+  if(b.refresh_sources===true){
+    const sources=await readSourceStatus(sql,member)
+    await Promise.all(['gmail','calendar_read'].filter(key=>sources[key]&&sources[key].status!=='disconnected'&&sources[key].status!=='reconnect_required').map(async capability=>{
+      const result=await proxy(INTEGRATIONS,headers,{action:'source_sync',capability}).catch(()=>({ok:false}))
+      if(!result.ok)failedSources.push(capability==='gmail'?'Email':'Selected calendars')
+    }))
+  }
+  const result=await memberDayPlan(member,headers)
+  if(failedSources.length){result.plan.source_warnings.push(`${failedSources.join(' and ')} could not refresh. Cached information may be outdated.`);result.plan.headline='Source refresh is incomplete. This plan uses cached information.'}
+  return json(req,result)
+}
 if(action==='day_plan_task_action'){return json(req,await updateDailyPlanTask(member,b))}
 if(action==='member_state'){return json(req,{state:await memberState(member,String(b.member_slug||''))})}
 if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}
@@ -1202,6 +1205,7 @@ if(action==='calendar_status'){const r=await proxy(CALENDAR,headers,{action:'sta
 if(action==='calendar_start'){const r=await proxy(CALENDAR,headers,{action:'start',session_token:token,return_target:b.return_target});return json(req,r.data,r.status)}
 if(action==='calendar_sync'){const r=await proxy(CALENDAR,headers,{action:'sync',session_token:token,force:true});return json(req,r.data,r.status)}
 if(action==='email_start'){const r=await proxy(INTEGRATIONS,headers,{action:'gmail_start',return_target:b.return_target});return json(req,r.data,r.status)}
+if(['calendar_read_start','source_calendars','source_select','source_sync','source_disconnect'].includes(action)){const r=await proxy(INTEGRATIONS,headers,{action,return_target:b.return_target,calendar_ids:b.calendar_ids,capability:b.capability});return json(req,r.data,r.status)}
 if(action==='health_pair'){const r=await proxy(INTEGRATIONS,headers,{action:'health_pair',client:b.client});return json(req,r.data,r.status)}
 if(action==='integration_status'){const r=await proxy(INTEGRATIONS,headers,{action:'status'});return json(req,r.data,r.status)}
 return json(req,{error:'Unknown Pepper action.',code:'unknown_action'},400)

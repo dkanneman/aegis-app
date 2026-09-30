@@ -40,6 +40,8 @@ export type DayPlanTask = {
 }
 
 export type DayPlanEvent = {
+  all_day?: boolean
+  blocks_time?: boolean
   id: string
   title: string
   starts_at: string
@@ -62,6 +64,9 @@ export type DayPlanMeal = {
 }
 
 export type DayPlanEmail = {
+  reason?: string
+  action_score?: number
+  source_url?: string | null
   id: string
   thread_id?: string | null
   subject: string
@@ -73,6 +78,7 @@ export type DayPlanEmail = {
 }
 
 export type DayPlanItem = {
+  all_day?: boolean
   id: string
   record_id: string
   kind: 'task' | 'chore' | 'event' | 'appointment' | 'meal' | 'email'
@@ -534,7 +540,7 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     .sort((left, right) => Date.parse(left.eat_at) - Date.parse(right.eat_at))
 
   const busy: BusyBlock[] = [
-    ...appointments.map((event) => ({
+    ...appointments.filter(event=>event.blocks_time!==false).map((event) => ({
       start: Date.parse(event.starts_at),
       end: Math.max(Date.parse(event.ends_at || event.starts_at), Date.parse(event.starts_at) + 30 * MINUTE),
     })),
@@ -557,7 +563,7 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
 
   const optionalTaskPool = rankedTasks.filter((candidate) => !selectedIds.has(candidate.task.id))
   const optionalEmailPool = input.emails
-    .map((email) => ({ email, score: emailActionScore(email) }))
+    .map((email) => ({ email, score: email.action_score ?? emailActionScore(email) }))
     .filter((candidate) => candidate.score >= 3)
     .sort((left, right) => right.score - left.score || Date.parse(right.email.received_at || '0') - Date.parse(left.email.received_at || '0'))
 
@@ -586,12 +592,12 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
       kind: 'email',
       title: email.subject || 'Email needing attention',
       detail: email.sender || email.snippet || null,
-      reason: score >= 9 ? 'Time-sensitive email' : 'Email needs a response',
+      reason: email.reason || (score >= 9 ? 'Suggested: review time-sensitive email' : 'Suggested: respond to email'),
       urgency: score >= 9 ? 'high' : 'planned',
       scheduled_for: new Date(allocated).toISOString(),
       ends_at: new Date(allocated + EMAIL_BLOCK).toISOString(),
       source: 'email',
-      external_url: email.thread_id ? `https://mail.google.com/mail/u/0/#inbox/${encodeURIComponent(email.thread_id)}` : null,
+      external_url: email.source_url || (email.thread_id ? `https://mail.google.com/mail/u/0/#inbox/${encodeURIComponent(email.thread_id)}` : null),
       priority_score: 25 + score,
       plan_tier: 'optional',
       estimated_minutes: EMAIL_BLOCK / MINUTE,
@@ -603,6 +609,7 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     const kind = medical ? 'appointment' as const : 'event' as const
     return {
       id: `${kind}:${event.id}`,
+      all_day: event.all_day,
       record_id: event.id,
       kind,
       title: event.title,

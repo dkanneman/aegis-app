@@ -1,18 +1,20 @@
 import postgres from 'npm:postgres@3.4.7'
+import {beginReadSource,readSourceStatus,discoverReadCalendars,selectReadCalendars,syncReadSource,disconnectReadSource} from '../_shared/planning-source-runtime.ts'
 
 const SUPABASE_URL=Deno.env.get('SUPABASE_URL')||''
 const DATABASE_URL=Deno.env.get('SUPABASE_DB_URL')||''
-const APP_URL=Deno.env.get('PEPPER_APP_URL')||'https://pepper-family-beta-git-codex-v6-e3b0dd-dkanneman-8936s-projects.vercel.app/pepper'
+const APP_URL=Deno.env.get('PEPPER_APP_URL')||'https://pepper-family-beta.vercel.app/pepper'
 const APP_ORIGIN=new URL(APP_URL).origin
 const GOOGLE_CLIENT_ID=Deno.env.get('GOOGLE_CLIENT_ID')||''
 const GOOGLE_CLIENT_SECRET=Deno.env.get('GOOGLE_CLIENT_SECRET')||''
 const SUPABASE_ANON_KEY=Deno.env.get('SUPABASE_ANON_KEY')||''
 const REDIRECT_URI=`${SUPABASE_URL}/functions/v1/pepper-gmail-callback`
-const GMAIL_SCOPE='openid email https://www.googleapis.com/auth/gmail.readonly'
+const readConfig={clientId:GOOGLE_CLIENT_ID,clientSecret:GOOGLE_CLIENT_SECRET,callback:REDIRECT_URI,appUrl:APP_URL}
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+type Member={id:string;household_id:string;slug:string;display_name:string;role:string;session_id:string}
 
 if(!SUPABASE_URL||!DATABASE_URL)throw new Error('Supabase runtime is not configured.')
-const sql=postgres(DATABASE_URL,{ssl:'require',prepare:false,max:1,idle_timeout:20,connect_timeout:10})
+const sql=postgres(DATABASE_URL,{ssl:Deno.env.get('PEPPER_DB_SSL')==='disable'?false:'require',prepare:false,max:1,idle_timeout:20,connect_timeout:10})
 
 function headers(req:Request){
   const origin=req.headers.get('origin')||''
@@ -22,140 +24,25 @@ function headers(req:Request){
 function json(req:Request,body:unknown,status=200){return new Response(JSON.stringify(body),{status,headers:headers(req)})}
 function randomToken(bytes=32){const value=new Uint8Array(bytes);crypto.getRandomValues(value);return btoa(String.fromCharCode(...value)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'')}
 async function digest(value:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return Array.from(new Uint8Array(bytes)).map(x=>x.toString(16).padStart(2,'0')).join('')}
-async function challenge(value:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'')}
 function configured(){return Boolean(GOOGLE_CLIENT_ID&&GOOGLE_CLIENT_SECRET)}
-
-async function googleJson(url:string,init:RequestInit){
-  const response=await fetch(url,{...init,signal:AbortSignal.timeout(20000)})
-  const body=await response.json().catch(()=>({}))
-  if(!response.ok){
-    const detail=String(body?.error_description||body?.error?.message||body?.error||`Google returned ${response.status}`)
-    throw Object.assign(new Error(detail),{status:response.status===401?409:502})
-  }
-  return body
-}
-
-async function gmailAccessToken(connectionId:string){
-  if(!configured())throw Object.assign(new Error('Google email OAuth credentials are not configured.'),{status:503})
-  const rows=await sql<any[]>`
-    select v.decrypted_secret as refresh_token
-    from private.integration_tokens t
-    join vault.decrypted_secrets v on v.id=t.vault_secret_id
-    where t.connection_id=${connectionId}::uuid
-    limit 1
-  `
-  if(!rows[0]?.refresh_token)throw Object.assign(new Error('Reconnect Google email to restore private inbox planning.'),{status:409})
-  const body=new URLSearchParams({
-    refresh_token:String(rows[0].refresh_token),
-    client_id:GOOGLE_CLIENT_ID,
-    client_secret:GOOGLE_CLIENT_SECRET,
-    grant_type:'refresh_token',
-  })
-  const token=await googleJson('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body})
-  if(!token.access_token)throw Object.assign(new Error('Google did not return email access.'),{status:502})
-  return String(token.access_token)
-}
-
-function gmailHeader(message:any,name:string){
-  const headers=Array.isArray(message?.payload?.headers)?message.payload.headers:[]
-  return String(headers.find((header:any)=>String(header?.name||'').toLowerCase()===name.toLowerCase())?.value||'')
-    .replace(/\s+/g,' ')
-    .trim()
-}
-
-async function gmailDigest(member:any){
-  const rows=await sql<any[]>`
-    select id
-    from public.integration_connections
-    where household_id=${member.household_id}::uuid
-      and member_id=${member.id}::uuid
-      and provider='gmail'
-      and status='connected'
-    limit 1
-  `
-  const connection=rows[0]
-  if(!connection)return {status:'not_connected',scanned:0,messages:[]}
-  try{
-    const accessToken=await gmailAccessToken(connection.id)
-    const listUrl=new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages')
-    listUrl.searchParams.set('maxResults','20')
-    listUrl.searchParams.set('q','newer_than:7d {is:unread is:important} -category:promotions -category:social -category:forums')
-    const list=await googleJson(listUrl.toString(),{headers:{authorization:`Bearer ${accessToken}`}})
-    const refs=Array.isArray(list.messages)?list.messages.slice(0,20):[]
-    const messages=await Promise.all(refs.map(async(ref:any)=>{
-      const messageUrl=new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(String(ref.id||''))}`)
-      messageUrl.searchParams.set('format', 'metadata')
-      for(const name of ['Subject','From','Date'])messageUrl.searchParams.append('metadataHeaders',name)
-      const message=await googleJson(messageUrl.toString(),{headers:{authorization:`Bearer ${accessToken}`}})
-      const labels=Array.isArray(message.labelIds)?message.labelIds:[]
-      return {
-        id:String(message.id||ref.id||''),
-        thread_id:String(message.threadId||ref.threadId||''),
-        subject:gmailHeader(message,'Subject').slice(0,240)||'Email needing attention',
-        sender:gmailHeader(message,'From').slice(0,200)||null,
-        snippet:String(message.snippet||'').replace(/\s+/g,' ').trim().slice(0,320)||null,
-        received_at:message.internalDate?new Date(Number(message.internalDate)).toISOString():gmailHeader(message,'Date')||null,
-        unread:labels.includes('UNREAD'),
-        important:labels.includes('IMPORTANT'),
-      }
-    }))
-    await sql`
-      update public.integration_connections
-      set last_attempt_at=now(),last_synced_at=now(),last_error=null,
-        metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('last_digest_messages',${messages.length}),
-        updated_at=now()
-      where id=${connection.id}::uuid
-    `
-    return {status:'connected',scanned:messages.length,messages}
-  }catch(error){
-    const detail=error instanceof Error?error.message.slice(0,300):'Private inbox scan failed.'
-    await sql`update public.integration_connections set last_attempt_at=now(),last_error=${detail},updated_at=now() where id=${connection.id}::uuid`
-    throw error
-  }
-}
 
 async function memberFromSession(token:string){
   if(!UUID.test(token))return null
-  const rows=await sql<any[]>`select m.id,m.household_id,m.slug,m.display_name,m.role from public.member_sessions s join public.household_members m on m.id=s.member_id where s.token=${token}::uuid and s.revoked_at is null and s.expires_at>now() limit 1`
+  const rows=await sql<Member[]>`select m.id,m.household_id,m.slug,m.display_name,m.role,s.session_id from public.member_sessions s join public.household_members m on m.id=s.member_id where s.token=${token}::uuid and s.revoked_at is null and s.expires_at>now() and m.active and m.removed_at is null limit 1`
   return rows[0]||null
 }
 
-async function status(member:any){
-  const [connections,health]=await Promise.all([
-    sql<any[]>`select provider,status,access_scope,last_attempt_at,last_synced_at,last_error,metadata from public.integration_connections where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid order by provider`,
-    sql<any[]>`select metric_date,step_count,step_goal,active_minutes,source,source_updated_at from public.health_daily_metrics where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid order by metric_date desc limit 1`,
-  ])
-  const byProvider=Object.fromEntries(connections.map((item:any)=>[item.provider,item]))
-  return {
-    gmail:{configured:configured(),connected:byProvider.gmail?.status==='connected',...(byProvider.gmail||{})},
-    apple_health:{connected:byProvider.apple_health?.status==='connected',...(byProvider.apple_health||{}),latest:health[0]||null},
-  }
+async function status(member:Member){
+  const health=await sql`select status,last_synced_at,last_error from public.integration_connections where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid and provider='apple_health'`
+  const latest=await sql`select metric_date,step_count,step_goal,active_minutes,source,source_updated_at from public.health_daily_metrics where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid order by metric_date desc limit 1`
+  return {apple_health:{connected:health[0]?.status==='connected',...(health[0]||{}),latest:latest[0]||null}}
 }
 
-async function beginGmail(member:any,returnTarget:unknown){
-  if(!['adult_admin','adult','teen'].includes(member.role))throw Object.assign(new Error('Google email can be connected by an adult or teen for their own account.'),{status:403})
-  if(!configured())throw Object.assign(new Error('Google email OAuth credentials are not configured in this preview yet.'),{status:503})
-  const state=randomToken(),verifier=randomToken(64),return_target=returnTarget==='pepper_ios'?'pepper_ios':'web'
-  await sql`delete from private.integration_oauth_states where expires_at<now() or consumed_at<now()-interval '1 hour'`
-  await sql`insert into private.integration_oauth_states(provider,state_hash,code_verifier,household_id,member_id,return_target,expires_at) values('gmail',${await digest(state)},${verifier},${member.household_id}::uuid,${member.id}::uuid,${return_target},now()+interval '10 minutes')`
-  const url=new URL('https://accounts.google.com/o/oauth2/v2/auth')
-  url.searchParams.set('client_id',GOOGLE_CLIENT_ID)
-  url.searchParams.set('redirect_uri',REDIRECT_URI)
-  url.searchParams.set('response_type','code')
-  url.searchParams.set('scope',GMAIL_SCOPE)
-  url.searchParams.set('access_type','offline')
-  url.searchParams.set('prompt','consent select_account')
-  url.searchParams.set('state',state)
-  url.searchParams.set('code_challenge',await challenge(verifier))
-  url.searchParams.set('code_challenge_method','S256')
-  return url.toString()
-}
-
-async function pairHealth(member:any,client:unknown){
+async function pairHealth(member:Member,client:unknown){
   const nativeIOS=client==='native_ios'
   const label=nativeIOS?'Pepper iPhone':'Apple Health Shortcut'
   const token=randomToken(40),tokenHash=await digest(token)
-  await sql.begin(async(tx:any)=>{
+  await sql.begin(async(tx)=>{
     await tx`update private.health_ingest_tokens set revoked_at=now() where member_id=${member.id}::uuid and revoked_at is null`
     await tx`insert into private.health_ingest_tokens(household_id,member_id,token_hash,label) values(${member.household_id}::uuid,${member.id}::uuid,${tokenHash},${label})`
     await tx`insert into public.integration_connections(household_id,member_id,provider,status,access_scope,last_attempt_at,metadata) values(${member.household_id}::uuid,${member.id}::uuid,'apple_health','pending','steps active_minutes',now(),jsonb_build_object('client',${nativeIOS?'native_ios':'shortcut'}::text)) on conflict(household_id,member_id,provider) do update set status='pending',last_attempt_at=now(),last_error=null,metadata=excluded.metadata,updated_at=now()`
@@ -168,12 +55,23 @@ Deno.serve(async(req:Request)=>{
   if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405)
   const member=await memberFromSession(req.headers.get('x-pepper-session')||'')
   if(!member)return json(req,{error:'Unlock Pepper again to continue.'},401)
-  let body:any={};try{body=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}
+  let body:Record<string,unknown>={};try{body=await req.json();if(!body||typeof body!=='object'||Array.isArray(body))throw new Error('Invalid body')}catch{return json(req,{error:'Invalid request.'},400)}
   try{
-    if(body.action==='status')return json(req,{ok:true,...await status(member)})
-    if(body.action==='gmail_start')return json(req,{ok:true,authorization_url:await beginGmail(member,body.return_target)})
-    if(body.action==='gmail_digest')return json(req,{ok:true,...await gmailDigest(member)})
+    if(body.action==='status'){
+      const legacy=await status(member)
+      const sources=await readSourceStatus(sql,member)
+      const gmail=sources.gmail
+      return json(req,{ok:true,apple_health:legacy.apple_health,sources,gmail:{configured:configured(),connected:gmail?.status==='connected',status:gmail?.status==='connected'?'connected_and_current':gmail?.status||'not_connected',metadata:{email:gmail?.email},last_successful_scan_at:gmail?.last_success_at,last_error:gmail?.last_error}})
+    }
+    if(body.action==='gmail_start'||body.action==='calendar_read_start')return json(req,{ok:true,authorization_url:await beginReadSource(sql,member,body.action==='gmail_start'?'gmail':'calendar_read',body.return_target,readConfig)})
+    if(body.action==='source_calendars')return json(req,{ok:true,...await discoverReadCalendars(sql,member,readConfig)})
+    if(body.action==='source_select')return json(req,await selectReadCalendars(sql,member,body.calendar_ids,readConfig))
+    if(body.action==='source_sync'||body.action==='source_disconnect'){
+      if(body.capability!=='gmail'&&body.capability!=='calendar_read')return json(req,{error:'Unknown read source.'},400)
+      if(body.action==='source_disconnect')return json(req,await disconnectReadSource(sql,member,body.capability))
+      return json(req,await syncReadSource(sql,member,body.capability,readConfig))
+    }
     if(body.action==='health_pair')return json(req,{ok:true,...await pairHealth(member,body.client)})
     return json(req,{error:'Unknown integration action.'},400)
-  }catch(error){return json(req,{error:error instanceof Error?error.message:'Connection failed.'},Number((error as any)?.status||500))}
+  }catch(error){return json(req,{error:error instanceof Error?error.message:'Connection failed.'},Number((error as {status?:number})?.status||500))}
 })
