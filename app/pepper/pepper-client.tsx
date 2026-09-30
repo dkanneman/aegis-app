@@ -703,6 +703,7 @@ type DailyPlanTaskActionOptions = {
 };
 
 type DailyPlan = {
+  private_email_suggestions?: Array<{id: string; title: string; reason: string; source_url: string}>;
   source_warnings?: string[];
   generated_at: string;
   date: string;
@@ -4295,6 +4296,19 @@ function DayPlanPanel({
             )}
           </div>
 
+          {plan.private_email_suggestions?.some(email => !plan.items.some(item => item.kind === "email" && item.record_id === email.id)) ? (
+            <section aria-label="Private email suggestions">
+              <h3>Private email suggestions</h3>
+              <p>Awaiting your review · not scheduled</p>
+              {plan.private_email_suggestions.filter(email => !plan.items.some(item => item.kind === "email" && item.record_id === email.id)).map(email => (
+                <a key={email.id} className={styles.dayPlanRow} href={email.source_url} target="_blank" rel="noopener noreferrer">
+                  <Mail size={16} aria-hidden="true" />
+                  <span className={styles.dayPlanBody}><strong>{email.title}</strong><small>{email.reason}</small></span>
+                  <ExternalLink size={16} aria-label="Open source email" />
+                </a>
+              ))}
+            </section>
+          ) : null}
           <footer className={styles.dayPlanSources}>
             <span>{plan.counts.tasks} task priorities</span>
             <span>{plan.counts.chores || 0} chores</span>

@@ -1083,6 +1083,7 @@ async function memberDayPlan(member:any,_headers:any){
       headline:sourceWarnings.length?'A provisional plan from available information. Check source status before relying on free time.':plan.headline,
       source_status:sourceStatus,
       source_warnings:sourceWarnings,
+      private_email_suggestions:privateInputs.emails.map(email=>({id:email.id,title:email.subject,reason:email.reason,source_url:email.source_url})),
       email:{
         status:sourceStatus.gmail?.status==='connected'?'connected_and_current':sourceStatus.gmail?.status||'not_connected',
         scanned:privateInputs.emails.length,

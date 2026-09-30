@@ -163,6 +163,9 @@ test('deployed handlers authenticate, return through native OAuth, and build the
       assert.equal(response.status,200)
       const body=await response.json()
       assert.equal(body.plan.email.relevant,1)
+      assert.equal(body.plan.private_email_suggestions.length,1)
+      assert.equal(body.plan.private_email_suggestions[0].id,'m1')
+      assert.match(body.plan.private_email_suggestions[0].source_url,/mail.google.com/)
       assert.equal(body.plan.source_status.calendar_read.status,'connected')
       assert.ok(!JSON.stringify(body).includes('DUMMY'))
     }
