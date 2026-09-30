@@ -4,6 +4,15 @@ import {assertReadScopes,READ_SCOPES,localMidnight,normalizeSourceEvent,deduplic
 import {buildDailyPlan} from '../supabase/functions/pepper-family-api/day-planning.ts'
 
 const calendar={id:'existing@example.com',timeZone:'America/Los_Angeles'}
+test('school attendance requests survive unsubscribe footers without becoming confirmed actions',()=>{
+  const input={id:'school-notice',threadId:'school-thread',subject:"Student's Attendance Report",sender:'School via ParentSquare',received_at:'2026-09-30T17:32:35Z',body:'Student was absent from school today. If you would like to discuss this notice, call the office or send a note to explain the absence. Please disregard this message if you have already contacted the school office. Click here to unsubscribe.'}
+  const suggestion=emailSuggestion(input,'parent@example.invalid')
+  assert.equal(suggestion.status,'suggested')
+  assert.match(suggestion.reason,/only if not already handled/)
+  assert.equal(emailSuggestion({...input,subject:'Attendance Note Confirmation'},'parent@example.invalid'),null)
+  assert.equal(emailSuggestion({...input,subject:'Weekly school news',body:'Here is our newsletter. Click to unsubscribe.'},'parent@example.invalid'),null)
+  assert.ok(emailSuggestion({...input,subject:'Form deadline',body:'Please complete the form due tomorrow. Unsubscribe here.'},'parent@example.invalid'))
+})
 const event={id:'one',iCalUID:'immutable@google.com',summary:'School visit',start:{dateTime:'2026-09-30T09:00:00-07:00'},end:{dateTime:'2026-09-30T10:00:00-07:00'},status:'confirmed',htmlLink:'https://calendar.google.com/calendar/event?eid=example'}
 test('read capabilities reject write scopes and accept only their requested permissions',()=>{
   for(const capability of ['gmail','calendar_read']) {

@@ -1018,7 +1018,7 @@ async function memberDayPlan(member:any,_headers:any){
   const today=dateLA()
   const [privateInputs,sourceStatus]=await Promise.all([sourceItems(sql,member),readSourceStatus(sql,member)])
   const [bounds,tasks,events,meals]=await Promise.all([
-    sql<any[]>`select now() as now,(${today}::date at time zone ${TZ}) as day_start,((${today}::date+1) at time zone ${TZ}) as day_end`,
+    sql<any[]>`select now() as now,(${today}::date::timestamp at time zone ${TZ}) as day_start,((${today}::date+1)::timestamp at time zone ${TZ}) as day_end`,
     sql<any[]>`
       select id,title,status,due_at,priority,area,project,classification,tags,next_action,source,(to_jsonb(tasks)->>'source_url') as source_url,(to_jsonb(tasks)->>'source_capture_id') as source_capture_id,
         importance,urgency,deadline_type,due_date_confidence,waiting_on,waiting_follow_up_at,
@@ -1040,8 +1040,8 @@ async function memberDayPlan(member:any,_headers:any){
         and deleted_at is null
         and status not in ('canceled','completed')
         and lower(coalesce(kind,''))<>'meal'
-        and coalesce(ends_at,starts_at+interval '30 minutes')>(${today}::date at time zone ${TZ})
-        and starts_at<((${today}::date+1) at time zone ${TZ})
+        and coalesce(ends_at,starts_at+interval '30 minutes')>(${today}::date::timestamp at time zone ${TZ})
+        and starts_at<((${today}::date+1)::timestamp at time zone ${TZ})
         and (
           owner_member_id=${member.id}::uuid
           or person_slug=${member.slug}

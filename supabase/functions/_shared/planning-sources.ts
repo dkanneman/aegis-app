@@ -68,15 +68,16 @@ export function deduplicateSourceEvents<T extends {dedupe_key:string;source_upda
 
 export function emailSuggestion(input:{id:string;threadId:string;subject:string;sender:string;body:string;received_at:string}, account:string) {
   const text=`${input.subject}\n${input.body}`
-  if (/\b(payment received|order confirmation|verification code|security code|unsubscribe)\b/i.test(text) && !/\b(action required|past due|payment failed)\b/i.test(input.subject)) return null
+  if (/\b(payment received|order confirmation|verification code|security code|attendance note confirmation)\b/i.test(input.subject) && !/\b(action required|past due|payment failed)\b/i.test(input.subject)) return null
+  const attendance=/\battendance report\b/i.test(input.subject) && /\b(?:absent|tardy)\b/i.test(text) && /\b(?:send a note|explain the absence|contact the school)\b/i.test(text)
   const request=text.match(/\b(?:please (?:send|complete|review|confirm|sign|call|upload|pay)|can you|could you|respond by|reply by|action required)\b/i)
   const deadline=text.match(/\b(?:deadline|past due|due (?:today|tomorrow|by|on)|no later than|must be (?:received|submitted|completed|paid|signed))\b/i)
   const logistics=/\b(?:appointment|practice|school|rehearsal)\b/i.test(text) && /\b(?:rescheduled|canceled|cancelled|moved|arrival|bring|pickup)\b/i.test(text)
-  if (!request && !deadline && !logistics) return null
+  if (!request && !deadline && !logistics && !attendance) return null
   return {
     id:input.id,thread_id:input.threadId,subject:input.subject || 'Email needs review',sender:input.sender,received_at:input.received_at,
-    snippet:input.body.slice(0,600),reason:deadline?'Suggested: review an explicit deadline':request?'Suggested: respond to an explicit request':'Suggested: review a schedule change',
-    action_score:deadline?12:request?8:5,status:'suggested',
+    snippet:input.body.slice(0,600),reason:attendance?'Suggested: review school attendance; contact the office only if not already handled':deadline?'Suggested: review an explicit deadline':request?'Suggested: respond to an explicit request':'Suggested: review a schedule change',
+    action_score:deadline?12:request||attendance?8:5,status:'suggested',
     source_url:`https://mail.google.com/mail/?authuser=${encodeURIComponent(account)}#all/${encodeURIComponent(input.threadId || input.id)}`,
   }
 }
