@@ -103,6 +103,7 @@ export type DailyPlan = {
   summary: string
   items: DayPlanItem[]
   conflicts: string[]
+  conflict_items: Array<{ message: string; event_ids: [string, string] }>
   counts: { tasks: number; chores: number; events: number; appointments: number; meals: number; emails: number }
 }
 
@@ -460,8 +461,8 @@ function allocateBlock(busy: BusyBlock[], cursor: number, dayEnd: number, durati
   return candidate
 }
 
-function conflictLabels(events: DayPlanEvent[]) {
-  const conflicts: string[] = []
+function conflictItems(events: DayPlanEvent[]) {
+  const conflicts: Array<{ message: string; event_ids: [string, string] }> = []
   const sorted = [...events].sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
   for (let index = 0; index < sorted.length; index += 1) {
     const left = sorted[index]
@@ -472,7 +473,10 @@ function conflictLabels(events: DayPlanEvent[]) {
       const medical = isMedicalAppointment(left) ? left : isMedicalAppointment(right) ? right : null
       const overlap = medical?.id === left.id ? right : left
       const coordination = medical ? medicalCoordinationMessage(medical, overlap) : null
-      conflicts.push(coordination || `${left.title} overlaps ${right.title}.`)
+      conflicts.push({
+        message: coordination || `${left.title} overlaps ${right.title}.`,
+        event_ids: [left.id, right.id],
+      })
     }
   }
   return conflicts
@@ -668,6 +672,7 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
   const selectedEmails = flexibleItems.filter((item) => item.kind === 'email')
   const mustCount = flexibleItems.filter((item) => item.plan_tier === 'must_protect').length
   const optionalCount = flexibleItems.filter((item) => item.plan_tier === 'optional').length
+  const conflict_items = conflictItems(appointments)
 
   return {
     generated_at: input.now,
@@ -675,7 +680,8 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     headline,
     summary: `${fixedItems.length} fixed, ${mustCount} must protect, and ${optionalCount} optional item${optionalCount === 1 ? '' : 's'} fit today.`,
     items,
-    conflicts: conflictLabels(appointments),
+    conflicts: conflict_items.map((conflict) => conflict.message),
+    conflict_items,
     counts: {
       tasks: selectedTasks.length,
       chores: selectedChores.length,

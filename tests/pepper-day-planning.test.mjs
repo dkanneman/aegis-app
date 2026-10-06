@@ -288,6 +288,37 @@ test('overlapping appointments are surfaced as a day-plan conflict', () => {
   assert.equal(plan.conflicts.length, 1)
   assert.match(plan.conflicts[0], /Doctor appointment remains the priority/i)
   assert.match(plan.conflicts[0], /coordinate school coverage for School meeting/i)
+  assert.deepEqual(plan.conflict_items[0].event_ids, ['one', 'two'])
+  assert.equal(plan.conflict_items[0].message, plan.conflicts[0])
+})
+
+test('read-only source conflicts retain exact record IDs for source review', () => {
+  const plan = buildDailyPlan({
+    now: '2026-09-10T15:00:00.000Z',
+    dayStart: '2026-09-10T07:00:00.000Z',
+    dayEnd: '2026-09-11T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [],
+    emails: [],
+    events: [
+      { id: 'source:calendar:a', title: 'School meeting', starts_at: '2026-09-10T18:00:00.000Z', ends_at: '2026-09-10T19:00:00.000Z', source_url: 'https://calendar.google.com/calendar/event?eid=a' },
+      { id: 'owned', title: 'Doctor appointment', starts_at: '2026-09-10T18:30:00.000Z', ends_at: '2026-09-10T19:30:00.000Z' },
+    ],
+  })
+  assert.deepEqual(plan.conflict_items[0].event_ids, ['source:calendar:a', 'owned'])
+  assert.equal(plan.items.find(item => item.record_id === 'source:calendar:a').external_url, 'https://calendar.google.com/calendar/event?eid=a')
+})
+
+test('plan refresh is bounded and does not force a provider sync; conflicts open exact records', async () => {
+  const client = await readFile(clientPath, 'utf8')
+  const refresh = client.match(/async function generateDayPlan\([\s\S]*?\n  }/)?.[0] || ''
+  assert.match(refresh, /refreshDayPlanFromServer\(token\)/)
+  assert.doesNotMatch(refresh, /refreshDayPlanFromServer\(token, true\)/)
+  assert.match(client, /AbortSignal\.timeout\(20000\)/)
+  assert.match(refresh, /if \(dayPlanRequestInFlight\.current\) return/)
+  assert.match(refresh, /dayPlanRequestInFlight\.current = false/)
+  assert.match(client, /candidate\.record_id === eventId/)
+  assert.match(client, /item\.record_id\.startsWith\("source:"\) \? "Open source"/)
 })
 
 test('daily planning is private, live, and available from Today and Ask Pepper', async () => {

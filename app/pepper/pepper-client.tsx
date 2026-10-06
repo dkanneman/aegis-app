@@ -711,6 +711,7 @@ type DailyPlan = {
   summary: string;
   items: DayPlanItem[];
   conflicts: string[];
+  conflict_items?: Array<{ message: string; event_ids: [string, string] }>;
   counts: {
     tasks: number;
     chores: number;
@@ -1389,6 +1390,7 @@ export function PepperClient() {
   const [pepperExchange, setPepperExchange] = useState<PepperExchange | null>(null);
   const [dayPlan, setDayPlan] = useState<DailyPlan | null>(null);
   const [dayPlanBusy, setDayPlanBusy] = useState(false);
+  const dayPlanRequestInFlight = useRef(false);
   const lastDayPlanRefreshAt = useRef(0);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [tell, setTell] = useState("");
@@ -1445,7 +1447,7 @@ export function PepperClient() {
     return () => window.clearTimeout(timeout);
   }, [message]);
 
-  async function call(body: Record<string, unknown>, session = token) {
+  async function call(body: Record<string, unknown>, session = token, signal?: AbortSignal) {
     if (!API || !SUPABASE_ANON_KEY) {
       throw new Error("Pepper preview is not configured.");
     }
@@ -1459,6 +1461,7 @@ export function PepperClient() {
       },
       body: JSON.stringify(body),
       cache: "no-store",
+      signal,
     });
     const data = await response.json();
     if (!response.ok) {
@@ -1507,7 +1510,19 @@ export function PepperClient() {
 
   async function refreshDayPlanFromServer(session = token, refreshSources = false) {
     if (!session) return null;
-    const result = await call({ action: "day_plan", refresh_sources: refreshSources }, session);
+    let result;
+    try {
+      result = await call(
+        { action: "day_plan", refresh_sources: refreshSources },
+        session,
+        AbortSignal.timeout(20000),
+      );
+    } catch (error) {
+      if (error instanceof Error && /abort|timeout/i.test(error.name)) {
+        throw new Error("The plan refresh timed out. Your last plan is still shown; check Connections for source sync status.");
+      }
+      throw error;
+    }
     if (activeSessionRef.current !== session) return null;
     if (!result.plan || !Array.isArray(result.plan.items)) {
       throw new Error("Pepper could not verify a complete day plan.");
@@ -2860,12 +2875,13 @@ export function PepperClient() {
   }
 
   async function generateDayPlan(fromAsk = false, prompt = "Plan my day") {
-    if (dayPlanBusy) return;
+    if (dayPlanRequestInFlight.current) return;
+    dayPlanRequestInFlight.current = true;
     setDayPlanBusy(true);
     if (fromAsk) setBusy(true);
-    setMessage("Pepper is organizing tasks, chores, meals, email, and appointments…");
+    setMessage("Pepper is updating today's plan from saved information…");
     try {
-      const plan = await refreshDayPlanFromServer(token, true);
+      const plan = await refreshDayPlanFromServer(token);
       if (!plan) throw new Error("Pepper could not verify a complete day plan.");
       setTell("");
       setView("today");
@@ -2894,6 +2910,7 @@ export function PepperClient() {
         error instanceof Error ? error.message : "Pepper could not organize today.",
       );
     } finally {
+      dayPlanRequestInFlight.current = false;
       setDayPlanBusy(false);
       if (fromAsk) setBusy(false);
     }
@@ -4235,9 +4252,29 @@ function DayPlanPanel({
           {plan.conflicts.length ? (
             <div className={styles.dayPlanConflicts} role="alert">
               <strong>Resolve before the day starts</strong>
-              {plan.conflicts.map((conflict) => (
-                <span key={conflict}>{conflict}</span>
+              {(plan.conflict_items?.length
+                ? plan.conflict_items
+                : plan.conflicts.map((message) => ({ message, event_ids: [] as string[] }))
+              ).map((conflict, index) => (
+                <div className={styles.dayPlanConflict} key={`${conflict.event_ids.join(":")}:${index}`}>
+                  <span>{conflict.message}</span>
+                  <div className={styles.dayPlanConflictActions}>
+                    {conflict.event_ids.map((eventId) => {
+                      const item = plan.items.find((candidate) =>
+                        candidate.record_id === eventId &&
+                        (candidate.kind === "event" || candidate.kind === "appointment"),
+                      );
+                      return item ? (
+                        <button key={eventId} type="button" onClick={() => onOpen(item)}>
+                          {item.record_id.startsWith("source:") ? "Open source" : "Review"} {item.title}
+                          <ChevronRight size={14} aria-hidden="true" />
+                        </button>
+                      ) : null;
+                    })}
+                  </div>
+                </div>
               ))}
+              <small>Change a Pepper event, then refresh the plan. For read-only Google events, make the change in Google Calendar, sync that source in Connections, then refresh.</small>
             </div>
           ) : null}
 
