@@ -466,6 +466,10 @@
   cursor: pointer;
 }
 
+.dayPlanRow.dayPlanEmailSuggestion {
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+}
+
 .dayPlanRow:hover {
   background: rgba(217, 222, 242, 0.3);
 }
@@ -5903,6 +5907,10 @@ button.morningBriefOutcome {
     grid-template-columns: 50px 30px minmax(0, 1fr) 14px;
     gap: 8px;
     padding: 12px 13px;
+  }
+
+  .dayPlanRow.dayPlanEmailSuggestion {
+    grid-template-columns: 30px minmax(0, 1fr) 18px;
   }
 
   .dayPlanEntry:has(.dayPlanTaskActions) .dayPlanRow {

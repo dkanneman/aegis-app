@@ -14,6 +14,14 @@ const clientPath = new URL('../app/pepper/pepper-client.tsx', import.meta.url)
 const cssPath = new URL('../app/pepper/pepper.module.css', import.meta.url)
 const priorityMigrationPath = new URL('../supabase/migrations/20260915175808_prioritize_daily_plan_tasks.sql', import.meta.url)
 
+test('private email suggestions use a full-width text column at desktop and mobile widths', async () => {
+  const [client, css] = await Promise.all([readFile(clientPath, 'utf8'), readFile(cssPath, 'utf8')])
+  assert.match(client, /className=\{`\$\{styles\.dayPlanRow\} \$\{styles\.dayPlanEmailSuggestion\}`\}/)
+  const layouts = [...css.matchAll(/\.dayPlanRow\.dayPlanEmailSuggestion\s*\{\s*grid-template-columns:\s*([^;]+);/g)]
+  assert.equal(layouts.length, 2)
+  for (const [, columns] of layouts) assert.match(columns, /^\d+px minmax\(0, 1fr\) \d+px$/)
+})
+
 test('day planning ranks current hard-deadline payroll above an old manuscript task', () => {
   const plan = buildDailyPlan({
     now: '2026-09-15T15:00:00.000Z',
