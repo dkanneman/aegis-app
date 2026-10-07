@@ -145,46 +145,104 @@ async function trustedDriverState(member:any){
     order by lower(display_name),created_at
   `
 }
+function sourceEventKind(event:any){
+  const text=`${event?.title||''} ${event?.location||''}`.toLowerCase()
+  return ['doctor','dentist','dental','orthodont','pediatr','pulmon','dermat','therapy','physical','checkup','check-up','clinic'].some(token=>text.includes(token))?'appointment':'event'
+}
+function sourceEventMatchesMember(event:any,target:any){
+  const text=String(event?.title||'').toLowerCase()
+  return [target?.display_name,target?.slug].map(value=>String(value||'').trim().toLowerCase()).filter(Boolean).some(name=>text.includes(name))
+}
+function sourceEventForView(event:any,member:any,personSlug:string|null=null){
+  const kind=sourceEventKind(event)
+  return {
+    ...event,
+    person_slug:personSlug,
+    kind,
+    appointment_type:kind==='appointment'?'medical':null,
+    visibility:'private',
+    owner_member_id:member.id,
+    transport_owner_member_id:null,
+    trusted_driver_id:null,
+    transport_status:null,
+    notes:null,
+    external_url:event.source_url||null,
+    external_organizer_email:null,
+    external_organizer_name:null,
+    clinician_name:null,
+    facility_name:null,
+    preparation_instructions:null,
+    sync_status:'read_only',
+    last_sync_error:null,
+    sync_retry_at:null,
+    sync_attempt_count:0,
+    revision:1,
+    updated_at:event.source_updated_at||null,
+    read_only:true,
+  }
+}
 async function monthState(member:any){
   const start=dateLA(),end=addDays(start,30)
-  const events=await sql<any[]>`
-    select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,
-      e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,
-      e.transport_status,e.source,e.external_url,e.external_organizer_email,
-      e.external_organizer_name,e.appointment_type,e.clinician_name,e.facility_name,
-      e.preparation_instructions,e.source_timezone,e.sync_status,e.last_sync_error,
-      e.sync_retry_at,e.sync_attempt_count,e.revision,e.updated_at
-    from public.events e
-    where e.household_id=${member.household_id}::uuid
-      and e.deleted_at is null
-      and e.status<>'canceled'
-      and e.starts_at>=(${start}::date at time zone 'America/Los_Angeles')
-      and e.starts_at<(${end}::date at time zone 'America/Los_Angeles')
-      and lower(coalesce(e.kind,'')) not in ('work','task','chore','meal')
-      and lower(coalesce(e.title,'')) not like 'house reset%'
-      and (
-        e.visibility='household'
-        or e.owner_member_id=${member.id}::uuid
-        or e.person_slug=${member.slug}
-      )
-    order by e.starts_at
-    limit 320
-  `
-  return events.map(eventWithRevision)
+  const [events,privateInputs,members]=await Promise.all([
+    sql<any[]>`
+      select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,
+        e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,
+        e.transport_status,e.source,e.external_url,e.external_organizer_email,
+        e.external_organizer_name,e.appointment_type,e.clinician_name,e.facility_name,
+        e.preparation_instructions,e.source_timezone,e.sync_status,e.last_sync_error,
+        e.sync_retry_at,e.sync_attempt_count,e.revision,e.updated_at,e.external_event_id,e.external_calendar_id
+      from public.events e
+      where e.household_id=${member.household_id}::uuid
+        and e.deleted_at is null
+        and e.status<>'canceled'
+        and e.starts_at>=(${start}::date at time zone 'America/Los_Angeles')
+        and e.starts_at<(${end}::date at time zone 'America/Los_Angeles')
+        and lower(coalesce(e.kind,'')) not in ('work','task','chore','meal')
+        and lower(coalesce(e.title,'')) not like 'house reset%'
+        and (
+          e.visibility='household'
+          or e.owner_member_id=${member.id}::uuid
+          or e.person_slug=${member.slug}
+        )
+      order by e.starts_at
+      limit 320
+    `,
+    sourceItems(sql,member),
+    sql<any[]>`select slug,display_name from public.household_members where household_id=${member.household_id}::uuid and active=true and removed_at is null`,
+  ])
+  const canonicalKeys=new Set(events.filter((event:any)=>event.external_event_id&&event.external_calendar_id).map((event:any)=>`${event.external_calendar_id}:${event.external_event_id}`))
+  const imported=privateInputs.events
+    .filter((event:any)=>event.starts_at.slice(0,10)>=start&&event.starts_at.slice(0,10)<end)
+    .filter((event:any)=>!canonicalKeys.has(`${event.external_calendar_id}:${event.external_event_id}`))
+    .map((event:any)=>{
+      const title=String(event.title||'').toLowerCase()
+      const matched=members.find((candidate:any)=>[candidate.display_name,candidate.slug].map((value:any)=>String(value||'').toLowerCase()).filter(Boolean).some((name:string)=>title.includes(name)))
+      return sourceEventForView(event,member,matched?.slug||null)
+    })
+  return [...events.map(eventWithRevision),...imported].sort((left:any,right:any)=>+new Date(left.starts_at)-+new Date(right.starts_at))
 }
 async function memberState(member:any,targetSlug:string){
   const targets=await sql<any[]>`select id,slug,display_name,role from public.household_members where household_id=${member.household_id}::uuid and slug=${targetSlug} limit 1`
   const target=targets[0]
   if(!target)throw Object.assign(new Error('Family member not found.'),{status:404})
-  const [events,appointments,tasks,profiles,schoolChanges,setup]=await Promise.all([
+  const [events,appointments,tasks,profiles,schoolChanges,setup,privateInputs]=await Promise.all([
     sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source,(to_jsonb(e)->>'source_url') as source_url,(to_jsonb(e)->>'source_capture_id') as source_capture_id,e.appointment_type,e.clinician_name,e.facility_name,e.preparation_instructions,e.source_timezone,e.sync_status,e.last_sync_error,e.sync_retry_at,e.sync_attempt_count,e.revision,e.updated_at from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and e.starts_at<now()+interval '31 days' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) order by e.starts_at limit 120`,
     sql<any[]>`select e.id,e.title,e.person_slug,e.starts_at,e.ends_at,e.location,e.notes,e.status,e.visibility,e.owner_member_id,e.kind,e.transport_owner_member_id,e.trusted_driver_id,e.transport_status,e.source,(to_jsonb(e)->>'source_url') as source_url,(to_jsonb(e)->>'source_capture_id') as source_capture_id,e.appointment_type,e.clinician_name,e.facility_name,e.preparation_instructions,e.source_timezone,e.sync_status,e.last_sync_error,e.sync_retry_at,e.sync_attempt_count,e.revision,e.updated_at from public.events e where e.household_id=${member.household_id}::uuid and e.deleted_at is null and e.starts_at>=now()-interval '1 day' and (e.person_slug=${target.slug} or e.owner_member_id=${target.id}::uuid or e.transport_owner_member_id=${target.id}::uuid) and (e.visibility='household' or e.owner_member_id=${member.id}::uuid or e.person_slug=${member.slug}) and (lower(coalesce(e.kind,''))='appointment' or lower(coalesce(e.title,'')) ~ '(^|[^a-z])dr([^a-z]|$)' or lower(concat_ws(' ',e.title,e.notes,e.location)) ~ '(^|[^a-z])(doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)') order by e.starts_at limit 160`,
     sql<any[]>`select t.id,t.title,t.owner_member_id,t.creator_member_id,t.visibility,t.status,t.due_at,t.source,(to_jsonb(t)->>'source_url') as source_url,(to_jsonb(t)->>'source_capture_id') as source_capture_id,t.updated_at,t.created_at,t.area,t.project,t.priority,t.classification,t.tags,t.notes,t.waiting_on,t.recurrence,t.completed_at,t.next_action,t.importance,t.urgency,t.deadline_type,t.due_date_confidence,t.waiting_follow_up_at,t.blocked,t.snoozed_until,t.dismissed_for_date::text,t.manually_pinned,t.daily_plan_state,t.priority_score,t.priority_reason,t.estimated_minutes,t.priority_classification_confidence from public.tasks t where t.household_id=${member.household_id}::uuid and t.deleted_at is null and (t.owner_member_id=${target.id}::uuid or ((lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.display_name).toLowerCase()}%`} or lower(concat_ws(' ',t.title,t.project,t.notes,array_to_string(t.tags,' '))) like ${`%${String(target.slug).toLowerCase()}%`}) and lower(coalesce(t.area,'')) in ('health','kids') and lower(concat_ws(' ',t.title,t.project,t.notes,t.classification,array_to_string(t.tags,' '))) ~ '(^|[^a-z])(dr|doctor|dentist|dental|orthodont[a-z]*|pediatri[a-z]*|pulmonolog[a-z]*|cardiolog[a-z]*|dermatolog[a-z]*|endocrinolog[a-z]*|neurolog[a-z]*|allerg[a-z]*|specialist|medical|therapy|therapist|physical|optometr[a-z]*|vision|eye exam|check[ -]?up|well child|wellness|urgent care|clinic)([^a-z]|$)')) and (t.visibility='household' or t.owner_member_id=${member.id}::uuid or t.creator_member_id=${member.id}::uuid) order by case t.status when 'open' then 0 when 'in_progress' then 1 when 'on_hold' then 2 when 'completed' then 3 else 4 end,t.due_at nulls last,t.updated_at desc limit 160`,
     sql<any[]>`select p.id,p.academic_year,p.school_name,p.district_name,p.grade_label,p.timezone,p.family_arrival_target_local::text,p.first_bell_local::text,p.normal_dismissal_local::text,p.first_day::text,p.last_day::text,p.source_label,p.source_url,p.source_checked_on::text from private.school_profiles p where p.household_id=${member.household_id}::uuid and p.student_member_id=${target.id}::uuid order by p.last_day desc limit 1`,
     sql<any[]>`select schedule_date::text,schedule_kind,schedule_title,day_starts_at,dismissal_at,precedence,resolution_level,source_label,source_url from private.resolve_school_schedule(${member.household_id}::uuid,(now() at time zone 'America/Los_Angeles')::date,((now() at time zone 'America/Los_Angeles')::date+interval '31 days')::date) where person_slug=${target.slug} and resolution_level='dated_exception' and transportation_impact=true order by schedule_date limit 6`,
     sql<any[]>`select member_id,activities,school_name,grade_label,dietary_preferences,medications,goals,avatar_path,avatar_updated_at,updated_at from private.member_setup_profiles where household_id=${member.household_id}::uuid and member_id=${target.id}::uuid limit 1`,
+    sourceItems(sql,member),
   ])
-  const memberEvents=[...new Map([...events,...appointments].map((event:any)=>[event.id,eventWithRevision(event)])).values()]
+  const canonicalMemberEvents=[...new Map([...events,...appointments].map((event:any)=>[event.id,eventWithRevision(event)])).values()]
+  const canonicalKeys=new Set(canonicalMemberEvents.filter((event:any)=>event.external_event_id&&event.external_calendar_id).map((event:any)=>`${event.external_calendar_id}:${event.external_event_id}`))
+  const start=addDays(dateLA(),-1),end=addDays(dateLA(),31)
+  const importedMemberEvents=privateInputs.events
+    .filter((event:any)=>sourceEventMatchesMember(event,target))
+    .filter((event:any)=>event.starts_at.slice(0,10)>=start&&event.starts_at.slice(0,10)<end)
+    .filter((event:any)=>!canonicalKeys.has(`${event.external_calendar_id}:${event.external_event_id}`))
+    .map((event:any)=>sourceEventForView(event,member,target.slug))
+  const memberEvents=[...canonicalMemberEvents,...importedMemberEvents]
     .sort((left:any,right:any)=>+new Date(left.starts_at)-+new Date(right.starts_at))
   const memberProfile=setup[0]||(profiles[0]?{
     member_id:target.id,

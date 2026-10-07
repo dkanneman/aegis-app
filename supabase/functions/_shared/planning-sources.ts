@@ -47,7 +47,7 @@ export function normalizeSourceEvent(event: GoogleReadEvent, calendar: {id:strin
     id:`source:${sourceId}`, source_id:sourceId, external_event_id:event.id, external_calendar_id:calendar.id,
     title:event.summary || 'Private calendar commitment', starts_at:new Date(start).toISOString(), ends_at:new Date(end).toISOString(),
     all_day:allDay, blocks_time:event.transparency!=='transparent', status:event.status || 'confirmed',
-    location:event.location || null, source:'google_read', source_url:safeSourceUrl(event.htmlLink,'calendar.google.com'),
+    location:event.location || null, source:'google_read', source_url:safeSourceUrl(event.htmlLink,'www.google.com'),
     source_timezone:zone, source_updated_at:event.updated || null,
     dedupe_key:event.iCalUID ? `${event.iCalUID}:${recurrence}` : sourceId,
   }

@@ -146,6 +146,7 @@ type FamilyEvent = {
   sync_retry_at?: string | null;
   sync_attempt_count?: number | null;
   revision: number;
+  read_only?: boolean;
   updated_at?: string | null;
   deleted_at?: string | null;
 };
@@ -8172,14 +8173,16 @@ function ItemActionSheet({
     ? state.members.filter((member) => ["adult_admin", "adult"].includes(member.role))
     : state.members;
   const actorIsAdult = ["adult_admin", "adult"].includes(state.member.role);
-  const canAssign = actorIsAdult && (Boolean(eventItem) || item.visibility === "household");
+  const readOnlyCalendarEvent = Boolean(eventItem && (eventItem.read_only || eventItem.source === "google_read"));
+  const canAssign = !readOnlyCalendarEvent && actorIsAdult && (Boolean(eventItem) || item.visibility === "household");
   const canChangeStatus =
-    actorIsAdult ||
-    Boolean(
-      taskItem &&
-        (taskItem.owner_member_id === state.member.id ||
-          taskItem.creator_member_id === state.member.id),
-    );
+    !readOnlyCalendarEvent &&
+    (actorIsAdult ||
+      Boolean(
+        taskItem &&
+          (taskItem.owner_member_id === state.member.id ||
+            taskItem.creator_member_id === state.member.id),
+      ));
   const handled = ["completed", "canceled"].includes(item.status);
   const medicalEvent = Boolean(eventItem && isMedicalAppointment(eventItem));
   const eventEditorLabel = medicalEvent
@@ -8275,7 +8278,9 @@ function ItemActionSheet({
         ) : null}
         {!editing && item.source && item.source !== "pepper" ? (
           <p className={styles.sourceNote}>
-            {item.source === "gmail" ? "Gmail supplied the evidence." : "Calendar supplied the evidence."} Pepper owns this family plan.
+            {readOnlyCalendarEvent
+              ? "Read-only Google Calendar item. Change it in Google Calendar, then sync Selected calendars in Pepper."
+              : `${item.source === "gmail" ? "Gmail" : "Calendar"} supplied the evidence. Pepper owns this family plan.`}
           </p>
         ) : null}
         {!editing && (item.source_url || (eventItem?.external_url ?? null)) ? (
@@ -8545,7 +8550,11 @@ function ItemActionSheet({
             )}
           </div>
         ) : !editing ? (
-          <p className={styles.permissionNote}>An adult or the current owner can change this item.</p>
+          <p className={styles.permissionNote}>
+            {readOnlyCalendarEvent
+              ? "This is read-only from Google Calendar. Make changes in Google Calendar, then sync Selected calendars."
+              : "An adult or the current owner can change this item."}
+          </p>
         ) : null}
 
         {!editing && canChangeStatus && !item.deleted_at ? (
