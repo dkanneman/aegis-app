@@ -3636,6 +3636,7 @@ export function PepperClient() {
               error={dayPlanError}
               emailConnected={Boolean(state.integrations?.gmail?.connected)}
               onGenerate={() => void generateDayPlan()}
+              onOpenConnections={() => setView("connections")}
               onOpen={openDayPlanItem}
               onWarningDecision={decideDayPlanWarning}
               warningPending={(warning) => isActionPending(`warning:${warning.key}`)}
@@ -4269,6 +4270,7 @@ function DayPlanPanel({
   error,
   emailConnected,
   onGenerate,
+  onOpenConnections,
   onOpen,
   onWarningDecision,
   warningPending,
@@ -4280,6 +4282,7 @@ function DayPlanPanel({
   error: string;
   emailConnected: boolean;
   onGenerate: () => void;
+  onOpenConnections: () => void;
   onOpen: (item: DayPlanItem) => void;
   onWarningDecision: (warning: DayPlanWarning, operation: "dismiss" | "snooze" | "restore") => Promise<void>;
   warningPending: (warning: DayPlanWarning) => boolean;
@@ -4309,6 +4312,11 @@ function DayPlanPanel({
               ? plan.headline
               : "Pepper can arrange your priorities around the places you need to be."}
           </p>
+          {plan?.source_warnings?.length ? (
+            <button type="button" className={styles.textButton} onClick={onOpenConnections}>
+              Check connections
+            </button>
+          ) : null}
         </div>
         <button
           type="button"
@@ -4334,7 +4342,6 @@ function DayPlanPanel({
 
       {plan ? (
         <>
-          {plan.source_warnings?.map(warning => <p role="status" key={warning}>{warning}</p>)}
           {visibleConflicts.length || hiddenConflicts.length ? (
             <details className={styles.dayPlanConflicts}>
               <summary>{visibleConflicts.length} schedule issues to review{hiddenConflicts.length ? ` · ${hiddenConflicts.length} dismissed or snoozed` : ""}</summary>
@@ -4448,7 +4455,7 @@ function DayPlanPanel({
                 : plan.email.status === "syncing"
                   ? "Email is syncing in the background"
                   : plan.email.status === "stale"
-                    ? "Email sync is stale"
+                    ? "Email may need updating"
                     : plan.email.status === "reconnect_required"
                       ? "Email needs to be reconnected"
                       : plan.email.status === "error"

@@ -50,6 +50,14 @@ test('private email suggestions use a full-width text column at desktop and mobi
   for (const [, columns] of layouts) assert.match(columns, /^\d+px minmax\(0, 1fr\) \d+px$/)
 })
 
+test('Today keeps stale source details in Connections without repeating raw labels', async () => {
+  const client = await readFile(clientPath, 'utf8')
+  assert.match(client, /plan\?\.source_warnings\?\.length\s*\?\s*\([\s\S]*?onClick=\{onOpenConnections\}[\s\S]*?Check connections/)
+  assert.doesNotMatch(client, /plan\.source_warnings\?\.map\(/)
+  assert.doesNotMatch(client, /Email sync is stale/)
+  assert.match(client, /Email may need updating/)
+})
+
 test('day planning ranks current hard-deadline payroll above an old manuscript task', () => {
   const plan = buildDailyPlan({
     now: '2026-09-15T15:00:00.000Z',
