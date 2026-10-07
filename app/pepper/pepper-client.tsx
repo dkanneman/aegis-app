@@ -2858,8 +2858,12 @@ export function PepperClient() {
     if (item.kind === "email" || item.record_id.startsWith("source:")) {
       if (item.external_url) {
         window.open(item.external_url, "_blank", "noopener,noreferrer");
+      } else if (item.record_id.startsWith("source:") && item.scheduled_for) {
+        const date = localDateFor(item.scheduled_for).replaceAll("-", "/");
+        window.open(`https://calendar.google.com/calendar/r/day/${date}`, "_blank", "noopener,noreferrer");
+        setMessage("Opened the calendar day, not the exact event. Sync Selected calendars for an exact event link when Google provides one.");
       } else {
-        setMessage("This private source has no direct link. Open its Google calendar or inbox.");
+        setMessage("This private source has no direct link. Review it in your connected account.");
       }
       return;
     }
@@ -3580,6 +3584,7 @@ export function PepperClient() {
 
             <DayPlanPanel
               plan={dayPlan}
+              memberId={state.member.id}
               busy={dayPlanBusy}
               emailConnected={Boolean(state.integrations?.gmail?.connected)}
               onGenerate={() => void generateDayPlan()}
@@ -4210,6 +4215,7 @@ export function PepperClient() {
 
 function DayPlanPanel({
   plan,
+  memberId,
   busy,
   emailConnected,
   onGenerate,
@@ -4218,6 +4224,7 @@ function DayPlanPanel({
   taskActionPending,
 }: {
   plan: DailyPlan | null;
+  memberId: string;
   busy: boolean;
   emailConnected: boolean;
   onGenerate: () => void;
@@ -4229,6 +4236,17 @@ function DayPlanPanel({
   ) => Promise<void>;
   taskActionPending: (item: DayPlanItem) => boolean;
 }) {
+  const [hiddenConflicts, setHiddenConflicts] = useState<{ scope: string; keys: string[] }>({ scope: "", keys: [] });
+  const conflictScope = `${memberId}:${plan?.date || ""}`;
+  const conflictEntries = (plan?.conflict_items?.length
+    ? plan.conflict_items
+    : (plan?.conflicts || []).map((message) => ({ message, event_ids: [] as string[] }))
+  ).filter((conflict, index, entries) => entries.findIndex((candidate) =>
+    candidate.event_ids.slice().sort().join(":") === conflict.event_ids.slice().sort().join(":")
+    && candidate.message === conflict.message) === index);
+  const conflictKey = (conflict: { message: string; event_ids: string[] }) => `${conflict.event_ids.slice().sort().join(":")}:${conflict.message}`;
+  const dismissed = hiddenConflicts.scope === conflictScope ? hiddenConflicts.keys : [];
+  const visibleConflicts = conflictEntries.filter((conflict) => !dismissed.includes(conflictKey(conflict)));
   return (
     <section
       className={`${styles.section} ${styles.dayPlan}`}
@@ -4263,14 +4281,11 @@ function DayPlanPanel({
       {plan ? (
         <>
           {plan.source_warnings?.map(warning => <p role="status" key={warning}>{warning}</p>)}
-          {plan.conflicts.length ? (
-            <div className={styles.dayPlanConflicts} role="alert">
-              <strong>Resolve before the day starts</strong>
-              {(plan.conflict_items?.length
-                ? plan.conflict_items
-                : plan.conflicts.map((message) => ({ message, event_ids: [] as string[] }))
-              ).map((conflict, index) => (
-                <div className={styles.dayPlanConflict} key={`${conflict.event_ids.join(":")}:${index}`}>
+          {conflictEntries.length ? (
+            <details className={styles.dayPlanConflicts}>
+              <summary>{visibleConflicts.length} schedule overlaps to review{dismissed.length ? ` · ${dismissed.length} hidden for now` : ""}</summary>
+              {visibleConflicts.map((conflict) => (
+                <div className={styles.dayPlanConflict} key={conflictKey(conflict)}>
                   <span>{conflict.message}</span>
                   <div className={styles.dayPlanConflictActions}>
                     {conflict.event_ids.map((eventId) => {
@@ -4280,16 +4295,18 @@ function DayPlanPanel({
                       );
                       return item ? (
                         <button key={eventId} type="button" onClick={() => onOpen(item)}>
-                          {item.record_id.startsWith("source:") ? "Open source" : "Review"} {item.title}
+                          {item.record_id.startsWith("source:") ? item.external_url ? "Open source" : "Open calendar day for" : "Review"} {item.title}
                           <ChevronRight size={14} aria-hidden="true" />
                         </button>
                       ) : null;
                     })}
+                    <button type="button" onClick={() => setHiddenConflicts({ scope: conflictScope, keys: [...dismissed, conflictKey(conflict)] })}>Hide for now</button>
                   </div>
                 </div>
               ))}
+              {dismissed.length ? <button type="button" className={styles.dayPlanRestoreConflicts} onClick={() => setHiddenConflicts({ scope: conflictScope, keys: [] })}>Show hidden overlaps</button> : null}
               <small>Change a Pepper event, then refresh the plan. For read-only Google events, make the change in Google Calendar, sync that source in Connections, then refresh.</small>
-            </div>
+            </details>
           ) : null}
 
           <div className={styles.dayPlanList}>

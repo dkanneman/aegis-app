@@ -391,7 +391,11 @@ test('plan refresh is bounded and does not force a provider sync; conflicts open
   assert.match(refresh, /if \(dayPlanRequestInFlight\.current\) return/)
   assert.match(refresh, /dayPlanRequestInFlight\.current = false/)
   assert.match(client, /candidate\.record_id === eventId/)
-  assert.match(client, /item\.record_id\.startsWith\("source:"\) \? "Open source"/)
+  assert.match(client, /item\.external_url \? "Open source" : "Open calendar day for"/)
+  assert.match(client, /calendar\.google\.com\/calendar\/r\/day\/\$\{date\}/)
+  assert.match(client, /Hide for now/)
+  assert.match(client, /Show hidden overlaps/)
+  assert.match(client, /<details className=\{styles\.dayPlanConflicts\}>/)
 })
 
 test('daily planning is private, live, and available from Today and Ask Pepper', async () => {

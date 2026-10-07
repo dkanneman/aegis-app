@@ -32,9 +32,12 @@ test('Pacific all-day boundaries preserve spring and autumn DST and exclusive en
 })
 test('source time, cancellation, declined invitations and safe links are normalized without Google writes',()=>{
   assert.equal(normalizeSourceEvent(event,calendar).starts_at,'2026-09-30T16:00:00.000Z')
+  assert.equal(normalizeSourceEvent(event,calendar).source_url,event.htmlLink)
+  assert.equal(normalizeSourceEvent({...event,htmlLink:'https://www.google.com/calendar/event?eid=example'},calendar).source_url,'https://www.google.com/calendar/event?eid=example')
   assert.equal(normalizeSourceEvent({...event,status:'cancelled'},calendar),null)
   assert.equal(normalizeSourceEvent({...event,attendees:[{self:true,responseStatus:'declined'}]},calendar),null)
   assert.equal(normalizeSourceEvent({...event,htmlLink:'javascript:alert(1)'},calendar).source_url,null)
+  assert.equal(normalizeSourceEvent({...event,htmlLink:'https://calendar.google.com.evil.invalid/calendar/event'},calendar).source_url,null)
 })
 test('recurring copies deduplicate by immutable UID and instance, not title; conflicts remain visible',()=>{
   const one=normalizeSourceEvent({...event,originalStartTime:event.start,recurringEventId:'series'},calendar)

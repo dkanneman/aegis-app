@@ -419,14 +419,21 @@
 }
 
 .dayPlanConflicts {
-  display: grid;
-  gap: 3px;
   padding: 12px 24px;
   border-top: 1px solid rgba(203, 141, 134, 0.22);
-  background: rgba(243, 221, 220, 0.72);
+  background: rgba(242, 235, 246, 0.75);
   color: var(--pepper-bordeaux);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.dayPlanConflicts summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dayPlanConflicts[open] summary {
+  margin-bottom: 10px;
 }
 
 .dayPlanConflicts strong {
@@ -466,6 +473,16 @@
 .dayPlanConflictActions button:hover,
 .dayPlanConflictActions button:focus-visible {
   text-decoration: underline;
+}
+
+.dayPlanRestoreConflicts {
+  margin: 10px 0;
+  border: 0;
+  background: transparent;
+  color: var(--pepper-bordeaux);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .dayPlanList {

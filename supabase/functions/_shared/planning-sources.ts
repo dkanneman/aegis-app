@@ -53,7 +53,11 @@ export function normalizeSourceEvent(event: GoogleReadEvent, calendar: {id:strin
   }
 }
 export function safeSourceUrl(value: unknown, host: string) {
-  try { const u=new URL(String(value));return u.protocol==='https:' && u.hostname===host ? u.toString() : null } catch { return null }
+  try {
+    const u=new URL(String(value))
+    const allowed=host==='www.google.com' ? ['www.google.com','calendar.google.com'] : [host]
+    return u.protocol==='https:' && allowed.includes(u.hostname) ? u.toString() : null
+  } catch { return null }
 }
 export function deduplicateSourceEvents<T extends {dedupe_key:string;source_updated_at:string|null;starts_at:string;ends_at:string;title:string;location:string|null}>(items:T[]) {
   const seen = new Map<string,T>()
