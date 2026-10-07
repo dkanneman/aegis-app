@@ -48,6 +48,7 @@ import {
   X,
 } from "lucide-react";
 import { minutesInTimeZone, pepperAtmosphereAt } from "./pepper-atmosphere";
+import { scheduledPlanRefreshKey } from "./pepper-plan-refresh";
 import {
   isMedicalAppointment,
   isMedicalCareTask,
@@ -1394,8 +1395,10 @@ export function PepperClient() {
   const [pepperExchange, setPepperExchange] = useState<PepperExchange | null>(null);
   const [dayPlan, setDayPlan] = useState<DailyPlan | null>(null);
   const [dayPlanBusy, setDayPlanBusy] = useState(false);
-  const dayPlanRequestInFlight = useRef(false);
-  const lastDayPlanRefreshAt = useRef(0);
+  const [dayPlanError, setDayPlanError] = useState("");
+  const dayPlanRequestInFlight = useRef<Promise<DailyPlan | null> | null>(null);
+  const dayPlanRequestSession = useRef("");
+  const lastScheduledPlanAttempt = useRef<string | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [tell, setTell] = useState("");
   const [listening, setListening] = useState(false);
@@ -1514,31 +1517,59 @@ export function PepperClient() {
 
   async function refreshDayPlanFromServer(session = token, refreshSources = false) {
     if (!session) return null;
-    let result;
-    try {
-      result = await call(
-        { action: "day_plan", refresh_sources: refreshSources },
-        session,
-        AbortSignal.timeout(20000),
-      );
-    } catch (error) {
-      if (error instanceof Error && /abort|timeout/i.test(error.name)) {
-        throw new Error("The plan refresh timed out. Your last plan is still shown; check Connections for source sync status.");
+    if (dayPlanRequestInFlight.current && dayPlanRequestSession.current === session) {
+      return dayPlanRequestInFlight.current;
+    }
+    const request = (async () => {
+      setDayPlanBusy(true);
+      try {
+        let result;
+        try {
+          result = await call(
+            { action: "day_plan", refresh_sources: refreshSources },
+            session,
+            AbortSignal.timeout(20000),
+          );
+        } catch (error) {
+          if (error instanceof Error && /abort|timeout/i.test(error.name)) {
+            throw new Error("The plan refresh timed out. Your last plan is still shown.");
+          }
+          throw error;
+        }
+        if (activeSessionRef.current !== session) return null;
+        if (!result.plan || !Array.isArray(result.plan.items)) {
+          throw new Error("Pepper could not verify a complete day plan.");
+        }
+        const plan = result.plan as DailyPlan;
+        setDayPlan(plan);
+        setDayPlanError("");
+        lastScheduledPlanAttempt.current = scheduledPlanRefreshKey(new Date(), TZ);
+        return plan;
+      } catch (error) {
+        if (activeSessionRef.current === session) {
+          setDayPlanError(error instanceof Error ? error.message : "Pepper could not refresh Today.");
+        }
+        throw error;
+      } finally {
+        if (activeSessionRef.current === session) setDayPlanBusy(false);
       }
-      throw error;
+    })();
+    dayPlanRequestInFlight.current = request;
+    dayPlanRequestSession.current = session;
+    try {
+      return await request;
+    } finally {
+      if (dayPlanRequestInFlight.current === request) dayPlanRequestInFlight.current = null;
     }
-    if (activeSessionRef.current !== session) return null;
-    if (!result.plan || !Array.isArray(result.plan.items)) {
-      throw new Error("Pepper could not verify a complete day plan.");
-    }
-    const plan = result.plan as DailyPlan;
-    setDayPlan(plan);
-    lastDayPlanRefreshAt.current = Date.now();
-    return plan;
   }
 
   async function refreshDayPlanAfterChange(session = token) {
     try {
+      if (dayPlanRequestInFlight.current && dayPlanRequestSession.current === session) {
+        const pending = dayPlanRequestInFlight.current;
+        await pending.catch(() => null);
+        if (dayPlanRequestInFlight.current === pending) dayPlanRequestInFlight.current = null;
+      }
       return await refreshDayPlanFromServer(session);
     } catch {
       return null;
@@ -2536,6 +2567,7 @@ export function PepperClient() {
       if (!session || session === activeSession) return;
       activeSession = session;
       setToken(session);
+      lastScheduledPlanAttempt.current = scheduledPlanRefreshKey(new Date(), TZ);
       void Promise.all([load(session), refreshDayPlanAfterChange(session)]);
     };
     const lockNativeSession = () => {
@@ -2583,19 +2615,21 @@ export function PepperClient() {
   useEffect(() => {
     if (!token) return;
     let observedDate = localDate();
-    let refreshing = false;
-    const refreshIfNeeded = (resumed = false) => {
-      if (document.visibilityState !== "visible" || refreshing) return;
+    const refreshIfNeeded = () => {
+      if (document.visibilityState !== "visible") return;
       const currentDate = localDate();
-      if (!resumed && currentDate === observedDate && Date.now() - lastDayPlanRefreshAt.current < 5 * 60_000) return;
-      observedDate = currentDate;
-      refreshing = true;
-      void Promise.all([load(token), refreshDayPlanAfterChange(token)]).finally(() => {
-        refreshing = false;
-      });
+      if (currentDate !== observedDate) {
+        observedDate = currentDate;
+        setDayPlan(null);
+        void load(token);
+      }
+      const checkpoint = scheduledPlanRefreshKey(new Date(), TZ);
+      if (!checkpoint || checkpoint === lastScheduledPlanAttempt.current) return;
+      lastScheduledPlanAttempt.current = checkpoint;
+      void refreshDayPlanFromServer(token).catch(() => null);
     };
-    const onVisibilityChange = () => refreshIfNeeded(true);
-    const onPageShow = () => refreshIfNeeded(true);
+    const onVisibilityChange = () => refreshIfNeeded();
+    const onPageShow = () => refreshIfNeeded();
     const timer = window.setInterval(() => refreshIfNeeded(), 60_000);
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("pageshow", onPageShow);
@@ -2896,9 +2930,6 @@ export function PepperClient() {
   }
 
   async function generateDayPlan(fromAsk = false, prompt = "Plan my day") {
-    if (dayPlanRequestInFlight.current) return;
-    dayPlanRequestInFlight.current = true;
-    setDayPlanBusy(true);
     if (fromAsk) setBusy(true);
     setMessage("Pepper is updating today's plan from saved information…");
     try {
@@ -2931,8 +2962,6 @@ export function PepperClient() {
         error instanceof Error ? error.message : "Pepper could not organize today.",
       );
     } finally {
-      dayPlanRequestInFlight.current = false;
-      setDayPlanBusy(false);
       if (fromAsk) setBusy(false);
     }
   }
@@ -3604,6 +3633,7 @@ export function PepperClient() {
             <DayPlanPanel
               plan={dayPlan}
               busy={dayPlanBusy}
+              error={dayPlanError}
               emailConnected={Boolean(state.integrations?.gmail?.connected)}
               onGenerate={() => void generateDayPlan()}
               onOpen={openDayPlanItem}
@@ -4236,6 +4266,7 @@ export function PepperClient() {
 function DayPlanPanel({
   plan,
   busy,
+  error,
   emailConnected,
   onGenerate,
   onOpen,
@@ -4246,6 +4277,7 @@ function DayPlanPanel({
 }: {
   plan: DailyPlan | null;
   busy: boolean;
+  error: string;
   emailConnected: boolean;
   onGenerate: () => void;
   onOpen: (item: DayPlanItem) => void;
@@ -4292,6 +4324,13 @@ function DayPlanPanel({
           {busy ? "Organizing…" : plan ? "Refresh plan" : "Plan my day"}
         </button>
       </header>
+
+      {error ? (
+        <div className={styles.dayPlanRefreshError} role="alert">
+          <span>{error}</span>
+          <button type="button" disabled={busy} onClick={onGenerate}>Retry refresh</button>
+        </div>
+      ) : null}
 
       {plan ? (
         <>

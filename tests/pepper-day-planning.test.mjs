@@ -9,11 +9,38 @@ import {
   rankDayPlanTasks,
   warningIsHidden,
 } from '../supabase/functions/pepper-family-api/day-planning.ts'
+import { scheduledPlanRefreshKey } from '../app/pepper/pepper-plan-refresh.ts'
 
 const apiPath = new URL('../supabase/functions/pepper-family-api/index.ts', import.meta.url)
 const clientPath = new URL('../app/pepper/pepper-client.tsx', import.meta.url)
 const cssPath = new URL('../app/pepper/pepper.module.css', import.meta.url)
 const priorityMigrationPath = new URL('../supabase/migrations/20260915175808_prioritize_daily_plan_tasks.sql', import.meta.url)
+
+test('Today schedules exactly 6 AM, noon, and 4 PM in Los Angeles across daylight saving', () => {
+  const key = (value) => scheduledPlanRefreshKey(new Date(value), 'America/Los_Angeles')
+  assert.equal(key('2026-10-07T12:59:00Z'), null)
+  assert.equal(key('2026-10-07T13:00:00Z'), '2026-10-07:0')
+  assert.equal(key('2026-10-07T18:59:00Z'), '2026-10-07:0')
+  assert.equal(key('2026-10-07T19:00:00Z'), '2026-10-07:1')
+  assert.equal(key('2026-10-07T22:59:00Z'), '2026-10-07:1')
+  assert.equal(key('2026-10-07T23:00:00Z'), '2026-10-07:2')
+  assert.equal(key('2026-10-08T06:59:00Z'), '2026-10-07:2')
+  assert.equal(key('2026-10-08T07:00:00Z'), null)
+  assert.equal(key('2026-03-08T12:59:00Z'), null)
+  assert.equal(key('2026-03-08T13:00:00Z'), '2026-03-08:0')
+  assert.equal(key('2026-11-01T13:59:00Z'), null)
+  assert.equal(key('2026-11-01T14:00:00Z'), '2026-11-01:0')
+})
+
+test('idle refresh icon is still and timeout exposes a bounded retry without overlapping requests', async () => {
+  const [client, css] = await Promise.all([readFile(clientPath, 'utf8'), readFile(cssPath, 'utf8')])
+  assert.match(css, /\.dayPlanGenerate:disabled svg\s*\{\s*animation: pepperSpin/)
+  assert.doesNotMatch(css, /\.dayPlanGenerate svg:only-child/)
+  assert.match(client, /dayPlanRequestInFlight\.current && dayPlanRequestSession\.current === session/)
+  assert.match(client, /lastScheduledPlanAttempt\.current = checkpoint/)
+  assert.match(client, /AbortSignal\.timeout\(20000\)/)
+  assert.match(client, /<button type="button" disabled=\{busy\} onClick=\{onGenerate\}>Retry refresh<\/button>/)
+})
 
 test('private email suggestions use a full-width text column at desktop and mobile widths', async () => {
   const [client, css] = await Promise.all([readFile(clientPath, 'utf8'), readFile(cssPath, 'utf8')])
@@ -429,8 +456,8 @@ test('plan refresh is bounded and does not force a provider sync; conflicts open
   assert.match(refresh, /refreshDayPlanFromServer\(token\)/)
   assert.doesNotMatch(refresh, /refreshDayPlanFromServer\(token, true\)/)
   assert.match(client, /AbortSignal\.timeout\(20000\)/)
-  assert.match(refresh, /if \(dayPlanRequestInFlight\.current\) return/)
-  assert.match(refresh, /dayPlanRequestInFlight\.current = false/)
+  assert.match(client, /dayPlanRequestInFlight\.current && dayPlanRequestSession\.current === session/)
+  assert.match(client, /dayPlanRequestInFlight\.current = null/)
   assert.match(client, /candidate\.record_id === eventId/)
   assert.match(client, /item\.external_url \? "Open source" : "Open calendar day for"/)
   assert.match(client, /calendar\.google\.com\/calendar\/r\/day\/\$\{date\}/)

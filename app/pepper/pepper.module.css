@@ -382,9 +382,36 @@
   opacity: 0.62;
 }
 
-.dayPlanGenerate:disabled svg,
-.dayPlanGenerate svg:only-child {
+.dayPlanGenerate:disabled svg {
   animation: pepperSpin 900ms linear infinite;
+}
+
+.dayPlanRefreshError {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border-top: 1px solid rgba(203, 141, 134, 0.35);
+  color: var(--pepper-bordeaux);
+  font-size: 13px;
+}
+
+.dayPlanRefreshError span {
+  min-width: 0;
+}
+
+.dayPlanRefreshError button {
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .dayPlanPrompt {
