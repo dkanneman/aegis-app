@@ -60,7 +60,12 @@
   padding: 25px clamp(20px, 5vw, 54px) 158px;
   border-right: 1px solid rgba(255, 255, 255, 0.55);
   border-left: 1px solid rgba(255, 255, 255, 0.55);
-  background: rgba(249, 250, 253, 0.88);
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--atmosphere-top) 28%, #f7f6fc),
+    color-mix(in srgb, var(--atmosphere-middle) 24%, #f9f8fc) 48%,
+    color-mix(in srgb, var(--atmosphere-bottom) 28%, #eff7f2)
+  );
   backdrop-filter: blur(28px) saturate(118%);
 }
 
@@ -204,7 +209,7 @@
   margin-bottom: 38px;
   border: 1px solid rgba(95, 111, 162, 0.14);
   border-radius: 14px;
-  background: rgba(226, 231, 241, 0.84);
+  background: rgba(205, 211, 238, 0.84);
 }
 
 .tab,
@@ -247,7 +252,7 @@
   min-height: 138px;
   margin-bottom: 34px;
   padding: 8px min(190px, 23vw) 22px 2px;
-  border-bottom: 1px solid rgba(23, 59, 86, 0.08);
+  border-bottom: 1px solid rgba(130, 141, 189, 0.28);
 }
 
 .hero::after {
@@ -312,9 +317,9 @@
   border-radius: 16px;
   background: linear-gradient(
     145deg,
-    rgba(248, 249, 255, 0.98),
-    rgba(229, 233, 248, 0.9) 58%,
-    rgba(226, 239, 231, 0.88)
+    rgba(239, 235, 249, 0.98),
+    rgba(220, 228, 246, 0.96) 52%,
+    rgba(211, 232, 222, 0.94)
   );
   box-shadow: 0 14px 34px rgba(51, 67, 107, 0.1);
 }
@@ -364,7 +369,7 @@
   padding: 10px 14px;
   border: 1px solid rgba(51, 67, 107, 0.12);
   border-radius: 10px;
-  background: var(--pepper-midnight-sea);
+  background: var(--pepper-mediterranean);
   color: #fff;
   font: inherit;
   font-size: 12px;

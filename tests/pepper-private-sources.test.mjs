@@ -44,6 +44,8 @@ test('recurring copies deduplicate by immutable UID and instance, not title; con
   assert.equal(deduplicateSourceEvents([one,utcCopy]).length,1)
   const other=normalizeSourceEvent({...event,id:'another',iCalUID:'other'},calendar)
   assert.equal(deduplicateSourceEvents([one,other]).length,2)
+  const nextOccurrence=normalizeSourceEvent({...event,id:'next-week',start:{dateTime:'2026-10-07T09:00:00-07:00'},end:{dateTime:'2026-10-07T10:00:00-07:00'},originalStartTime:{dateTime:'2026-10-07T09:00:00-07:00'}},calendar)
+  assert.equal(deduplicateSourceEvents([one,nextOccurrence]).length,2)
   assert.equal(deduplicateSourceEvents([one,{...copy,title:'Conflicting update'}]).length,2)
 })
 test('email evidence yields private suggestions, not commitments; unread alone is insufficient',()=>{
@@ -59,6 +61,6 @@ test('existing calendar commitment constrains an actionable email in the propose
   const mail=emailSuggestion({id:'m',threadId:'t',subject:'School form due tomorrow',sender:'school@example.test',body:'Please complete the form, due tomorrow.',received_at:'2026-09-30T15:00:00Z'},'test@example.test')
   const plan=buildDailyPlan({now:'2026-09-30T16:00:00Z',dayStart:'2026-09-30T07:00:00Z',dayEnd:'2026-10-01T07:00:00Z',timeZone:'America/Los_Angeles',tasks:[],events:[e],emails:[mail]})
   const email=plan.items.find(i=>i.kind==='email')
-  assert.ok(email);assert.ok(Date.parse(email.scheduled_for)>=Date.parse(e.ends_at));assert.match(email.reason,/Suggested/)
+  assert.ok(email);assert.equal(email.scheduled_for,null);assert.match(email.reason,/Suggested/)
   assert.equal(plan.items.filter(i=>i.source==='calendar').length,1)
 })

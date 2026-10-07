@@ -1078,7 +1078,7 @@ async function memberDayPlan(member:any,_headers:any){
   const [bounds,tasks,events,meals]=await Promise.all([
     sql<any[]>`select now() as now,(${today}::date::timestamp at time zone ${TZ}) as day_start,((${today}::date+1)::timestamp at time zone ${TZ}) as day_end`,
     sql<any[]>`
-      select id,title,status,due_at,priority,area,project,classification,tags,next_action,source,(to_jsonb(tasks)->>'source_url') as source_url,(to_jsonb(tasks)->>'source_capture_id') as source_capture_id,
+      select id,title,status,due_at,priority,area,project,classification,recurrence,tags,next_action,source,(to_jsonb(tasks)->>'source_url') as source_url,(to_jsonb(tasks)->>'source_capture_id') as source_capture_id,
         importance,urgency,deadline_type,due_date_confidence,waiting_on,waiting_follow_up_at,
         blocked,snoozed_until,dismissed_for_date::text,manually_pinned,daily_plan_state,
         priority_score,priority_reason,estimated_minutes
@@ -1092,7 +1092,7 @@ async function memberDayPlan(member:any,_headers:any){
       limit 500
     `,
     sql<any[]>`
-      select id,title,starts_at,ends_at,location,person_slug,kind,appointment_type,source,external_event_id,external_calendar_id,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id
+      select id,title,starts_at,ends_at,all_day,location,person_slug,kind,appointment_type,source,external_event_id,external_calendar_id,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id
       from public.events
       where household_id=${member.household_id}::uuid
         and deleted_at is null

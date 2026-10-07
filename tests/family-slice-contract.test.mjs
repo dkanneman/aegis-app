@@ -288,10 +288,12 @@ test('family member pages include privacy-scoped medical appointments', async ()
     readFile(new URL('../supabase/functions/pepper-calendar/logic.ts', import.meta.url), 'utf8'),
   ])
 
-  assert.match(api, /const \[events,appointments,tasks,profiles,schoolChanges,setup\]/)
+  assert.match(api, /const \[events,appointments,tasks,profiles,schoolChanges,setup,privateInputs\]/)
+  assert.match(api, /sourceItems\(sql,member\)/)
   assert.match(api, /lower\(coalesce\(e\.kind,''\)\)='appointment'/)
   assert.match(api, /e\.person_slug=\$\{member\.slug\}/)
   assert.match(api, /new Map\(\[\.\.\.events,\.\.\.appointments\]/)
+  assert.match(api, /privateInputs\.events\s*\.filter\(\(event:any\)=>sourceEventMatchesMember\(event,target\)\)/)
   assert.match(client, /const appointments = activeEvents\.filter\(isMedicalAppointment\)/)
   assert.match(client, /title="Appointments & care"/)
   assert.match(client, /const careTasks = activeTasks\.filter\(isMedicalCareTask\)/)
@@ -581,7 +583,9 @@ test('Pepper loads the daily shell first and opens heavier sections on demand', 
   assert.match(client, /action: "state", progressive: true/)
   assert.match(client, /action: "section_state", section/)
   assert.match(client, /sectionForView\(view\)/)
-  assert.match(client, /document\.visibilityState === "visible"/)
+  assert.match(client, /document\.visibilityState !== "visible"/)
+  assert.match(client, /document\.addEventListener\("visibilitychange", onVisibilityChange\)/)
+  assert.match(client, /window\.addEventListener\("pageshow", onPageShow\)/)
 })
 
 test('item and grocery changes update locally without a blocking full reload', async () => {

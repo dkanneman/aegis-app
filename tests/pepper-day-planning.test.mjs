@@ -45,7 +45,7 @@ test('day planning ranks current hard-deadline payroll above an old manuscript t
   assert.equal(plan.items.some((item) => item.kind === 'appointment' && item.record_id === 'appointment'), true)
   assert.match(taskItems[0].reason, /payroll|hard deadline today/i)
   assert.doesNotMatch(taskItems[0].reason, /overdue and still open/i)
-  assert.ok(taskItems[0].scheduled_for)
+  assert.equal(taskItems[0].scheduled_for, null)
 })
 
 test('overdue status alone cannot create top priority', () => {
@@ -176,6 +176,79 @@ test('repeated refreshes are idempotent', () => {
   assert.deepEqual(buildDailyPlan(input), buildDailyPlan(input))
 })
 
+test('a Saturday chore is not placed in Wednesday even when due this week', () => {
+  const base = {
+    now: '2026-10-07T16:00:00.000Z',
+    dayStart: '2026-10-07T07:00:00.000Z',
+    dayEnd: '2026-10-08T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [{ id: 'saturday-reset', title: 'Saturday reset — Kitchen + adult bedroom', classification: 'Chore', recurrence: 'weekly', status: 'open', due_at: '2026-10-11T00:00:00.000Z', urgency: 'this_week' }],
+    events: [],
+    emails: [],
+  }
+  assert.equal(buildDailyPlan(base).items.some(item => item.record_id === 'saturday-reset'), false)
+  const saturday = buildDailyPlan({ ...base, now: '2026-10-10T16:00:00.000Z', dayStart: '2026-10-10T07:00:00.000Z', dayEnd: '2026-10-11T07:00:00.000Z' })
+  assert.equal(saturday.items.filter(item => item.record_id === 'saturday-reset').length, 1)
+  const completed = buildDailyPlan({ ...base, tasks: [{ ...base.tasks[0], status: 'completed' }], now: '2026-10-10T16:00:00.000Z', dayStart: '2026-10-10T07:00:00.000Z', dayEnd: '2026-10-11T07:00:00.000Z' })
+  assert.equal(completed.items.some(item => item.record_id === 'saturday-reset'), false)
+})
+
+test('a Saturday deadline remains actionable on Wednesday without claiming a time slot', () => {
+  const plan = buildDailyPlan({
+    now: '2026-10-07T16:00:00.000Z', dayStart: '2026-10-07T07:00:00.000Z', dayEnd: '2026-10-08T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [{ id: 'deadline', title: 'Submit form', classification: 'To-do', status: 'open', due_at: '2026-10-11T00:00:00.000Z', deadline_type: 'hard', due_date_confidence: 1 }],
+    events: [], emails: [],
+  })
+  assert.equal(plan.items.find(item => item.record_id === 'deadline')?.scheduled_for, null)
+})
+
+test('a recurring occurrence follows Los Angeles dates across UTC midnight and DST', () => {
+  const task = { id: 'saturday', title: 'Weekly home reset', classification: 'Chore', recurrence: 'weekly', status: 'open', due_at: '2026-11-08T01:00:00.000Z' }
+  const base = { timeZone: 'America/Los_Angeles', tasks: [task], events: [], emails: [] }
+  const friday = buildDailyPlan({ ...base, now: '2026-11-07T07:30:00.000Z', dayStart: '2026-11-06T08:00:00.000Z', dayEnd: '2026-11-07T08:00:00.000Z' })
+  assert.equal(friday.items.some(item => item.record_id === task.id), false)
+  const saturday = buildDailyPlan({ ...base, now: '2026-11-07T16:00:00.000Z', dayStart: '2026-11-07T08:00:00.000Z', dayEnd: '2026-11-08T08:00:00.000Z' })
+  assert.equal(saturday.items.filter(item => item.record_id === task.id).length, 1)
+})
+
+test('due dates do not become invented late-night appointments', () => {
+  const plan = buildDailyPlan({
+    now: '2026-10-08T02:30:00.000Z',
+    dayStart: '2026-10-07T07:00:00.000Z',
+    dayEnd: '2026-10-08T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [
+      { id: 'safety', title: 'Collect work safety sheets', status: 'open', area: 'Work', urgency: 'today' },
+      { id: 'walk', title: 'Walk Maggie', status: 'open', classification: 'Chore', urgency: 'today' },
+    ],
+    events: [{ id: 'dinner', title: 'Dinner with family', starts_at: '2026-10-08T01:30:00.000Z', ends_at: '2026-10-08T02:30:00.000Z' }],
+    emails: [],
+  })
+  assert.equal(plan.items.filter(item => item.source === 'tasks').length, 2)
+  assert.ok(plan.items.filter(item => item.source === 'tasks').every(item => item.scheduled_for === null && item.ends_at === null))
+  assert.equal(plan.items.find(item => item.record_id === 'dinner').scheduled_for, '2026-10-08T01:30:00.000Z')
+})
+
+test('all-day calendar markers do not repeat as clock-overlap conflicts', () => {
+  const plan = buildDailyPlan({
+    now: '2026-10-07T16:00:00.000Z',
+    dayStart: '2026-10-07T07:00:00.000Z',
+    dayEnd: '2026-10-08T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles',
+    tasks: [],
+    events: [
+      { id: 'spectator', title: 'Optional race spectator', starts_at: '2026-10-07T07:00:00.000Z', ends_at: '2026-10-08T07:00:00.000Z', all_day: true },
+      { id: 'school', title: 'School pickup', starts_at: '2026-10-07T19:00:00.000Z', ends_at: '2026-10-07T19:30:00.000Z' },
+      { id: 'doctor', title: 'Doctor appointment', starts_at: '2026-10-07T19:15:00.000Z', ends_at: '2026-10-07T20:00:00.000Z' },
+    ],
+    emails: [],
+  })
+  assert.equal(plan.items.filter(item => item.record_id === 'spectator').length, 1)
+  assert.equal(plan.conflict_items.length, 1)
+  assert.deepEqual(plan.conflict_items[0].event_ids, ['school', 'doctor'])
+})
+
 test('one project cannot flood the plan', () => {
   const projects = ['Manuscript', 'Chapter 1', 'Book revisions', 'Publishing', 'Manuscript']
   const manuscript = Array.from({ length: 5 }, (_, index) => ({
@@ -200,7 +273,7 @@ test('one project cannot flood the plan', () => {
   assert.ok(plan.items.filter((item) => item.kind === 'task' && item.plan_tier === 'must_protect').length <= 3)
 })
 
-test('planner includes only work that fits available calendar time', () => {
+test('planner does not turn open calendar space into an unverified task slot', () => {
   const plan = buildDailyPlan({
     now: '2026-09-15T15:00:00.000Z',
     dayStart: '2026-09-15T07:00:00.000Z',
@@ -211,9 +284,9 @@ test('planner includes only work that fits available calendar time', () => {
     emails: [],
   })
   const tasks = plan.items.filter((item) => item.kind === 'task')
-  assert.equal(tasks.length, 1)
-  assert.ok(tasks.every((item) => item.scheduled_for && item.ends_at))
-  assert.ok(tasks.every((item) => Date.parse(item.ends_at) <= Date.parse('2026-09-15T19:00:00.000Z')))
+  assert.equal(tasks.length, 5)
+  assert.ok(tasks.every((item) => item.scheduled_for === null && item.ends_at === null))
+  assert.equal(plan.items.find((item) => item.record_id === 'fixed').scheduled_for, '2026-09-15T16:30:00.000Z')
 })
 
 test('day planning identifies actionable email without turning ordinary mail into work', () => {
@@ -333,7 +406,8 @@ test('daily planning is private, live, and available from Today and Ask Pepper',
   assert.match(api, /action==='day_plan_task_action'/)
   assert.match(api, /'day_plan'/)
   assert.match(api, /from public\.meal_plan mp/)
-  assert.match(api, /classification,tags,next_action,source/)
+  assert.match(api, /classification,recurrence,tags,next_action,source/)
+  assert.match(api, /select id,title,starts_at,ends_at,all_day,location/)
   assert.match(api, /emails:privateInputs.emails/)
   assert.match(api, /sourceItems\(sql,member\)/)
   assert.match(client, /Plan my day/)

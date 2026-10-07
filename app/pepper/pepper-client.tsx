@@ -2579,15 +2579,28 @@ export function PepperClient() {
 
   useEffect(() => {
     if (!token) return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void load(token);
-        if (Date.now() - lastDayPlanRefreshAt.current >= 5 * 60_000) {
-          void refreshDayPlanAfterChange(token);
-        }
-      }
-    }, 60_000);
-    return () => window.clearInterval(timer);
+    let observedDate = localDate();
+    let refreshing = false;
+    const refreshIfNeeded = (resumed = false) => {
+      if (document.visibilityState !== "visible" || refreshing) return;
+      const currentDate = localDate();
+      if (!resumed && currentDate === observedDate && Date.now() - lastDayPlanRefreshAt.current < 5 * 60_000) return;
+      observedDate = currentDate;
+      refreshing = true;
+      void Promise.all([load(token), refreshDayPlanAfterChange(token)]).finally(() => {
+        refreshing = false;
+      });
+    };
+    const onVisibilityChange = () => refreshIfNeeded(true);
+    const onPageShow = () => refreshIfNeeded(true);
+    const timer = window.setInterval(() => refreshIfNeeded(), 60_000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pageshow", onPageShow);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -4304,7 +4317,7 @@ function DayPlanPanel({
                       className={styles.dayPlanRow}
                       onClick={() => onOpen(item)}
                     >
-                      <time>{item.all_day ? "All day" : item.scheduled_for ? time(item.scheduled_for) : "Later"}</time>
+                      <time>{item.all_day ? "All day" : item.scheduled_for ? time(item.scheduled_for) : "To plan"}</time>
                       <span className={styles.dayPlanIcon} aria-hidden="true">
                         <Icon size={16} strokeWidth={1.8} />
                       </span>

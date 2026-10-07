@@ -17,6 +17,7 @@ export type DayPlanTask = {
   area?: string | null
   project?: string | null
   classification?: string | null
+  recurrence?: string | null
   tags?: string[] | null
   next_action?: string | null
   source?: string | null
@@ -154,7 +155,6 @@ const MINUTE = 60_000
 const DEFAULT_TASK_MINUTES = 45
 const DEFAULT_CHORE_MINUTES = 30
 const EMAIL_BLOCK = 15 * MINUTE
-const EVENT_BUFFER = 10 * MINUTE
 const TRUSTED_DUE_CONFIDENCE = 0.75
 const MAX_MUST_PROTECT = 3
 const MAX_OPTIONAL = 2
@@ -256,11 +256,13 @@ function blockingLabel(task: DayPlanTask) {
   return /\b(blocks?|blocking|dependency)\b/i.test(text) ? 'another person or project' : null
 }
 
-function taskEligibility(task: DayPlanTask, now: number, today: string) {
+function taskEligibility(task: DayPlanTask, now: number, today: string, timeZone: string) {
   const status = String(task.status || 'open')
   if (['completed', 'canceled'].includes(status)) return 'already handled'
   if (task.snoozed_until && Date.parse(task.snoozed_until) > now) return 'snoozed'
   if (task.dismissed_for_date === today) return 'not selected today'
+  if (isChoreTask(task) && task.recurrence && task.recurrence !== 'none'
+    && task.due_at && localDate(task.due_at, timeZone) > today && !task.manually_pinned) return 'scheduled for a later occurrence'
   if (task.waiting_on) {
     const followUp = task.waiting_follow_up_at ? Date.parse(task.waiting_follow_up_at) : Number.NaN
     if (!Number.isFinite(followUp) || followUp > now) return 'waiting on someone'
@@ -327,7 +329,7 @@ export function rankDayPlanTasks(
 ) {
   const now = Date.parse(context.now)
   return tasks
-    .filter((task) => !taskEligibility(task, now, context.today))
+    .filter((task) => !taskEligibility(task, now, context.today, context.timeZone))
     .map((task): RankedDayPlanTask => {
       const importance = taskImportance(task)
       const urgency = taskUrgency(task, context.today, context.timeZone)
@@ -443,27 +445,10 @@ function taskDuration(task: DayPlanTask) {
   return Math.max(5, Math.min(8 * 60, Number.isFinite(requested) ? requested : fallback)) * MINUTE
 }
 
-function ceilToQuarterHour(value: number) {
-  return Math.ceil(value / (15 * MINUTE)) * 15 * MINUTE
-}
-
-type BusyBlock = { start: number; end: number }
-
-function allocateBlock(busy: BusyBlock[], cursor: number, dayEnd: number, duration: number) {
-  let candidate = ceilToQuarterHour(cursor)
-  for (const block of [...busy].sort((left, right) => left.start - right.start)) {
-    if (block.end <= candidate) continue
-    if (candidate + duration <= block.start - EVENT_BUFFER) break
-    candidate = ceilToQuarterHour(block.end + EVENT_BUFFER)
-  }
-  if (candidate + duration > dayEnd) return null
-  busy.push({ start: candidate, end: candidate + duration })
-  return candidate
-}
-
 function conflictItems(events: DayPlanEvent[]) {
   const conflicts: Array<{ message: string; event_ids: [string, string] }> = []
-  const sorted = [...events].sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
+  const sorted = events.filter((event) => !event.all_day && event.blocks_time !== false)
+    .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
   for (let index = 0; index < sorted.length; index += 1) {
     const left = sorted[index]
     const leftEnd = Date.parse(left.ends_at || left.starts_at)
@@ -500,7 +485,7 @@ function projectLimited(candidates: RankedDayPlanTask[]) {
   })
 }
 
-function taskPlanItem(candidate: RankedDayPlanTask, tier: 'must_protect' | 'optional', start: number, duration: number): DayPlanItem {
+function taskPlanItem(candidate: RankedDayPlanTask, tier: 'must_protect' | 'optional', duration: number): DayPlanItem {
   const kind = isChoreTask(candidate.task) ? 'chore' as const : 'task' as const
   return {
     id: `${kind}:${candidate.task.id}`,
@@ -510,8 +495,8 @@ function taskPlanItem(candidate: RankedDayPlanTask, tier: 'must_protect' | 'opti
     detail: candidate.task.next_action || candidate.task.project || candidate.task.area || null,
     reason: candidate.reason,
     urgency: displayUrgency(candidate),
-    scheduled_for: new Date(start).toISOString(),
-    ends_at: new Date(start + duration).toISOString(),
+    scheduled_for: null,
+    ends_at: null,
     source: 'tasks',
     external_url: candidate.task.source_url || null,
     priority_score: candidate.score,
@@ -543,14 +528,6 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     })
     .sort((left, right) => Date.parse(left.eat_at) - Date.parse(right.eat_at))
 
-  const busy: BusyBlock[] = [
-    ...appointments.filter(event=>event.blocks_time!==false).map((event) => ({
-      start: Date.parse(event.starts_at),
-      end: Math.max(Date.parse(event.ends_at || event.starts_at), Date.parse(event.starts_at) + 30 * MINUTE),
-    })),
-    ...meals.map((meal) => ({ start: Date.parse(meal.eat_at), end: Date.parse(meal.eat_at) + 60 * MINUTE })),
-  ]
-
   const rankedTasks = projectLimited(rankDayPlanTasks(input.tasks, { now: input.now, today, timeZone: input.timeZone }))
   const mustPool = rankedTasks.filter((candidate) => candidate.rankGroup <= 4 || candidate.score >= 40)
   const selectedIds = new Set<string>()
@@ -559,9 +536,7 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
   for (const candidate of mustPool) {
     if (flexibleItems.filter((item) => item.plan_tier === 'must_protect').length >= MAX_MUST_PROTECT) break
     const duration = taskDuration(candidate.task)
-    const allocated = allocateBlock(busy, cursor, dayEnd, duration)
-    if (allocated === null) continue
-    flexibleItems.push(taskPlanItem(candidate, 'must_protect', allocated, duration))
+    flexibleItems.push(taskPlanItem(candidate, 'must_protect', duration))
     selectedIds.add(candidate.task.id)
   }
 
@@ -581,15 +556,11 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     if (entry.kind === 'task') {
       const candidate = entry.candidate as RankedDayPlanTask
       const duration = taskDuration(candidate.task)
-      const allocated = allocateBlock(busy, cursor, dayEnd, duration)
-      if (allocated === null) continue
-      flexibleItems.push(taskPlanItem(candidate, 'optional', allocated, duration))
+      flexibleItems.push(taskPlanItem(candidate, 'optional', duration))
       selectedIds.add(candidate.task.id)
       continue
     }
     const { email, score } = entry.candidate as { email: DayPlanEmail; score: number }
-    const allocated = allocateBlock(busy, cursor, dayEnd, EMAIL_BLOCK)
-    if (allocated === null) continue
     flexibleItems.push({
       id: `email:${email.id}`,
       record_id: email.id,
@@ -598,8 +569,8 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
       detail: email.sender || email.snippet || null,
       reason: email.reason || (score >= 9 ? 'Suggested: review time-sensitive email' : 'Suggested: respond to email'),
       urgency: score >= 9 ? 'high' : 'planned',
-      scheduled_for: new Date(allocated).toISOString(),
-      ends_at: new Date(allocated + EMAIL_BLOCK).toISOString(),
+      scheduled_for: null,
+      ends_at: null,
       source: 'email',
       external_url: email.source_url || (email.thread_id ? `https://mail.google.com/mail/u/0/#inbox/${encodeURIComponent(email.thread_id)}` : null),
       priority_score: 25 + score,
@@ -658,9 +629,9 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
   const headline = nextMedical
     ? `${nextMedical.title} is today's top fixed priority at ${timeLabel(nextMedical.scheduled_for!, input.timeZone)}; coordinate school and work around it.`
     : firstPriority && nextFixed
-      ? `Start with ${firstPriority.title}; protect ${nextFixed.title} at ${timeLabel(nextFixed.scheduled_for!, input.timeZone)}.`
+      ? `Prioritize ${firstPriority.title}; protect ${nextFixed.title} at ${timeLabel(nextFixed.scheduled_for!, input.timeZone)}.`
       : firstPriority
-        ? `Start with ${firstPriority.title}.`
+        ? `Prioritize ${firstPriority.title}.`
         : nextFixed
           ? `Your next fixed commitment is ${nextFixed.title} at ${timeLabel(nextFixed.scheduled_for!, input.timeZone)}.`
           : 'Your day is open from what Pepper can currently verify.'
@@ -678,7 +649,7 @@ export function buildDailyPlan(input: DayPlanInput): DailyPlan {
     generated_at: input.now,
     date: today,
     headline,
-    summary: `${fixedItems.length} fixed, ${mustCount} must protect, and ${optionalCount} optional item${optionalCount === 1 ? '' : 's'} fit today.`,
+    summary: `${fixedItems.length} fixed, ${mustCount} priority, and ${optionalCount} optional item${optionalCount === 1 ? '' : 's'} to plan. Only confirmed commitments have times.`,
     items,
     conflicts: conflict_items.map((conflict) => conflict.message),
     conflict_items,
