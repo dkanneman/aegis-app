@@ -712,7 +712,8 @@ type DailyPlan = {
   summary: string;
   items: DayPlanItem[];
   conflicts: string[];
-  conflict_items?: Array<{ message: string; event_ids: [string, string] }>;
+  conflict_items?: DayPlanWarning[];
+  hidden_conflict_items?: DayPlanWarning[];
   counts: {
     tasks: number;
     chores: number;
@@ -731,6 +732,8 @@ type DailyPlan = {
     error?: string | null;
   };
 };
+
+type DayPlanWarning = { key: string; fingerprint: string; message: string; event_ids: string[]; decision?: "dismissed" | "snoozed"; snoozed_until?: string | null };
 
 function nativeHealthBridgeMessageHandler() {
   if (typeof window === "undefined") return null;
@@ -2934,6 +2937,22 @@ export function PepperClient() {
     }
   }
 
+  async function decideDayPlanWarning(warning: DayPlanWarning, operation: "dismiss" | "snooze" | "restore") {
+    const session = token;
+    const pendingKey = `warning:${warning.key}`;
+    setActionPending(pendingKey, true);
+    try {
+      const result = await call({ action: "day_plan_warning_decide", warning_key: warning.key, fingerprint: warning.fingerprint, operation }, session);
+      if (activeSessionRef.current !== session || !result.ok || !result.plan) throw new Error("Pepper could not confirm this warning change. Refresh Today.");
+      setDayPlan(result.plan as DailyPlan);
+      setMessage(operation === "dismiss" ? "Warning dismissed. Its events were not changed." : operation === "snooze" ? "Warning snoozed for one hour." : "Warning restored.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Pepper could not update this warning.");
+    } finally {
+      setActionPending(pendingKey, false);
+    }
+  }
+
   async function updateDayPlanTask(
     item: DayPlanItem,
     operation: DailyPlanTaskAction,
@@ -3584,11 +3603,12 @@ export function PepperClient() {
 
             <DayPlanPanel
               plan={dayPlan}
-              memberId={state.member.id}
               busy={dayPlanBusy}
               emailConnected={Boolean(state.integrations?.gmail?.connected)}
               onGenerate={() => void generateDayPlan()}
               onOpen={openDayPlanItem}
+              onWarningDecision={decideDayPlanWarning}
+              warningPending={(warning) => isActionPending(`warning:${warning.key}`)}
               onTaskAction={updateDayPlanTask}
               taskActionPending={(item) =>
                 isActionPending(`day-plan:${item.record_id}`)
@@ -4215,20 +4235,22 @@ export function PepperClient() {
 
 function DayPlanPanel({
   plan,
-  memberId,
   busy,
   emailConnected,
   onGenerate,
   onOpen,
+  onWarningDecision,
+  warningPending,
   onTaskAction,
   taskActionPending,
 }: {
   plan: DailyPlan | null;
-  memberId: string;
   busy: boolean;
   emailConnected: boolean;
   onGenerate: () => void;
   onOpen: (item: DayPlanItem) => void;
+  onWarningDecision: (warning: DayPlanWarning, operation: "dismiss" | "snooze" | "restore") => Promise<void>;
+  warningPending: (warning: DayPlanWarning) => boolean;
   onTaskAction: (
     item: DayPlanItem,
     action: DailyPlanTaskAction,
@@ -4236,17 +4258,10 @@ function DayPlanPanel({
   ) => Promise<void>;
   taskActionPending: (item: DayPlanItem) => boolean;
 }) {
-  const [hiddenConflicts, setHiddenConflicts] = useState<{ scope: string; keys: string[] }>({ scope: "", keys: [] });
-  const conflictScope = `${memberId}:${plan?.date || ""}`;
-  const conflictEntries = (plan?.conflict_items?.length
-    ? plan.conflict_items
-    : (plan?.conflicts || []).map((message) => ({ message, event_ids: [] as string[] }))
-  ).filter((conflict, index, entries) => entries.findIndex((candidate) =>
-    candidate.event_ids.slice().sort().join(":") === conflict.event_ids.slice().sort().join(":")
-    && candidate.message === conflict.message) === index);
-  const conflictKey = (conflict: { message: string; event_ids: string[] }) => `${conflict.event_ids.slice().sort().join(":")}:${conflict.message}`;
-  const dismissed = hiddenConflicts.scope === conflictScope ? hiddenConflicts.keys : [];
-  const visibleConflicts = conflictEntries.filter((conflict) => !dismissed.includes(conflictKey(conflict)));
+  const visibleConflicts = plan?.conflict_items || [];
+  const hiddenConflicts = plan?.hidden_conflict_items || [];
+  const itemForWarning = (eventId: string) => plan?.items.find((candidate) =>
+    candidate.record_id === eventId && (candidate.kind === "event" || candidate.kind === "appointment"));
   return (
     <section
       className={`${styles.section} ${styles.dayPlan}`}
@@ -4281,30 +4296,35 @@ function DayPlanPanel({
       {plan ? (
         <>
           {plan.source_warnings?.map(warning => <p role="status" key={warning}>{warning}</p>)}
-          {conflictEntries.length ? (
+          {visibleConflicts.length || hiddenConflicts.length ? (
             <details className={styles.dayPlanConflicts}>
-              <summary>{visibleConflicts.length} schedule overlaps to review{dismissed.length ? ` · ${dismissed.length} hidden for now` : ""}</summary>
+              <summary>{visibleConflicts.length} schedule issues to review{hiddenConflicts.length ? ` · ${hiddenConflicts.length} dismissed or snoozed` : ""}</summary>
               {visibleConflicts.map((conflict) => (
-                <div className={styles.dayPlanConflict} key={conflictKey(conflict)}>
+                <div className={styles.dayPlanConflict} key={conflict.key}>
                   <span>{conflict.message}</span>
                   <div className={styles.dayPlanConflictActions}>
                     {conflict.event_ids.map((eventId) => {
-                      const item = plan.items.find((candidate) =>
-                        candidate.record_id === eventId &&
-                        (candidate.kind === "event" || candidate.kind === "appointment"),
-                      );
+                      const item = itemForWarning(eventId);
                       return item ? (
                         <button key={eventId} type="button" onClick={() => onOpen(item)}>
-                          {item.record_id.startsWith("source:") ? item.external_url ? "Open source" : "Open calendar day for" : "Review"} {item.title}
+                          {item.record_id.startsWith("source:") ? item.external_url ? "Open source" : "Open calendar day for" : "Edit or reschedule"} {item.title}
                           <ChevronRight size={14} aria-hidden="true" />
                         </button>
                       ) : null;
                     })}
-                    <button type="button" onClick={() => setHiddenConflicts({ scope: conflictScope, keys: [...dismissed, conflictKey(conflict)] })}>Hide for now</button>
+                    <button type="button" onClick={() => { const items = conflict.event_ids.map(itemForWarning).filter((item): item is DayPlanItem => Boolean(item)); const item = items.find((candidate) => !candidate.record_id.startsWith("source:")) || items[0]; if (item) onOpen(item); }}>Resolve</button>
+                    <button type="button" disabled={warningPending(conflict)} onClick={() => void onWarningDecision(conflict, "dismiss")}>Dismiss</button>
+                    <button type="button" disabled={warningPending(conflict)} onClick={() => void onWarningDecision(conflict, "snooze")}>Snooze 1 hour</button>
                   </div>
                 </div>
               ))}
-              {dismissed.length ? <button type="button" className={styles.dayPlanRestoreConflicts} onClick={() => setHiddenConflicts({ scope: conflictScope, keys: [] })}>Show hidden overlaps</button> : null}
+              {hiddenConflicts.length ? <details className={styles.dayPlanHiddenConflicts}>
+                <summary>Dismissed or snoozed ({hiddenConflicts.length})</summary>
+                {hiddenConflicts.map((conflict) => <div className={styles.dayPlanConflict} key={conflict.key}>
+                  <span>{conflict.decision === "snoozed" ? "Snoozed" : "Dismissed"}: {conflict.message}</span>
+                  <button type="button" className={styles.dayPlanRestoreConflicts} disabled={warningPending(conflict)} onClick={() => void onWarningDecision(conflict, "restore")}>Restore warning</button>
+                </div>)}
+              </details> : null}
               <small>Change a Pepper event, then refresh the plan. For read-only Google events, make the change in Google Calendar, sync that source in Connections, then refresh.</small>
             </details>
           ) : null}

@@ -3,8 +3,10 @@ import {chooseMealWeek,uniqueGroceriesForWeek,wantsMealPlanRefresh} from './meal
 import {
   buildDailyPlan,
   dailyPlanActionPatch,
+  warningIsHidden,
   type DailyPlanTaskAction,
   type TaskImportance,
+  type WarningDecision,
 } from './day-planning.ts'
 import {publicAppointmentSyncResult} from '../aegis-bridge-worker/logic.ts'
 import {calendarMutationActionKey,calendarMutationKind,isAdultHouseholdRole,parseExpectedEventRevision} from '../_shared/calendar-contribution.ts'
@@ -1072,7 +1074,7 @@ async function sectionState(member:any,section:string,headers:any,token:string){
   }
   throw Object.assign(new Error('Unknown Pepper section.'),{status:400})
 }
-async function memberDayPlan(member:any,_headers:any){
+async function memberDayPlan(member:any,_headers:any,includeDecisions=true){
   const today=dateLA()
   const [privateInputs,sourceStatus]=await Promise.all([sourceItems(sql,member),readSourceStatus(sql,member)])
   const [bounds,tasks,events,meals]=await Promise.all([
@@ -1092,7 +1094,7 @@ async function memberDayPlan(member:any,_headers:any){
       limit 500
     `,
     sql<any[]>`
-      select id,title,starts_at,ends_at,all_day,location,person_slug,kind,appointment_type,source,external_event_id,external_calendar_id,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id
+      select id,title,starts_at,ends_at,all_day,location,person_slug,kind,appointment_type,transport_status,source,external_event_id,external_calendar_id,(to_jsonb(events)->>'source_url') as source_url,(to_jsonb(events)->>'source_capture_id') as source_capture_id
       from public.events
       where household_id=${member.household_id}::uuid
         and deleted_at is null
@@ -1133,11 +1135,22 @@ async function memberDayPlan(member:any,_headers:any){
     meals,
     emails:privateInputs.emails,
   })
+  const decisions=includeDecisions && plan.conflict_items.length ? await sql<WarningDecision[]>`
+    select warning_key as key,fingerprint,decision,snoozed_until
+    from private.day_plan_warning_decisions
+    where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid
+  ` : []
+  const byKey=new Map(decisions.map(decision=>[decision.key,decision]))
+  const hiddenConflicts=plan.conflict_items.filter(warning=>warningIsHidden(warning,byKey.get(warning.key),plan.generated_at))
+  const visibleConflicts=plan.conflict_items.filter(warning=>!warningIsHidden(warning,byKey.get(warning.key),plan.generated_at))
   const sourceWarnings=['gmail','calendar_read'].filter(key=>sourceStatus[key]?.status!=='connected'||(key==='calendar_read'&&!sourceStatus[key]?.selected_calendars?.length)).map(key=>`${key==='gmail'?'Email':'Selected calendars'}: ${sourceStatus[key]?.last_error||(key==='calendar_read'&&!sourceStatus[key]?.selected_calendars?.length?'no calendars selected':sourceStatus[key]?.status)||'not connected'}. The plan may be incomplete.`)
   return {
     ok:true,
     plan:{
       ...plan,
+      conflict_items:visibleConflicts,
+      conflicts:visibleConflicts.map(warning=>warning.message),
+      hidden_conflict_items:hiddenConflicts.map(warning=>({...warning,decision:byKey.get(warning.key)?.decision,snoozed_until:byKey.get(warning.key)?.snoozed_until})),
       headline:sourceWarnings.length?'A provisional plan from available information. Check source status before relying on free time.':plan.headline,
       source_status:sourceStatus,
       source_warnings:sourceWarnings,
@@ -1153,6 +1166,26 @@ async function memberDayPlan(member:any,_headers:any){
       },
     },
   }
+}
+async function decideDayPlanWarning(member:{id:string;household_id:string},body:Record<string,unknown>){
+  const operation=String(body.operation||'')
+  const key=String(body.warning_key||'')
+  const fingerprint=String(body.fingerprint||'')
+  if(!['dismiss','snooze','restore'].includes(operation)||!/^[0-9a-f]{16}$/.test(key)||!/^[0-9a-f]{16}$/.test(fingerprint))
+    throw Object.assign(new Error('Choose a current schedule warning.'),{status:400})
+  const current=await memberDayPlan(member,null,false)
+  const warning=current.plan.conflict_items.find(entry=>entry.key===key&&entry.fingerprint===fingerprint)
+  if(!warning)throw Object.assign(new Error('This warning changed. Refresh Today before acting.'),{status:409})
+  if(operation==='restore'){
+    await sql`delete from private.day_plan_warning_decisions where household_id=${member.household_id}::uuid and member_id=${member.id}::uuid and warning_key=${key}`
+  }else{
+    const decision=operation==='dismiss'?'dismissed':'snoozed'
+    await sql`insert into private.day_plan_warning_decisions(household_id,member_id,warning_key,fingerprint,decision,snoozed_until)
+      values(${member.household_id}::uuid,${member.id}::uuid,${key},${fingerprint},${decision},${operation==='snooze'?new Date(Date.now()+60*60*1000).toISOString():null}::timestamptz)
+      on conflict(member_id,warning_key) do update set fingerprint=excluded.fingerprint,decision=excluded.decision,snoozed_until=excluded.snoozed_until,updated_at=now()
+      where private.day_plan_warning_decisions.household_id=excluded.household_id`
+  }
+  return {ok:true,plan:(await memberDayPlan(member,null)).plan}
 }
 Deno.serve(async(req:Request)=>{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors(req)});if(req.method==='GET')return json(req,{ok:true,service:'pepper-family-api',version:'2.7',backend:'supabase',frontend:'vercel',capabilities:['progressive_state','section_state','day_plan','day_plan_task_action','chore_create','pin_setup','conflict_resolve','front_seat_update','item_update','item_edit','item_delete','item_restore','meal_upsert','meal_need_upsert','meal_plan_generate','meal_plan_refresh','grocery_create','grocery_update','member_setup_save','member_photo_save','member_photo_remove','trusted_driver_save','trusted_driver_remove','personal_task_create','capture_undo','account_delete']});if(req.method!=='POST')return json(req,{error:'Method not allowed.'},405);let b:any={};try{b=await req.json()}catch{return json(req,{error:'Invalid request.'},400)}const action=String(b?.action||'');try{
 if(action==='login'){const slug=String(b.member_slug||'').trim().toLowerCase(),pin=String(b.pin||'').trim(),device=String(b.device_label||'Pepper web').slice(0,120);const rows=await sql<any[]>`select public.pepper_start_family_session(${slug},${pin},${device}) as result`;const result=rows[0]?.result||{ok:false,error:'Pepper could not start this session.'};return json(req,result,result.ok?200:401)}
@@ -1223,6 +1256,7 @@ if(action==='day_plan'){
   return json(req,result)
 }
 if(action==='day_plan_task_action'){return json(req,await updateDailyPlanTask(member,b))}
+if(action==='day_plan_warning_decide'){return json(req,await decideDayPlanWarning(member,b))}
 if(action==='member_state'){return json(req,{state:await memberState(member,String(b.member_slug||''))})}
 if(action==='item_update'){return json(req,await updateFamilyItem(member,b))}
 if(action==='member_setup_save'){return json(req,await saveMemberSetup(member,b))}

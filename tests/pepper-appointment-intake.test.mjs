@@ -258,7 +258,7 @@ test('medical appointments outrank school and work while producing coordination 
   assert.equal(medical.urgency, 'critical')
   assert.match(medical.reason, /school and work coordinate around it/i)
   assert.match(plan.headline, /top fixed priority/i)
-  assert.equal(plan.conflicts.filter((conflict) => /remains the priority/i.test(conflict)).length, 2)
+  assert.equal(plan.conflicts.filter((conflict) => /remains the priority/i.test(conflict)).length, 1)
   assert.match(plan.conflicts.join(' '), /coordinate school coverage/i)
   assert.match(plan.conflicts.join(' '), /coordinate work coverage/i)
 })

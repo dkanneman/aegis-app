@@ -51,6 +51,7 @@ export type DayPlanEvent = {
   person_slug?: string | null
   kind?: string | null
   appointment_type?: string | null
+  transport_status?: string | null
   area?: string | null
   source?: string | null
   source_url?: string | null
@@ -104,7 +105,7 @@ export type DailyPlan = {
   summary: string
   items: DayPlanItem[]
   conflicts: string[]
-  conflict_items: Array<{ message: string; event_ids: [string, string] }>
+  conflict_items: Array<{ key: string; fingerprint: string; message: string; event_ids: string[] }>
   counts: { tasks: number; chores: number; events: number; appointments: number; meals: number; emails: number }
 }
 
@@ -445,26 +446,61 @@ function taskDuration(task: DayPlanTask) {
   return Math.max(5, Math.min(8 * 60, Number.isFinite(requested) ? requested : fallback)) * MINUTE
 }
 
+export type WarningDecision = { key: string; fingerprint: string; decision: 'dismissed' | 'snoozed'; snoozed_until?: string | null }
+
+export function warningIsHidden(warning: DailyPlan['conflict_items'][number], decision: WarningDecision | undefined, now: string) {
+  return Boolean(decision && decision.fingerprint === warning.fingerprint &&
+    (decision.decision === 'dismissed' || (decision.decision === 'snoozed' && Boolean(decision.snoozed_until) && Date.parse(decision.snoozed_until!) > Date.parse(now))))
+}
+
+function warningDigest(value: string) {
+  let hash = 0xcbf29ce484222325n
+  for (const byte of new TextEncoder().encode(value)) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n)
+  return hash.toString(16).padStart(16, '0')
+}
+
 function conflictItems(events: DayPlanEvent[]) {
-  const conflicts: Array<{ message: string; event_ids: [string, string] }> = []
-  const sorted = events.filter((event) => !event.all_day && event.blocks_time !== false)
+  // Group connected overlaps so one broad work block cannot flood Today with pairwise warnings.
+  const sorted = [...new Map(events.map((event) => [event.id, event])).values()].filter((event) => !event.all_day && event.blocks_time !== false &&
+    !(['transport', 'school_dropoff', 'school_pickup'].includes(event.kind || '') &&
+      ['confirmed', 'completed'].includes(event.transport_status || '')))
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
+  const parent = sorted.map((_, index) => index)
+  const find = (index: number): number => parent[index] === index ? index : (parent[index] = find(parent[index]))
+  const overlapping = new Set<number>()
   for (let index = 0; index < sorted.length; index += 1) {
-    const left = sorted[index]
-    const leftEnd = Date.parse(left.ends_at || left.starts_at)
-    for (let nextIndex = index + 1; nextIndex < sorted.length; nextIndex += 1) {
-      const right = sorted[nextIndex]
-      if (Date.parse(right.starts_at) >= leftEnd) break
-      const medical = isMedicalAppointment(left) ? left : isMedicalAppointment(right) ? right : null
-      const overlap = medical?.id === left.id ? right : left
-      const coordination = medical ? medicalCoordinationMessage(medical, overlap) : null
-      conflicts.push({
-        message: coordination || `${left.title} overlaps ${right.title}.`,
-        event_ids: [left.id, right.id],
-      })
+    const leftEnd = Date.parse(sorted[index].ends_at || sorted[index].starts_at)
+    for (let next = index + 1; next < sorted.length; next += 1) {
+      if (Date.parse(sorted[next].starts_at) >= leftEnd) break
+      if (sorted[next].id === sorted[index].id) continue
+      parent[find(next)] = find(index)
+      overlapping.add(index)
+      overlapping.add(next)
     }
   }
-  return conflicts
+  const groups = new Map<number, DayPlanEvent[]>()
+  for (const index of overlapping) {
+    const root = find(index)
+    groups.set(root, [...(groups.get(root) || []), sorted[index]])
+  }
+  return [...groups.values()].map((group) => {
+    const identities = group.map((event) => event.id).sort()
+    const medical = group.find(isMedicalAppointment)
+    const other = medical ? group.find((event) => event.id !== medical.id) : null
+    const message = medical && other ? group.filter((event) => event.id !== medical.id)
+      .map((event) => medicalCoordinationMessage(medical, event)).filter(Boolean).join(' ') : null
+    const anchor = group.length > 2 ? group.map((event) => ({ event, count: group.filter((candidate) =>
+      candidate.id !== event.id && Date.parse(candidate.starts_at) < Date.parse(event.ends_at || event.starts_at) &&
+      Date.parse(event.starts_at) < Date.parse(candidate.ends_at || candidate.starts_at)).length }))
+      .sort((left, right) => right.count - left.count)[0].event : null
+    const others = anchor ? group.filter((event) => event.id !== anchor.id) : []
+    return {
+      key: warningDigest(JSON.stringify(identities)),
+      fingerprint: warningDigest(JSON.stringify(group.map((event) => [event.id, event.title, event.starts_at, event.ends_at, event.location, event.transport_status]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))),
+      message: message || (group.length === 2 ? `${group[0].title} overlaps ${group[1].title}.` : `${anchor?.title} conflicts with ${others.length} other commitments, including ${others.slice(0, 2).map((event) => event.title).join(' and ')}. Review timing or coverage.`),
+      event_ids: group.map((event) => event.id),
+    }
+  })
 }
 
 function projectLimited(candidates: RankedDayPlanTask[]) {

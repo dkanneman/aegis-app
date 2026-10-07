@@ -7,6 +7,7 @@ import {
   dailyPlanActionPatch,
   emailActionScore,
   rankDayPlanTasks,
+  warningIsHidden,
 } from '../supabase/functions/pepper-family-api/day-planning.ts'
 
 const apiPath = new URL('../supabase/functions/pepper-family-api/index.ts', import.meta.url)
@@ -382,6 +383,46 @@ test('read-only source conflicts retain exact record IDs for source review', () 
   assert.equal(plan.items.find(item => item.record_id === 'source:calendar:a').external_url, 'https://calendar.google.com/calendar/event?eid=a')
 })
 
+test('one broad commitment yields one warning for the underlying connected conflict', () => {
+  const input = {
+    now: '2026-10-07T16:00:00.000Z', dayStart: '2026-10-07T07:00:00.000Z', dayEnd: '2026-10-08T07:00:00.000Z',
+    timeZone: 'America/Los_Angeles', tasks: [], emails: [],
+    events: [
+      { id: 'work', title: 'Work', starts_at: '2026-10-07T15:00:00Z', ends_at: '2026-10-08T00:00:00Z' },
+      { id: 'school', title: 'School pickup', starts_at: '2026-10-07T19:00:00Z', ends_at: '2026-10-07T19:30:00Z' },
+      { id: 'medical', title: 'Checkup', starts_at: '2026-10-07T21:00:00Z', ends_at: '2026-10-07T22:00:00Z' },
+    ],
+  }
+  const first = buildDailyPlan(input).conflict_items
+  const replay = buildDailyPlan(input).conflict_items
+  assert.equal(first.length, 1)
+  assert.deepEqual(new Set(first[0].event_ids), new Set(['work', 'school', 'medical']))
+  assert.deepEqual(first, replay)
+  const duplicateCopy = buildDailyPlan({ ...input, events: [...input.events, { ...input.events[1] }] }).conflict_items
+  assert.deepEqual(duplicateCopy, first)
+  const decision = { key: first[0].key, fingerprint: first[0].fingerprint, decision: 'dismissed' }
+  assert.equal(warningIsHidden(first[0], decision, input.now), true)
+  const changed = buildDailyPlan({ ...input, events: input.events.map(event => event.id === 'medical' ? { ...event, location: 'New clinic' } : event) }).conflict_items[0]
+  assert.equal(changed.key, first[0].key)
+  assert.notEqual(changed.fingerprint, first[0].fingerprint)
+  assert.equal(warningIsHidden(changed, decision, input.now), false)
+  assert.equal(warningIsHidden(first[0], { ...decision, decision: 'snoozed', snoozed_until: '2026-10-07T17:00:00Z' }, input.now), true)
+  assert.equal(warningIsHidden(first[0], { ...decision, decision: 'snoozed', snoozed_until: '2026-10-07T15:00:00Z' }, input.now), false)
+})
+
+test('accepted transport is handled without suppressing unrelated timed conflicts', () => {
+  const plan = buildDailyPlan({
+    now: '2026-10-07T16:00:00Z', dayStart: '2026-10-07T07:00:00Z', dayEnd: '2026-10-08T07:00:00Z', timeZone: 'America/Los_Angeles', tasks: [], emails: [],
+    events: [
+      { id: 'work', title: 'Work', starts_at: '2026-10-07T15:00:00Z', ends_at: '2026-10-08T00:00:00Z' },
+      { id: 'ride', title: 'School ride', kind: 'transport', transport_status: 'confirmed', starts_at: '2026-10-07T19:00:00Z', ends_at: '2026-10-07T19:30:00Z' },
+      { id: 'checkup', title: 'Checkup', kind: 'appointment', transport_status: 'confirmed', starts_at: '2026-10-07T21:00:00Z', ends_at: '2026-10-07T22:00:00Z' },
+    ],
+  })
+  assert.equal(plan.conflict_items.length, 1)
+  assert.deepEqual(new Set(plan.conflict_items[0].event_ids), new Set(['work', 'checkup']))
+})
+
 test('plan refresh is bounded and does not force a provider sync; conflicts open exact records', async () => {
   const client = await readFile(clientPath, 'utf8')
   const refresh = client.match(/async function generateDayPlan\([\s\S]*?\n  }/)?.[0] || ''
@@ -393,9 +434,37 @@ test('plan refresh is bounded and does not force a provider sync; conflicts open
   assert.match(client, /candidate\.record_id === eventId/)
   assert.match(client, /item\.external_url \? "Open source" : "Open calendar day for"/)
   assert.match(client, /calendar\.google\.com\/calendar\/r\/day\/\$\{date\}/)
-  assert.match(client, /Hide for now/)
-  assert.match(client, /Show hidden overlaps/)
+  assert.match(client, /day_plan_warning_decide/)
+  assert.match(client, /Dismiss/)
+  assert.match(client, /Snooze 1 hour/)
+  assert.match(client, /Restore warning/)
   assert.match(client, /<details className=\{styles\.dayPlanConflicts\}>/)
+})
+
+test('warning decisions are member-private and never mutate source events', async () => {
+  const [api, migration] = await Promise.all([
+    readFile(apiPath, 'utf8'),
+    readFile(new URL('../supabase/migrations/20261007100000_private_day_plan_warning_decisions.sql', import.meta.url), 'utf8'),
+  ])
+  const action = api.match(/async function decideDayPlanWarning\([\s\S]*?\n}/)?.[0] || ''
+  assert.match(action, /memberDayPlan\(member,null,false\)/)
+  assert.match(action, /warning\.key===key&&entry\.fingerprint===fingerprint|entry\.key===key&&entry\.fingerprint===fingerprint/)
+  assert.match(action, /private\.day_plan_warning_decisions/)
+  assert.doesNotMatch(action, /update public\.events|delete from public\.events|proxy\(CALENDAR/)
+  assert.match(migration, /enable row level security/)
+  assert.match(migration, /revoke all .* from public, anon, authenticated/)
+  assert.match(api, /member_id=\$\{member\.id\}::uuid/)
+})
+
+test('warning controls remain actionable at narrow phone widths', async () => {
+  const [client, css] = await Promise.all([readFile(clientPath, 'utf8'), readFile(cssPath, 'utf8')])
+  assert.match(client, /onWarningDecision\(conflict, "dismiss"\)/)
+  assert.match(client, /onWarningDecision\(conflict, "snooze"\)/)
+  assert.match(client, /onWarningDecision\(conflict, "restore"\)/)
+  assert.match(client, /hiddenConflicts\.length \? <details/)
+  assert.match(css, /\.dayPlanConflictActions\s*\{[^}]*flex-wrap:\s*wrap/s)
+  assert.match(css, /\.dayPlanConflictActions button\s*\{[^}]*min-height:\s*36px/s)
+  assert.match(css, /@media[\s\S]*\.dayPlanConflicts\s*\{\s*padding:\s*12px 17px/s)
 })
 
 test('daily planning is private, live, and available from Today and Ask Pepper', async () => {
